@@ -1,4 +1,9 @@
 {
+  "loadFailed": {
+    "title": "Couldn’t load this",
+    "body": "Something went wrong fetching this data — it isn’t empty, we just couldn’t reach it. Try again in a moment.",
+    "retry": "Try again"
+  },
   "serviceUnreachable": {
     "title": "Can’t reach Q‑Agent",
     "body": "The service isn’t responding. You’re still signed in — this isn’t a sign-out.",

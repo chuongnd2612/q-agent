@@ -80,6 +80,67 @@ export function ProgressRing({
 }
 
 /** Elegant empty state. */
+/**
+ * "We couldn't load this" — the failure counterpart to {@link EmptyState} (#491).
+ *
+ * Every list screen used to fall through to `EmptyState` when its query
+ * **failed**, so a broken backend was reported as a successful answer of
+ * "nothing here" — `/tickets` said *"No tickets found — try a different filter"*
+ * while all four of its requests were failing 502, sending the user off to debug
+ * their own filters. A failure and an empty result are different facts and must
+ * not share a screen.
+ *
+ * Deliberately the same shape/weight as `EmptyState` so screens can swap between
+ * them without a layout jump, but with the danger accent and a Retry.
+ */
+export function ErrorState({
+  title,
+  body,
+  onRetry,
+  retryLabel,
+}: {
+  title: string;
+  body: string;
+  onRetry?: () => void;
+  retryLabel: string;
+}) {
+  return (
+    <div className="glass flex flex-col items-center rounded-[22px] px-8 py-14 text-center" role="alert">
+      <div
+        className="mb-5 flex h-[70px] w-[70px] items-center justify-center rounded-[22px]"
+        style={{ background: "rgba(248,113,113,.10)" }}
+      >
+        <svg
+          width="28"
+          height="28"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#f87171"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+          <path d="M12 9v4M12 17h.01" />
+        </svg>
+      </div>
+      <h2 className="m-0 mb-2 text-xl font-extrabold">{title}</h2>
+      <p className="m-0 mb-5 max-w-[360px] text-[13.5px] leading-relaxed text-ink-dim">{body}</p>
+      {onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="flex h-[38px] items-center gap-2 rounded-xl border px-4 text-[13px] font-bold text-ink transition-colors hover:bg-white/[.07]"
+          style={{ background: "rgba(255,255,255,.05)", borderColor: "rgba(255,255,255,.18)" }}
+        >
+          {retryLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function EmptyState({
   icon,
   title,

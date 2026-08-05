@@ -18,7 +18,8 @@ interface FlakyRow {
 
 export function Reports() {
   const { t } = useTranslation("reports");
-  const { data: reports, isLoading: reportsLoading } = useReports();
+  const { t: tCommon } = useTranslation("common");
+  const { data: reports, isLoading: reportsLoading, isError: reportsError } = useReports();
   const { data: runs, isLoading: runsLoading } = useRuns();
   const navigate = useNavigate();
 
@@ -217,6 +218,11 @@ export function Reports() {
             <div className="flex justify-center py-6">
               <Spinner />
             </div>
+          ) : reportsError ? (
+            // Don't claim there are no flaky tests when the load failed (#491).
+            <p className="m-0 py-6 text-center text-[12.5px] text-danger-soft" role="alert">
+              {tCommon("loadFailed.title")}
+            </p>
           ) : flaky.length === 0 ? (
             <p className="m-0 py-6 text-center text-[12.5px] text-ink-dim">{t("reports.flaky.empty")}</p>
           ) : (

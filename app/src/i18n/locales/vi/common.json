@@ -1,4 +1,9 @@
 {
+  "loadFailed": {
+    "title": "Không tải được dữ liệu",
+    "body": "Đã xảy ra lỗi khi tải dữ liệu — không phải là không có dữ liệu, mà là chúng tôi không lấy được. Vui lòng thử lại.",
+    "retry": "Thử lại"
+  },
   "serviceUnreachable": {
     "title": "Không kết nối được Q‑Agent",
     "body": "Dịch vụ không phản hồi. Bạn vẫn đang đăng nhập — đây không phải là đăng xuất.",
