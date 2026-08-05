@@ -9,6 +9,7 @@ import { KnowledgeBuildOverlay } from "@/screens/KnowledgeBuildOverlay";
 import { CommandPalette } from "@/screens/CommandPalette";
 import { CreateRunModal } from "@/screens/CreateRunModal";
 import { TourOverlay } from "@/components/tour/TourOverlay";
+import { ServiceUnreachableBanner } from "@/components/system/ServiceUnreachableBanner";
 
 /**
  * Root layout element for the data router (see router.tsx). Wraps the app in the
@@ -48,6 +49,9 @@ export default function App() {
       <CreateRunModal />
       <KnowledgeBuildOverlay />
       <TourOverlay />
+      {/* Inside QueryProvider — Retry refetches the failed queries. Renders
+          nothing while the backend is reachable. */}
+      <ServiceUnreachableBanner />
       {/* Every toast is rendered by our custom card (see @/lib/toast), so the
           Toaster itself is unstyled — it only provides positioning + lifecycle. */}
       <Toaster position="bottom-center" toastOptions={{ unstyled: true }} />

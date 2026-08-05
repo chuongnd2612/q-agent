@@ -1,4 +1,10 @@
 {
+  "serviceUnreachable": {
+    "title": "Can’t reach Q‑Agent",
+    "body": "The service isn’t responding. You’re still signed in — this isn’t a sign-out.",
+    "retry": "Retry",
+    "retrying": "Retrying…"
+  },
   "save": "Save changes",
   "cancel": "Cancel",
   "discard": "Discard",
