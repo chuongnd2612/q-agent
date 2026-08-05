@@ -1,7 +1,9 @@
 """Auth FastAPI dependencies + cookie helpers (ADR 0007).
 
 - :func:`require_user` — decode the bearer access token, load the active user.
-  401s when no/invalid token — for routes that must be authenticated.
+  401s when no/invalid token — for routes that must be authenticated. Dual-accept
+  (#479): a local Q-Agent access token first, then an EmeHub agent token when
+  ``hub_sso_enabled`` is on.
 - :func:`require_role` — factory that additionally enforces a role.
 - :func:`require_admin` — admin-only shortcut (401 unauthenticated, 403 non-admin).
 - :func:`current_user` — best-effort variant used by ownership scoping (#91):
@@ -20,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models.user import ROLE_ADMIN, User
-from app.services import agent_device_service, auth_service
+from app.services import agent_device_service, auth_service, hub_users
 
 REFRESH_COOKIE = "qagent_refresh"
 CSRF_COOKIE = "qagent_csrf"
@@ -33,17 +35,53 @@ def _unauthorized(detail: str = "Not authenticated") -> HTTPException:
     return HTTPException(status_code=401, detail=detail)
 
 
+def hub_authed(user: User) -> bool:
+    """True when this request authenticated with an **EmeHub** token, not a local one.
+
+    Session management (``/auth/logout``, ``/auth/sessions/*``) revokes rows in the
+    local ``auth_sessions`` table keyed by ``user._sid``. A hub token's ``sid`` is
+    a *hub* session id with no counterpart there, so the hub path deliberately
+    never populates ``_sid`` and those routes consult this flag before touching
+    sessions (#479 trap 5).
+    """
+    return bool(getattr(user, "_hub_authed", False))
+
+
+def _hub_user(db: Session, token: str) -> User | None:
+    """Resolve ``token`` as a hub token, marking the user as hub-authenticated.
+
+    Returns ``None`` when it isn't an acceptable hub token or the account is
+    inactive. ``_sid`` is pinned to ``None`` rather than to the hub ``sid``: see
+    :func:`hub_authed`.
+    """
+    user = hub_users.resolve_user(db, token)
+    if user is None or not user.is_active:
+        return None
+    user._hub_authed = True  # type: ignore[attr-defined]
+    user._sid = None  # type: ignore[attr-defined]
+    return user
+
+
 def require_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
-    """Resolve the current active user from the Authorization: Bearer token."""
+    """Resolve the current active user from the Authorization: Bearer token.
+
+    Dual-accept (#479): a local Q-Agent access token first, then — when
+    ``hub_sso_enabled`` is on and the token carries ``iss: emehub`` — an EmeHub
+    agent token, which resolves the local user via ``users.hub_user_id`` and
+    JIT-provisions one on first sight.
+    """
     if credentials is None or not credentials.credentials:
         raise _unauthorized()
     try:
         payload = auth_service.decode_access_token(credentials.credentials)
     except auth_service.AuthError as exc:
-        raise _unauthorized(str(exc)) from exc
+        hub_user = _hub_user(db, credentials.credentials)
+        if hub_user is None:
+            raise _unauthorized(str(exc)) from exc
+        return hub_user
     user = db.get(User, int(payload.get("sub", 0) or 0))
     if user is None or not user.is_active:
         raise _unauthorized("User not found or inactive")
@@ -122,7 +160,9 @@ def current_user(
     try:
         payload = auth_service.decode_access_token(credentials.credentials)
     except auth_service.AuthError:
-        return None
+        # Dual-accept (#479): ownership scoping must work for hub users too, or a
+        # hub-authenticated request would read/write as "no owner".
+        return _hub_user(db, credentials.credentials)
     user = db.get(User, int(payload.get("sub", 0) or 0))
     if user is None or not user.is_active:
         return None
