@@ -26,6 +26,24 @@ Navigation is **URL-driven** via `react-router-dom` (`app/src/router.tsx`, `crea
 
 - There is **no unit-test harness**. The gate is `npm run typecheck` (`tsc -b --noEmit`) + `npm run build`. Do not run `npm test` — the script doesn't exist.
 - Verify UI/behavior at runtime: `npm run dev` (Vite; auto-falls off 5173 if busy) + Playwright (`playwright` is installed; `npx playwright install chromium` once) to drive real routes and screenshot. The API defaults to `127.0.0.1:8787`; filter benign backend fetch/WebSocket errors when asserting on console output.
+- **In a fresh worktree, run `npm ci` in `app/` first** — `node_modules` is not shared across worktrees, so `tsc`/`vite` are simply missing until you do.
+
+### Driving the real SPA in Playwright — four traps that silently invalidate a test
+
+Each of these produces a *green-looking* run that proved nothing. Learned the hard way in #482.
+
+- **The API is at `/api` (same-origin, proxied by Vite), not `127.0.0.1:8787`.** Routing/intercepting on the port matches nothing in dev. Intercept `/api/**` **and** `/auth/**` (the latter is same-origin and unprefixed).
+- **A raw `fetch` from page context bypasses `lib/api.ts` entirely** — no bearer token, no 401→refresh, no interceptor. To exercise client behaviour you must drive the app's own UI.
+- **`page.goto` is a full reload, and the access token is in memory only** (never persisted, by design). A reload therefore boots *anonymous* and `RequireAuth` legitimately redirects to `/login` — which looks exactly like a session bug but isn't. Navigate **client-side** (click the sidebar buttons; the nav uses buttons, not `<a href>`).
+- **react-query has `staleTime: 15_000`** (`app/src/app/QueryProvider.tsx`), so revisiting a screen serves cache and issues **no request at all**. Visit a screen not yet loaded, and *assert that requests actually happened* rather than inferring it.
+
+Also: the onboarding `TourOverlay` intercepts clicks on first load — dismiss it ("Skip") before driving the shell.
+
+## Build & verify (api/)
+
+- The gate is `uv run pytest -q` from `api/`. **In a fresh worktree (no `.venv`) use `uv run --extra dev pytest -q`** — `pytest` lives in the `dev` **optional-dependency extra** (`[project.optional-dependencies]`), not the default dependency set, so a plain `uv run pytest` fails with `Failed to spawn: pytest / program not found`.
+- **The suite is not green on `master` and is not expected to be: 22 tests fail (#469).** Baseline that number *before* you start and compare against it; do not assume a failure is yours.
+- The suite runs with `settings.auth_required = False` (see `tests/conftest.py`), which makes the global `auth_guard` middleware in `main.py` a **passthrough**. Anything that touches token acceptance must add a test that flips `auth_required=True`, or the middleware path is never exercised.
 
 ## Local Agent (agent/)
 

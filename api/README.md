@@ -36,8 +36,8 @@ api/
 │  ├─ models/            # SQLAlchemy models
 │  ├─ services/          # business logic, AI, adapters, execution
 │  └─ seed.py            # demo data (`python -m app.seed`)
-├─ migrations/           # Alembic revisions (13)
-├─ tests/                # pytest (53 modules, 520 tests)
+├─ migrations/           # Alembic revisions (14)
+├─ tests/                # pytest (56 modules, 610 tests)
 ├─ scripts/              # import_sqlite_to_postgres.py
 └─ workspace/            # runtime state — gitignored
 ```
@@ -108,9 +108,16 @@ being killed mid-flight.
 ## Tests
 
 ```bash
-uv run pytest -q          # 520 tests across 53 modules
+uv run pytest -q          # 610 tests across 56 modules
 uv run ruff check .
 ```
+
+`pytest` lives in the `dev` optional-dependency extra, so in a fresh checkout (no `.venv`
+yet) use `uv run --extra dev pytest -q` — a plain `uv run pytest` fails with
+`Failed to spawn: pytest`.
+
+**22 of these fail on `master` (#469).** That is the current baseline, not a broken
+checkout — capture the number before making changes and compare against it.
 
 Provider adapters are tested against mocked HTTP (`respx`); AI and Playwright are
 tested against mocked engines. No test requires live credentials or a real browser.
