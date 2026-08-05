@@ -20,11 +20,17 @@ def health() -> dict:
     is not, so with ``QAGENT_AUTH_REQUIRED`` on only this endpoint is readable by
     an unauthenticated visitor — and the login screen that renders the "Sign in
     with EmeHub" button (B4) is by definition anonymous.
+
+    ``hubBaseUrl`` rides along for the same reason (#480): the SSO callback screen
+    is anonymous too, and it needs the hub's origin to call
+    ``POST {hubBaseUrl}/auth/agent-token``. It is a public URL, not a secret —
+    the shared JWT secret stays server-side and is never exposed here.
     """
     return {
         "status": "ok",
         "version": __version__,
         "hubSsoEnabled": settings.hub_sso_enabled,
+        "hubBaseUrl": settings.hub_base_url.rstrip("/"),
     }
 
 
