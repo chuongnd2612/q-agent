@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: str = ""
 
+    # EmeHub SSO (#478, docs/HUB-INTEGRATION.md). Off by default: while
+    # `hub_sso_enabled` is false the whole integration is dormant — hub tokens
+    # are REJECTED (not waved through), `/auth/sso/complete` isn't registered,
+    # and /login shows only the local form. This gates a feature, not an
+    # authentication check, unlike `auth_required` above.
+    hub_sso_enabled: bool = False
+    hub_base_url: str = ""  # e.g. https://hub.chuongnd.click
+    # Must equal the hub's EMEHUB_JWT_SECRET (Phase 1 shared secret). Kept
+    # SEPARATE from `secret_key` on purpose: that one already signs local JWTs
+    # *and* derives the Fernet key for every encrypted credential
+    # (app/crypto.py), and overloading it a third time makes the eventual re-key
+    # worse — emehub ADR 0005.
+    hub_jwt_secret: str = ""
+    hub_audience: str = "qagent"
+
     # Claude CLI
     claude_bin: str = "claude"
     claude_model: str = "claude-sonnet-5"
