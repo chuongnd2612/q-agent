@@ -39,3 +39,16 @@ class User(Base):
     updated_at: Mapped[datetime] = timestamp_column(onupdate=utcnow)
     # Stamped on successful login and token refresh (never backfilled).
     last_active: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=None)
+    # EmeHub user id this account maps to (#478). NULL for local-only accounts.
+    #
+    # This is the mapping column that keeps the hub integration cheap: a hub
+    # token's `sub` is a HUB user id and never equals a local `users.id`, so it
+    # resolves here instead. Local ids stay exactly as they are, which matters
+    # because nearly every table carries `owner_id -> users.id` and the per-user
+    # workspace is literally a path built from it (ADR 0009) — re-pointing
+    # `owner_id` at hub ids would be a migration across every scoped table.
+    # Stored as a string: the hub's `sub` claim is a string, and treating it as
+    # opaque avoids assuming both sides number users the same way.
+    hub_user_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, nullable=True, default=None
+    )
