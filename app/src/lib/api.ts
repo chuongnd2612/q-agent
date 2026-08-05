@@ -125,9 +125,63 @@ function isAuthPath(path: string): boolean {
   return path === "/auth" || path.startsWith("/auth/");
 }
 
+/**
+ * The service could not be reached at all — refused, DNS, timeout, aborted.
+ *
+ * Distinct from :class:`ApiError`, which always carries an HTTP status and
+ * therefore means the service *answered*. That distinction is the whole point of
+ * B5 (#482): "the service is down" and "you are logged out" are different facts
+ * and must not render the same screen. A bare `fetch` rejection used to surface
+ * as an untyped `TypeError`, which callers could only show as a generic failure.
+ */
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NetworkError";
+  }
+}
+
+/**
+ * Service reachability, as observed by the last request.
+ *
+ * A tiny subscribable rather than Zustand state: `lib/api.ts` is imported by the
+ * store itself, so depending on the store here would be circular.
+ *
+ * Note this is deliberately **not** an authentication signal. It says nothing
+ * about whether the user is signed in, and nothing anywhere may treat
+ * `unreachable` as permission to proceed — see the `request` 401 branch.
+ */
+let serviceReachable = true;
+const reachabilityListeners = new Set<(reachable: boolean) => void>();
+
+function setServiceReachable(reachable: boolean): void {
+  if (serviceReachable === reachable) return;
+  serviceReachable = reachable;
+  for (const listener of reachabilityListeners) listener(reachable);
+}
+
+export function isServiceReachable(): boolean {
+  return serviceReachable;
+}
+
+export function subscribeServiceReachable(listener: (reachable: boolean) => void): () => void {
+  reachabilityListeners.add(listener);
+  return () => reachabilityListeners.delete(listener);
+}
+
+/** Outcome of a refresh attempt. The three cases must stay distinguishable:
+ * only `expired` is authoritative evidence that the session is dead. */
+type RefreshOutcome =
+  /** New access token installed — replay the original request. */
+  | "refreshed"
+  /** The server answered and refused. The session really is over. */
+  | "expired"
+  /** Never reached the server. Says nothing about the session — do NOT log out. */
+  | "unreachable";
+
 /** Single in-flight refresh shared by all callers, so a burst of concurrent
  * 401s triggers exactly one `POST /auth/refresh`. */
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
 /** Set while an *explicit* logout is in progress. In-flight authenticated
  * requests 401 once the refresh cookie is cleared; without this, the 401
@@ -142,15 +196,26 @@ export function markLoggingOut(): void {
   }, 4000);
 }
 
-function tryRefresh(): Promise<boolean> {
+function tryRefresh(): Promise<RefreshOutcome> {
   if (!refreshInFlight) {
     refreshInFlight = api.auth
       .refresh()
-      .then(({ accessToken, user }) => {
+      .then(({ accessToken, user }): RefreshOutcome => {
         useAuth.getState().setSession({ accessToken, user });
-        return true;
+        return "refreshed";
       })
-      .catch(() => false)
+      .catch((err): RefreshOutcome => {
+        // The critical branch. Previously every failure collapsed to `false`,
+        // which the caller read as "session dead" and answered with a logout +
+        // redirect to /login — so a backend that was merely unreachable told the
+        // user they'd been signed out, the single most confusing outcome
+        // available (docs/HUB-INTEGRATION.md §3 B5).
+        if (err instanceof NetworkError) return "unreachable";
+        // 502-504 mean the proxy answered but the app behind it did not — that
+        // is the service being down, not the session ending.
+        if (err instanceof ApiError && err.status >= 502 && err.status <= 504) return "unreachable";
+        return "expired";
+      })
       .finally(() => {
         refreshInFlight = null;
       });
@@ -171,13 +236,36 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   if (token) headers["Authorization"] = `Bearer ${token}`;
   if (csrf) headers["X-CSRF-Token"] = csrf;
 
-  const res = await fetch(url, { ...init, credentials: "include", headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, credentials: "include", headers });
+  } catch (err) {
+    // Refused / DNS / timeout / aborted — we never got an answer. Surface it as
+    // a typed error (it used to escape as a bare TypeError) and flip the
+    // reachability flag so the shell can offer a Retry instead of a blank toast.
+    setServiceReachable(false);
+    throw new NetworkError(err instanceof Error ? err.message : "Could not reach the service");
+  }
+
+  // The service answered, whatever it said — so it is reachable. A 401 or 500 is
+  // still an answer, and clearing the banner here is what makes Retry recover.
+  setServiceReachable(true);
 
   // Silent recovery: on a 401 for a non-auth call, refresh the access token
-  // once and replay the request. If refresh fails, the session is dead — clear
-  // it and bounce to /login, then rethrow so the caller still sees the error.
+  // once and replay the request.
   if (res.status === 401 && !authPath && !retried) {
-    if (await tryRefresh()) return request<T>(path, init, true);
+    const outcome = await tryRefresh();
+    if (outcome === "refreshed") return request<T>(path, init, true);
+    if (outcome === "unreachable") {
+      // We could not establish that the session is dead, so we must NOT act as
+      // if it were: no logout, no redirect to /login. Fail closed — the caller
+      // gets an error and the shell shows "unreachable" — but never fall open.
+      setServiceReachable(false);
+      throw new NetworkError("Could not reach the service to renew your session");
+    }
+    // `expired`: the server authoritatively refused the refresh. The session is
+    // genuinely over — this is the one case that means "you are logged out".
+    //
     // An explicit logout is orchestrating its own navigation to /signed-out —
     // stay inert so a background 401 doesn't flip the store to anon (which would
     // trip RequireAuth to /login) or hard-redirect over it.
