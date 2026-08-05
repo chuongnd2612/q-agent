@@ -54,7 +54,7 @@ unscheduled, and the blockers are recorded so nobody plans a phase around them b
 { "audience": "qagent" }
 
 // headers
-//   X-CSRF: <value of the emehub_csrf cookie, which is readable by JS>
+//   X-CSRF-Token: <value of the emehub_csrf cookie, which is readable by JS>
 // fetch options
 //   credentials: 'include'      ← sends the shared emehub_refresh cookie
 
@@ -200,7 +200,7 @@ to teach the store about the hub.
 - Register it as a **top-level ungated sibling**, like `signed-out`.
   - *Not* under `RedirectIfAuthed` — it would bounce a returning user mid-bootstrap.
   - *Not* under `RequireAuth` — the entire point is arriving anonymous.
-- On mount: `POST {hubUrl}/auth/agent-token` with `credentials:'include'` + the `X-CSRF` header
+- On mount: `POST {hubUrl}/auth/agent-token` with `credentials:'include'` + the `X-CSRF-Token` header
   read from the `emehub_csrf` cookie → hand the token to `/auth/sso/complete` → navigate to
   `next ?? "/"`.
 
