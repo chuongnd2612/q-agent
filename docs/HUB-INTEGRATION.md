@@ -34,7 +34,12 @@ disagree about who a user even is. The goal is: **sign in once at the hub, land 
 already authenticated.**
 
 This first slice is **identity only**. Q-Agent keeps its own login working alongside, keeps its
-own users table, and does not yet read any configuration from the hub. That comes later (§6).
+own users table, and does not yet read any configuration from the hub.
+
+**Everything else is documented here but explicitly out of scope for now** — Claude credentials
+(§4b), the ADO / Jira / GitHub connections (§4c), projects and knowledge (§4c), and tickets (§5).
+Read §4a for the one-table summary of where each stands. Two of those are *blocked*, not merely
+unscheduled, and the blockers are recorded so nobody plans a phase around them by accident.
 
 ---
 
@@ -251,6 +256,117 @@ Two consequences worth stating plainly:
 
 ---
 
+## 4a. What the hub owns, and where each concern stands
+
+One table, so nobody has to infer the state of play. **Only the first row is in scope now.**
+
+| Concern | Today in Q-Agent | Hub side | Agent cutover | Section |
+|---|---|---|---|---|
+| **Identity** | Own users, sessions, 2FA, JWT | Built | **This slice (B1–B5)** | §3 |
+| **Claude credentials** | Own encrypted per-user rows | Built, `/credentials/claude/resolve` live | Not started — blocked | §4b |
+| **Provider connections** (ADO/Jira/GitHub) | Own encrypted PATs + adapters | Built, live adapters | **Blocked — the PAT never crosses** | §4c |
+| **Projects & knowledge** | Own `project_config` / `project_knowledge` | Built, hub even *builds* KBs | Not started | §4c |
+| **Tickets** | Own sync + `tickets` table | Built | Not started | §5 |
+| **Audit** | Own log | Built, `POST /audit/events` | Not started | — |
+
+---
+
+## 4b. Claude credentials
+
+**Not in this slice.** Do not wire it while doing B1–B5.
+
+**Today.** Q-Agent stores a per-user Fernet-encrypted `.credentials.json`
+(`api/app/models/claude_credentials.py`) with a shared-account fallback, and materialises it to
+disk before invoking the CLI — `api/app/services/claude_credentials.py:506` `materialize(row, key)`
+writes `workspace/claude-config/<key>/.credentials.json` and returns the directory that becomes
+`CLAUDE_CONFIG_DIR`.
+
+**Hub side is built.** `GET /credentials/claude/resolve` returns the credential material already
+resolved through **own → shared → none**. Also live: `PUT /credentials/claude/refreshed` (the CLI
+rotated its token; the hub stays authoritative) and `POST /credentials/claude/usage` — both
+explicitly readable with an *agent* audience, unlike the rest of `/credentials/claude/*` which is
+hub-only.
+
+**The good news:** `materialize()` already exists here, and the hub wrote its own equivalent for
+knowledge builds. So the cutover is "fetch from the hub instead of the local table, then call the
+same `materialize()`" — not new machinery.
+
+**What blocks it:**
+
+1. **The re-key.** Every encrypted value in Q-Agent — `claude_credentials.credentials`, provider
+   PATs, test-account passwords — is Fernet-encrypted with a key derived from
+   `QAGENT_SECRET_KEY`. The hub uses a *separate* `EMEHUB_ENCRYPTION_KEY`. Migration is therefore
+   **decrypt-with-old, re-encrypt-with-new**: a one-shot script that needs both secrets present,
+   must be idempotent, and must be rehearsed against a database copy. It is a re-key, **not** a
+   copy, and it must not be bundled with the user migration.
+2. **`QAGENT_SECRET_KEY` does double duty** — it signs local JWTs *and* derives that Fernet key
+   (`api/app/crypto.py`). Moving auth to the hub while credentials still live here splits one
+   secret across two services.
+3. **The 15-minute problem, and this is where it actually bites.** A credential must be *fresh* —
+   the contract says a stale cached project list is fine but a stale Claude credential is not, and
+   an agent must refuse rather than proceed. But hub tokens live 15 minutes, agents may not refresh
+   them, and Q-Agent's AI work runs on background daemon threads where
+   `QAGENT_CLAUDE_BOOTSTRAP_TIMEOUT_S` alone is 1200s. **A background run that needs to resolve a
+   credential after minute 15 has no legal path today.** This needs a hub-side decision (a
+   longer-lived agent grant, or resolving once at run start) before the phase can be planned.
+
+One behavioural change to know about when you do get here: credential metadata now carries
+`hasRefreshToken`, and `status` has a fourth value **`refreshable`**. A Claude OAuth *access*
+token expires within hours, so a real credential is past `expiresAt` almost immediately; the hub
+now reports `refreshable` rather than `expired` when a refresh token is present. **Code that
+special-cases `status === "expired"` will see `refreshable` where it used to see `expired`.** The
+refresh token itself is never exposed — only the boolean.
+
+---
+
+## 4c. Provider integrations — ADO, Jira, GitHub
+
+**Not in this slice, and the most blocked of the lot.** This is the one to read before anyone
+plans Phase 3.
+
+**Today, both apps do this independently.** Q-Agent has `provider_connections`
+(`api/app/models/provider_connection.py:54`) with `kind` ∈ `ado | jira | github`, encrypted
+`secrets`, per-user `owner_id`, and its own live adapters. The hub has the same thing, with its
+own adapters (`api/app/services/adapters/{azure_devops,github,jira}.py`) and the same
+capability split:
+
+| Provider | Capability | Credentials |
+|---|---|---|
+| Azure DevOps | work items **+** repositories | Org URL, Project, PAT |
+| Jira | work items | Base URL, Project Key, Email, API token |
+| GitHub | repositories | Org/owner, PAT |
+
+So a user configures the same Azure DevOps PAT **twice**. That duplication is the motivating
+example in the hub's own founding ADR — and it is still true.
+
+**The blocker, stated plainly.** `GET /connections` returns capabilities and `hasPat`, and
+**never the PAT**. The endpoint designed to solve that — `POST /connections/{id}/proxy`, where the
+hub makes the provider call on the agent's behalf so the secret never leaves — is **deliberately
+unbuilt**: a generic forwarder is an SSRF and header-leak surface that needs its own design.
+
+The contract concedes the consequence: *"agents keep their own provider credentials and the hub's
+`/connections` is informational."*
+
+**Therefore Phase 3's stated exit criteria — "QAgent's `provider_connections` tables are gone" —
+is unreachable as written.** Something has to be chosen first:
+
+| Option | Trade-off |
+|---|---|
+| Build the proxy | PAT never leaves the hub. Needs an allowlist of permitted upstreams, header stripping, and a response-size cap — it is its own security-reviewed piece of work. |
+| Per-provider scoped short-lived tokens | Cleanest where the provider supports it. GitHub can (installation tokens); classic ADO/Jira PATs cannot. So it is a per-provider answer, not a global one. |
+| Return the PAT to the agent | Simple, and throws away the reason the boundary exists. Not recommended. |
+| Keep provider calls agent-side indefinitely | Honest status quo. The hub's `/connections` stays informational and the duplication stays. Cheapest, and worth considering explicitly rather than by default. |
+
+**Note what is *not* blocked.** Projects, repositories and **knowledge bases** already cross
+cleanly, because the hub clones and builds them itself using its *own* connection and PAT — no
+secret crosses the boundary. `GET /projects/{key}/repos/{repo}/knowledge` works with an agent
+token today, and the hub's `PUT` path means an agent that builds its own knowledge can still
+report it. Two caveats: test-account passwords come back **only to the owning user** (a shared
+project is owned by nobody, so they stay masked even for an admin), and `storageState.json`
+remains an agent-side browser artifact the hub will never hold.
+
+---
+
 ## 5. Ticket management — what changes, and when
 
 **Short answer: nothing in this slice.** Q-Agent keeps syncing and storing its own tickets
@@ -272,24 +388,24 @@ Recording the eventual shape so the direction is not lost:
   from the hub and drops its own sync.
 - "A ticket looked at in QAgent is the same ticket DAgent implements."
 
-**What blocks it right now** — worth knowing before anyone plans that phase:
+**What blocks it right now:**
 
-1. **The provider PAT never crosses the boundary.** `GET /connections` returns `hasPat` and
-   nothing more, and the endpoint meant to fix that (`POST /connections/{id}/proxy`) is
-   deliberately unbuilt. So Q-Agent cannot yet make provider calls with hub-held credentials, and
-   Phase 3's stated exit criteria ("QAgent's `provider_connections` tables are gone") is
-   unreachable as written.
+1. **Ticket sync needs a provider PAT, and the PAT never crosses** — §4c. Whoever syncs needs the
+   credential, so ticket ownership and connection ownership move together or not at all.
 2. **No cache invalidation.** Agents may cache any hub `GET`, lifetime their choice, with no
    webhook, ETag or revision counter. A ticket or project config changed at the hub goes stale in
-   Q-Agent silently.
-3. **15-minute tokens vs. 20-minute work.** Hub access tokens live 15 minutes and agents may not
-   refresh them, but Q-Agent's AI pipeline runs in background daemon threads with
-   `QAGENT_CLAUDE_BOOTSTRAP_TIMEOUT_S` alone at 1200s. A background run that needs a fresh hub
-   read after minute 15 has no legal path today.
+   Q-Agent silently — a smaller version of the drift the hub exists to remove.
+3. **15-minute tokens vs. 20-minute work** — §4b, blocker 3. Reading tickets from a background
+   run hits exactly that wall.
 
 **This slice dodges all three** by using the hub token exactly once, at bootstrap, and then
-running on a Q-Agent-native session. Keep it that way — the moment Q-Agent starts making
-hub reads on a background thread, problem 3 becomes real.
+running on a Q-Agent-native session. Keep it that way — the moment Q-Agent starts making hub
+reads on a background thread, problem 3 becomes real.
+
+**A cheap intermediate step**, if the full move stalls: keep Q-Agent's sync as-is but record the
+hub's ticket id alongside, the same `hub_*_id` mapping trick §3.1 uses for users. It makes the
+two stores reconcilable without moving ownership, and makes the eventual cutover a join rather
+than a re-import.
 
 ---
 
