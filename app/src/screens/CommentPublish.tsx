@@ -8,7 +8,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
 import { PipelineRail } from "@/components/ui/PipelineRail";
 import { Pill, providerGlyph } from "@/components/ui/badges";
-import { EmptyState, Spinner } from "@/components/ui/misc";
+import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useParams } from "react-router-dom";
 import { useComments, useCommentMutations, useRun } from "@/hooks/queries";
 import type { PublishStatus, TicketCommentOut } from "@/types/api";
@@ -24,9 +24,10 @@ const PUBLISH_STATUS: Record<PublishStatus, [string, PublishStatus, string]> = {
  * and publishes them back to the provider work item. Design: Q-Agent.dc.html 489-506. */
 export function CommentPublish() {
   const { t } = useTranslation("pipeline");
+  const { t: tCommon } = useTranslation("common");
   const runId = Number(useParams().runId);
   const { data: run } = useRun(runId);
-  const { data: comments, isLoading } = useComments(runId);
+  const { data: comments, isLoading, isError, refetch } = useComments(runId);
   const { prepare, publishOne, publishAll, retry, edit } = useCommentMutations(runId);
 
   const anyFailed = (comments ?? []).some((c) => c.status === "failed");
@@ -80,6 +81,14 @@ export function CommentPublish() {
             <div key={i} className="glass h-[132px] animate-pulse rounded-[18px]" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed load is NOT an empty list (#491).
+        <ErrorState
+          title={tCommon("loadFailed.title")}
+          body={tCommon("loadFailed.body")}
+          retryLabel={tCommon("loadFailed.retry")}
+          onRetry={() => void refetch()}
+        />
       ) : !comments?.length ? (
         <EmptyState
           icon={<FileText size={30} color="#7a7a8c" strokeWidth={1.8} />}

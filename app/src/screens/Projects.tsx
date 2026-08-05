@@ -5,7 +5,7 @@ import { ArrowRight, FolderKanban, RefreshCw, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/Button";
 import { providerGlyph } from "@/components/ui/badges";
-import { EmptyState, Spinner } from "@/components/ui/misc";
+import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { SharedProjectsCatalog } from "@/components/projects/SharedProjectsCatalog";
 import { confidenceColor, knowledgeStatusStyle, providerLabel } from "@/data/projects";
 import { useKnowledgeList, useProjects, useProviders, useRefreshProjects } from "@/hooks/queries";
@@ -45,8 +45,9 @@ function summarize(rows: ProjectKnowledgeOut[]): KnowledgeSummary | undefined {
 export function Projects() {
   const navigate = useNavigate();
   const { t } = useTranslation("projects");
+  const { t: tCommon } = useTranslation("common");
 
-  const { data: projects, isLoading } = useProjects();
+  const { data: projects, isLoading, isError, refetch } = useProjects();
   const { data: providers } = useProviders();
   const { data: knowledgeList } = useKnowledgeList();
   const refresh = useRefreshProjects();
@@ -110,6 +111,14 @@ export function Projects() {
             <div key={i} className="glass h-[240px] animate-pulse rounded-[20px]" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed load is NOT an empty list (#491).
+        <ErrorState
+          title={tCommon("loadFailed.title")}
+          body={tCommon("loadFailed.body")}
+          retryLabel={tCommon("loadFailed.retry")}
+          onRetry={() => void refetch()}
+        />
       ) : !projects?.length ? (
         <EmptyState
           icon={<FolderKanban size={28} className="text-muted" />}

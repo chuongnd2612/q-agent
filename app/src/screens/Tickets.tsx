@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DropdownShell, MultiSelect, Select } from "@/components/ui/Dropdown";
 import { StatusBadge, priorityColor, providerGlyph } from "@/components/ui/badges";
-import { EmptyState } from "@/components/ui/misc";
+import { EmptyState, ErrorState } from "@/components/ui/misc";
 import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
 import { SyncTicketsModal } from "@/components/tickets/SyncTicketsModal";
 import {
@@ -113,6 +113,7 @@ function ConnectionSelect({
 
 export function Tickets() {
   const { t } = useTranslation("tickets");
+  const { t: tCommon } = useTranslation("common");
   const ticketSearch = useUI((s) => s.ticketSearch);
   const setTicketSearch = useUI((s) => s.setTicketSearch);
   const selected = useUI((s) => s.selected);
@@ -189,7 +190,7 @@ export function Tickets() {
     page: ticketPage,
     pageSize: PAGE_SIZE,
   };
-  const { data: ticketsPage, isLoading } = useTickets(filters);
+  const { data: ticketsPage, isLoading, isError, refetch } = useTickets(filters);
   const tickets = ticketsPage?.items ?? [];
   const total = ticketsPage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -375,6 +376,15 @@ export function Tickets() {
             <div key={i} className="glass h-[64px] animate-pulse rounded-2xl" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed load is NOT an empty list (#491) — saying "no tickets found"
+        // here would send the user off to change filters that are working fine.
+        <ErrorState
+          title={tCommon("loadFailed.title")}
+          body={tCommon("loadFailed.body")}
+          retryLabel={tCommon("loadFailed.retry")}
+          onRetry={() => void refetch()}
+        />
       ) : !tickets.length ? (
         <EmptyState
           icon={<Search size={28} color="#8b8b9e" strokeWidth={1.6} />}

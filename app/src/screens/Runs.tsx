@@ -14,7 +14,7 @@ import {
 import { RunActionsMenu } from "@/components/runs/RunActionsMenu";
 import { RunBulkBar } from "@/components/runs/RunBulkBar";
 import { Button } from "@/components/ui/Button";
-import { EmptyState } from "@/components/ui/misc";
+import { EmptyState, ErrorState } from "@/components/ui/misc";
 import { useRuns } from "@/hooks/queries";
 import { useUI, type RunFilter } from "@/store/ui";
 import type { RunOut } from "@/types/api";
@@ -37,6 +37,7 @@ const STAT_CARDS: { key: Exclude<RunFilter, "all">; color: string }[] = [
  */
 export function Runs() {
   const { t } = useTranslation("runs");
+  const { t: tCommon } = useTranslation("common");
   const openCreateRun = useUI((s) => s.openCreateRun);
   const runFilter = useUI((s) => s.runFilter);
   const setRunFilter = useUI((s) => s.setRunFilter);
@@ -45,7 +46,7 @@ export function Runs() {
   const clearRunSel = useUI((s) => s.clearRunSel);
   const navigate = useNavigate();
 
-  const { data: runs, isLoading } = useRuns();
+  const { data: runs, isLoading, isError, refetch } = useRuns();
   const all = runs ?? [];
 
   const groupOf = (r: RunOut) => runGroup(runEffectiveStatus(r));
@@ -105,6 +106,14 @@ export function Runs() {
             <div key={i} className="glass h-[84px] animate-pulse rounded-2xl" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed load is NOT an empty list (#491).
+        <ErrorState
+          title={tCommon("loadFailed.title")}
+          body={tCommon("loadFailed.body")}
+          retryLabel={tCommon("loadFailed.retry")}
+          onRetry={() => void refetch()}
+        />
       ) : !all.length ? (
         <EmptyState
           icon={<ListChecks size={28} color="#8b8b9e" strokeWidth={1.6} />}

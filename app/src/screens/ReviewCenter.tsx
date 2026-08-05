@@ -7,7 +7,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { PipelineRail } from "@/components/ui/PipelineRail";
 import { approvalStyle, Pill, priorityBg, priorityColor } from "@/components/ui/badges";
 import { Select } from "@/components/ui/Dropdown";
-import { EmptyState, Spinner } from "@/components/ui/misc";
+import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCaseMutations, useCreateAndLink, useRun, useRunCases } from "@/hooks/queries";
 import { useUI, type CaseDraft } from "@/store/ui";
@@ -31,10 +31,11 @@ const platformIcon: Record<string, string> = { Web: "🖥", Mobile: "📱", API:
 
 export function ReviewCenter() {
   const { t } = useTranslation("runs");
+  const { t: tCommon } = useTranslation("common");
   const runId = Number(useParams().runId);
   const navigate = useNavigate();
   const { data: run } = useRun(runId);
-  const { data: cases, isLoading } = useRunCases(runId);
+  const { data: cases, isLoading, isError, refetch } = useRunCases(runId);
   const { setApproval, regenerateCase, approveAll, approveTicket, updateCase } =
     useCaseMutations(runId);
   const createAndLink = useCreateAndLink(runId);
@@ -159,7 +160,17 @@ export function ReviewCenter() {
         </div>
       )}
 
-      {!isLoading && tickets.length === 0 && (
+      {/* A failed load is NOT an empty list (#491). */}
+      {!isLoading && isError && (
+        <ErrorState
+          title={tCommon("loadFailed.title")}
+          body={tCommon("loadFailed.body")}
+          retryLabel={tCommon("loadFailed.retry")}
+          onRetry={() => void refetch()}
+        />
+      )}
+
+      {!isLoading && !isError && tickets.length === 0 && (
         <EmptyState
           icon={<Sparkles size={30} className="text-violet" />}
           title={t("review.empty.title")}
