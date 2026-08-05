@@ -3,7 +3,7 @@
  *
  * The flow, end to end (`docs/HUB-INTEGRATION.md` §2.1 / §3 B3):
  *
- *   `POST {hubBaseUrl}/auth/agent-token`  (hub origin, cookies + X-CSRF)
+ *   `POST {hubBaseUrl}/auth/agent-token`  (hub origin, cookies + X-CSRF-Token)
  *      → `POST /auth/sso/complete`        (Q-Agent, same origin)
  *      → an ordinary Q-Agent session, then navigate to `next`
  *
@@ -116,9 +116,14 @@ function readCookie(name: string): string | null {
 /**
  * Ask the hub for a short-lived agent token for this agent.
  *
- * `credentials: 'include'` sends the shared `emehub_refresh` cookie; `X-CSRF`
- * carries the readable `emehub_csrf` cookie. **This is `/auth/agent-token`, not
- * `/auth/refresh`** — see the module header.
+ * `credentials: 'include'` sends the shared `emehub_refresh` cookie;
+ * `X-CSRF-Token` carries the readable `emehub_csrf` cookie. **This is
+ * `/auth/agent-token`, not `/auth/refresh`** — see the module header.
+ *
+ * The header MUST be `X-CSRF-Token` (#495). `docs/HUB-INTEGRATION.md` §2.1
+ * originally specified `X-CSRF`, which the hub never reads
+ * (`emehub/api/app/deps_auth.py`: `CSRF_HEADER = "X-CSRF-Token"`), so the
+ * double-submit check saw no header at all and answered 403 every time.
  */
 export async function requestHubAgentToken(hubBaseUrl: string): Promise<string> {
   let res: Response;
@@ -128,7 +133,7 @@ export async function requestHubAgentToken(hubBaseUrl: string): Promise<string> 
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        "X-CSRF": readCookie("emehub_csrf") ?? "",
+        "X-CSRF-Token": readCookie("emehub_csrf") ?? "",
       },
       body: JSON.stringify({ audience: "qagent" }),
     });
