@@ -34,7 +34,7 @@ from app.routers import (
     tickets,
     workspace,
 )
-from app.services import auth_service
+from app.services import auth_service, hub_users
 from app.services.workspace_scope import scope_for
 from app.ws import hub
 
@@ -53,20 +53,49 @@ _AUTH_ALLOWLIST = {
 }
 
 
+def _token_accepted(token: str | None) -> bool:
+    """True if ``token`` authenticates a request at all (guard/WS gate).
+
+    Dual-accept (#479): a local Q-Agent access token, **or** — when
+    ``hub_sso_enabled`` is on — an EmeHub agent token. Signature-level only; no
+    database work, no provisioning.
+    """
+    return auth_service.access_token_valid(token) or hub_users.token_valid(token)
+
+
 def _token_user_id(token: str | None) -> int | None:
-    """Decode a validated access token and return the user id (``sub`` claim).
+    """Return the **local** user id a validated token authenticates as.
 
     Returns ``None`` when ``token`` is missing/invalid — callers are expected to
-    have already validated the token (e.g. via ``access_token_valid``) so this
+    have already validated the token (e.g. via :func:`_token_accepted`) so this
     should only fail on a decode race; treat it as "no user" defensively.
+
+    A hub token's ``sub`` is a **hub** user id, so it is resolved through
+    ``users.hub_user_id`` (#479) — never cast to a local id, which would silently
+    grant access to the wrong account's evidence.
     """
     if not token:
         return None
     try:
         payload = auth_service.decode_access_token(token)
     except auth_service.AuthError:
+        pass
+    else:
+        return int(payload.get("sub", 0) or 0)
+    if hub_users.claims_for(token) is None:
         return None
-    return int(payload.get("sub", 0) or 0)
+    # Local import (like _artifact_access_allowed below): honors the test
+    # suite's per-test engine rebind.
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = hub_users.resolve_user(db, token)
+        if user is None or not user.is_active:
+            return None
+        return user.id
+    finally:
+        db.close()
 
 
 def _run_owner_allows(owner_id: int | None, user_id: int) -> bool:
@@ -269,14 +298,19 @@ def create_app() -> FastAPI:
         # shape check above, so a malformed path 404s once past authentication).
         if path.startswith("/artifacts"):
             token = request.query_params.get("token")
-            if not auth_service.access_token_valid(token):
+            if not _token_accepted(token):
                 return JSONResponse({"detail": "Not authenticated"}, status_code=401)
             if not _artifact_access_allowed(path, token):
                 return JSONResponse({"detail": "Not found"}, status_code=404)
             return await call_next(request)
         auth_header = request.headers.get("authorization", "")
         if auth_header.lower().startswith("bearer "):
-            if auth_service.access_token_valid(auth_header[7:].strip()):
+            # Dual-accept (#479): this middleware runs BEFORE any route
+            # dependency, so teaching `require_user` about hub tokens is not
+            # enough — a hub token rejected here never reaches it. Gated on
+            # hub_sso_enabled inside `_token_accepted`, so with the flag off a
+            # hub token is still rejected exactly as before.
+            if _token_accepted(auth_header[7:].strip()):
                 return await call_next(request)
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
@@ -328,13 +362,12 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws/runs/{run_id}")
     async def run_progress(websocket: WebSocket, run_id: str) -> None:
-        # WS bypasses the HTTP guard → validate ?token=, then (#92) confirm the
-        # token's user owns this run, when auth is required.
+        # WS bypasses the HTTP guard → validate ?token= (local or hub, #479),
+        # then (#92) confirm the token's user owns this run, when auth is
+        # required.
         if settings.auth_required:
             token = websocket.query_params.get("token")
-            if not auth_service.access_token_valid(token) or not _run_ws_access_allowed(
-                run_id, token
-            ):
+            if not _token_accepted(token) or not _run_ws_access_allowed(run_id, token):
                 await websocket.close(code=1008)
                 return
         await hub.connect(run_id, websocket)
@@ -348,9 +381,7 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/ai")
     async def ai_activity_ws(websocket: WebSocket) -> None:
         """Live Claude CLI activity (start/end events) for the UI indicator."""
-        if settings.auth_required and not auth_service.access_token_valid(
-            websocket.query_params.get("token")
-        ):
+        if settings.auth_required and not _token_accepted(websocket.query_params.get("token")):
             await websocket.close(code=1008)
             return
         await hub.connect("ai", websocket)

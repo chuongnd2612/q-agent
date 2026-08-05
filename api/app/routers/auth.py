@@ -17,6 +17,7 @@ from app.db import get_db, utcnow
 from app.deps_auth import (
     CSRF_HEADER,
     clear_auth_cookies,
+    hub_authed,
     read_csrf_cookie,
     read_refresh_cookie,
     require_admin,
@@ -204,7 +205,10 @@ def change_password(body: ChangePasswordRequest, user: User = Depends(require_us
 
 @router.post("/auth/logout", response_model=OkResponse)
 def logout(response: Response, user: User = Depends(require_user), db: Session = Depends(get_db)) -> OkResponse:
-    sid = getattr(user, "_sid", None)
+    # A hub-authenticated request has no local session to revoke: its `sid` is a
+    # HUB session id and revoking it against `auth_sessions` is meaningless
+    # (#479). Clearing the cookies below is still correct.
+    sid = None if hub_authed(user) else getattr(user, "_sid", None)
     if sid:
         auth_service.revoke(db, sid)
     clear_auth_cookies(response)
@@ -254,7 +258,9 @@ def totp_disable(body: TotpDisableRequest, user: User = Depends(require_user), d
 
 @router.get("/auth/sessions", response_model=list[SessionOut])
 def list_sessions(user: User = Depends(require_user), db: Session = Depends(get_db)) -> list[SessionOut]:
-    current_sid = getattr(user, "_sid", None)
+    # None for a hub-authenticated request: no listed local session is "current"
+    # because the hub `sid` isn't one of them (#479).
+    current_sid = None if hub_authed(user) else getattr(user, "_sid", None)
     out: list[SessionOut] = []
     for s in auth_service.list_sessions(db, user.id):
         so = SessionOut.model_validate(s)
@@ -276,6 +282,12 @@ def revoke_session(session_id: str, user: User = Depends(require_user), db: Sess
 
 @router.post("/auth/sessions/revoke-others", response_model=OkResponse)
 def revoke_other_sessions(user: User = Depends(require_user), db: Session = Depends(get_db)) -> OkResponse:
+    if hub_authed(user):
+        # Refuse rather than pass keep_sid="" (which would revoke *every* local
+        # session, including this user's other tabs) or the hub `sid` (which
+        # matches no row at all). Sign in with a Q-Agent session to manage
+        # Q-Agent sessions (#479).
+        raise HTTPException(status_code=400, detail="Session management requires a Q-Agent session")
     sid = getattr(user, "_sid", None) or ""
     auth_service.revoke_others(db, user.id, keep_sid=sid)
     return OkResponse()
