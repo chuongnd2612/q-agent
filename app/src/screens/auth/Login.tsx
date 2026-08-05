@@ -7,9 +7,11 @@
  *      if the backend answers with an MFA challenge we advance to step 2.
  *   2. a 6-digit TOTP code → `api.auth.loginMfa`, then the same success path.
  *
- * SSO buttons and the "OR" divider from the design are intentionally NOT
- * rendered (deferred). Accounts are admin-provisioned, so there is no signup
- * link — the design's "Create an account" line is replaced with a muted note.
+ * The design's "OR" divider + SSO button are rendered by `HubSsoButton` (#481),
+ * but **only** when the backend reports EmeHub SSO enabled — with the flag off
+ * this screen is exactly what it always was. Accounts are admin-provisioned, so
+ * there is no signup link — the design's "Create an account" line is replaced
+ * with a muted note.
  */
 
 import { useState, type CSSProperties, type FormEvent } from "react";
@@ -18,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import { Mail } from "lucide-react";
 import { AuthLayout, RedirectLoader } from "@/components/auth/AuthLayout";
 import { AuthLabel, FieldWrap, PasswordInput, TextInput } from "@/components/auth/fields";
+import { HubSsoButton } from "@/components/auth/HubSsoButton";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/store/auth";
 import type { AuthTokens } from "@/types/api";
@@ -215,6 +218,11 @@ export function Login() {
               )}
             </button>
           </form>
+
+          {/* Renders nothing unless the backend reports SSO on, so the flag-off
+              screen is unchanged. Deliberately outside the MFA step: a user
+              mid-TOTP-challenge should finish it, not restart via the hub. */}
+          <HubSsoButton />
 
           <p className="m-0 mt-[22px] text-center text-[12.5px] text-faint">
             {t("login.provisionedNote")}
