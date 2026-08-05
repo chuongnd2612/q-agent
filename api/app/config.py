@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # worse — emehub ADR 0005.
     hub_jwt_secret: str = ""
     hub_audience: str = "qagent"
+    # Read hub-OWNED data (tickets, Claude credentials, connections) — #497.
+    # Separate from `hub_sso_enabled` because identity ships independently of
+    # data, and data is meaningless without identity: `hub_client.enabled()`
+    # requires BOTH. Off means no hub reads happen at all, never "allow anything".
+    hub_data_enabled: bool = False
 
     # Claude CLI
     claude_bin: str = "claude"
