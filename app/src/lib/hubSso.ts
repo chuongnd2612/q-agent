@@ -156,6 +156,35 @@ export async function requestHubAgentToken(hubBaseUrl: string): Promise<string> 
   return body.accessToken;
 }
 
+/**
+ * Mint a fresh EmeHub agent token for a **hub data read** (#498), or return
+ * `null` when one isn't obtainable.
+ *
+ * Callers attach the result as the `X-Hub-Token` header on a Q-Agent API request;
+ * our backend spends it on one hub call and never stores it (`deps_hub.py`).
+ *
+ * Minted per use rather than cached, because agent tokens live 15 minutes **and**
+ * are bound to a live hub session — a cached one is expired or about to be, and
+ * acting on a stale one fails in ways that look like bugs.
+ *
+ * Returns `null` rather than throwing when the hub can't authorise us — not
+ * signed in there, session revoked, hub unreachable, or the integration is off.
+ * Every caller is expected to degrade to local data in that case, so a missing
+ * hub token must not break a screen.
+ */
+export async function mintHubDataToken(): Promise<string | null> {
+  try {
+    const { hubSsoEnabled, hubBaseUrl } = await fetchHubSsoConfig();
+    if (!hubSsoEnabled || !hubBaseUrl) return null;
+    return await requestHubAgentToken(hubBaseUrl);
+  } catch {
+    // HubSsoError (any reason) or a failed probe — the caller falls back to
+    // local data. Deliberately swallowed: a hub read is an enhancement, never a
+    // precondition for the screen working.
+    return null;
+  }
+}
+
 /** Login-shaped response from `POST /auth/sso/complete` — identical to
  * `/auth/login` plus the clamped `next` the backend echoes back. */
 export interface SsoCompleteResult {

@@ -40,6 +40,8 @@ services:
       QAGENT_HUB_BASE_URL: ${QAGENT_HUB_BASE_URL:-}
       QAGENT_HUB_JWT_SECRET: ${QAGENT_HUB_JWT_SECRET:-}
       QAGENT_HUB_AUDIENCE: ${QAGENT_HUB_AUDIENCE:-qagent}
+      # Hub-owned data reads (#497). Requires HUB_SSO_ENABLED as well.
+      QAGENT_HUB_DATA_ENABLED: ${QAGENT_HUB_DATA_ENABLED:-false}
       # Connect to the bundled Postgres (service `db`) over the compose network.
       # Alembic applies the schema against it on boot.
       QAGENT_DATABASE_URL: postgresql+psycopg://${QAGENT_DB_USER:-qagent}:${QAGENT_DB_PASSWORD:-qagent}@db:5432/${QAGENT_DB_NAME:-qagent}
