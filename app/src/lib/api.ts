@@ -169,6 +169,42 @@ export function subscribeServiceReachable(listener: (reachable: boolean) => void
   return () => reachabilityListeners.delete(listener);
 }
 
+/**
+ * Request deadlines (#490).
+ *
+ * Without one, a backend that accepts a connection and then never answers — a
+ * hung app behind a live proxy, the classic pool-exhaustion signature — leaves
+ * the UI loading forever: `fetch` waits indefinitely, so the `catch` that marks
+ * the service unreachable never runs and the user cannot tell "slow" from "never
+ * coming back".
+ *
+ * The ceiling is per-path rather than global because a handful of endpoints are
+ * legitimately slow, and a deadline short enough to be useful for a list query
+ * would abort them mid-flight. Keyed off the path so no call site has to opt in
+ * and the whole policy is auditable in one place.
+ */
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+/** Endpoints that block on Claude or on a provider's API, and so must be allowed
+ * to take minutes. The ceiling matches the backend's own longest budget
+ * (`QAGENT_CLAUDE_BOOTSTRAP_TIMEOUT_S`, 1200s) — still bounded, so a genuinely
+ * dead connection eventually errors instead of hanging forever. */
+const SLOW_TIMEOUT_MS = 20 * 60_000;
+
+const SLOW_PATHS: RegExp[] = [
+  /^\/ai\/credentials\/test/, // a real Claude round trip (claude_timeout_s = 300)
+  /^\/cases\/\d+\/regenerate/, // Claude regenerates a case synchronously
+  /^\/runs\/[^/]+\/regenerate/,
+  /^\/runs\/[^/]+\/comments\/prepare/, // Claude drafts every comment synchronously
+  /^\/runs\/[^/]+\/testcases\/create-link/, // writes to ADO/Jira
+  /^\/tickets\/sync/, // provider sync loop
+  /^\/projects\/refresh/, // provider project/repo discovery
+];
+
+function timeoutFor(path: string): number {
+  return SLOW_PATHS.some((re) => re.test(path)) ? SLOW_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+}
+
 /** Outcome of a refresh attempt. The three cases must stay distinguishable:
  * only `expired` is authoritative evidence that the session is dead. */
 type RefreshOutcome =
@@ -237,19 +273,44 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let res: Response;
+  const timeoutMs = timeoutFor(path);
   try {
-    res = await fetch(url, { ...init, credentials: "include", headers });
+    res = await fetch(url, {
+      ...init,
+      credentials: "include",
+      headers,
+      // Bound the wait so a hung backend surfaces as unreachable instead of
+      // loading forever (#490). Respect a caller-supplied signal if there ever
+      // is one rather than silently dropping it.
+      signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+    });
   } catch (err) {
     // Refused / DNS / timeout / aborted — we never got an answer. Surface it as
     // a typed error (it used to escape as a bare TypeError) and flip the
     // reachability flag so the shell can offer a Retry instead of a blank toast.
     setServiceReachable(false);
-    throw new NetworkError(err instanceof Error ? err.message : "Could not reach the service");
+    const timedOut = err instanceof DOMException && err.name === "TimeoutError";
+    throw new NetworkError(
+      timedOut
+        ? `The service did not respond within ${Math.round(timeoutMs / 1000)}s`
+        : err instanceof Error
+          ? err.message
+          : "Could not reach the service",
+    );
   }
 
-  // The service answered, whatever it said — so it is reachable. A 401 or 500 is
-  // still an answer, and clearing the banner here is what makes Retry recover.
-  setServiceReachable(true);
+  // A gateway error means the proxy answered but the app behind it did not, so
+  // the service IS down even though we got a response (#490). Without this, a
+  // 502/503/504 on an ordinary call showed no banner and no message at all —
+  // `tryRefresh` only classifies these on the 401→refresh path.
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    setServiceReachable(false);
+  } else {
+    // The service answered on its own behalf — so it is reachable. A 401 or a
+    // 500 is still an answer, and clearing the banner here is what makes Retry
+    // recover.
+    setServiceReachable(true);
+  }
 
   // Silent recovery: on a 401 for a non-auth call, refresh the access token
   // once and replay the request.
