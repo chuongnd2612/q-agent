@@ -27,6 +27,19 @@ services:
       QAGENT_ADMIN_EMAIL: ${QAGENT_ADMIN_EMAIL:-admin@qagent.local}
       QAGENT_ADMIN_PASSWORD: ${QAGENT_ADMIN_PASSWORD:?set QAGENT_ADMIN_PASSWORD in .env}
       QAGENT_CLAUDE_MODEL: ${QAGENT_CLAUDE_MODEL:-claude-sonnet-5}
+      # EmeHub SSO (#477, docs/HUB-INTEGRATION.md). OFF unless explicitly enabled
+      # in .env — with it off, hub tokens are REJECTED (not waved through) and
+      # /login shows only the local form.
+      #
+      # HUB_BASE_URL must include the hub's public **/api** prefix: behind the
+      # tunnel the mint endpoint is https://hub.chuongnd.click/api/auth/agent-token
+      # (a bare /auth/agent-token there answers 405), and the browser calls this
+      # origin directly, so it must be the PUBLIC url — not localhost:8790.
+      # HUB_JWT_SECRET must EQUAL the hub's EMEHUB_JWT_SECRET.
+      QAGENT_HUB_SSO_ENABLED: ${QAGENT_HUB_SSO_ENABLED:-false}
+      QAGENT_HUB_BASE_URL: ${QAGENT_HUB_BASE_URL:-}
+      QAGENT_HUB_JWT_SECRET: ${QAGENT_HUB_JWT_SECRET:-}
+      QAGENT_HUB_AUDIENCE: ${QAGENT_HUB_AUDIENCE:-qagent}
       # Connect to the bundled Postgres (service `db`) over the compose network.
       # Alembic applies the schema against it on boot.
       QAGENT_DATABASE_URL: postgresql+psycopg://${QAGENT_DB_USER:-qagent}:${QAGENT_DB_PASSWORD:-qagent}@db:5432/${QAGENT_DB_NAME:-qagent}
