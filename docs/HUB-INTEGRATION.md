@@ -442,7 +442,9 @@ milestones, not one issue.
 ## 7. Verification
 
 **Gates** (from `CLAUDE.md`): `npm run typecheck` + `npm run build` for `app/` — there is **no**
-frontend unit-test harness, so do not run `npm test`. `uv run pytest -q` for `api/`.
+frontend unit-test harness, so do not run `npm test`. `uv run pytest -q` for `api/` — or
+`uv run --extra dev pytest -q` in a fresh worktree, where `pytest` isn't installed yet (it lives in
+the `dev` optional-dependency extra).
 
 > **Baseline the backend suite before you start.** 22 of 520 tests already fail on `master`
 > (#469). Capture that number first and compare against it — do not expect green, and do not
