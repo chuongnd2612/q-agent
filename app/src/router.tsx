@@ -7,6 +7,8 @@ import { RedirectIfAuthed } from "@/screens/RedirectIfAuthed";
 import { Login } from "@/screens/auth/Login";
 import { ForgotPassword } from "@/screens/auth/ForgotPassword";
 import { SignedOut } from "@/screens/auth/SignedOut";
+import { SsoCallback } from "@/screens/auth/SsoCallback";
+import { HubSsoEntry } from "@/screens/auth/HubSsoEntry";
 import { Profile } from "@/screens/auth/Profile";
 import { UserManagement } from "@/screens/settings/UserManagement";
 import { ClaudeCredentials } from "@/screens/settings/ClaudeCredentials";
@@ -49,12 +51,19 @@ export const router = createBrowserRouter([
   {
     element: <RedirectIfAuthed />,
     children: [
-      { path: "login", element: <Login /> },
+      // `/login` additionally passes through `HubSsoEntry`, which — with the
+      // EmeHub integration on (#480) — bounces an anonymous visitor to
+      // `/sso/callback` exactly once before letting the local form render.
+      { element: <HubSsoEntry />, children: [{ path: "login", element: <Login /> }] },
       { path: "forgot", element: <ForgotPassword /> },
     ],
   },
   // Post-logout confirmation — ungated (logout lands here while still authed).
   { path: "signed-out", element: <SignedOut /> },
+  // EmeHub SSO bootstrap (#480) — ungated top-level sibling, like `signed-out`.
+  // NOT under `RedirectIfAuthed` (it would bounce a returning user mid-bootstrap)
+  // and NOT under `RequireAuth` (arriving anonymous is the entire point).
+  { path: "sso/callback", element: <SsoCallback /> },
 
   // Authenticated app subtree — RequireAuth gates every route below.
   {

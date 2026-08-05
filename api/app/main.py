@@ -46,6 +46,12 @@ _AUTH_ALLOWLIST = {
     "/auth/refresh",
     "/auth/request-reset",
     "/auth/reset",
+    # EmeHub SSO bootstrap (#480). The caller arrives with a *hub* token and no
+    # local access token — that is the whole point — so the guard must let it
+    # through or the round trip can never complete. Unconditional on purpose:
+    # the handler itself 404s while QAGENT_HUB_SSO_ENABLED is off, and an
+    # allowlisted 404 leaks nothing.
+    "/auth/sso/complete",
     "/openapi.json",
     "/docs",
     "/redoc",

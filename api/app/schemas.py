@@ -1048,6 +1048,32 @@ class MfaLoginRequest(ApiModel):
     code: str
 
 
+class SsoCompleteRequest(ApiModel):
+    """Body of ``POST /auth/sso/complete`` — the EmeHub bootstrap (#480).
+
+    ``hub_token`` is the short-lived agent token minted by the hub's
+    ``POST /auth/agent-token`` (``docs/HUB-INTEGRATION.md`` §2). ``next`` is the
+    in-app path the caller wants to land on and is echoed back so the SPA has a
+    single source of truth for the post-bootstrap navigation.
+    """
+
+    hub_token: str
+    next: str | None = None
+
+
+class SsoCompleteResponse(LoginResponse):
+    """Deliberately **login-shaped** (``{accessToken, user}``), plus ``next``.
+
+    Returning the same body as ``/auth/login`` is what keeps the whole frontend
+    auth stack — ``store/auth.ts``, ``lib/api.ts``'s 401→refresh→retry and
+    ``RequireAuth`` — untouched by the hub integration: after this call the
+    browser holds an ordinary Q-Agent session and nothing downstream knows or
+    cares that it started at the hub.
+    """
+
+    next: str = "/"
+
+
 class RefreshResponse(ApiModel):
     access_token: str
     user: UserOut

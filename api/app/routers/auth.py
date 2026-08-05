@@ -24,7 +24,7 @@ from app.deps_auth import (
     set_auth_cookies,
 )
 from app.logging import logger
-from app.models.user import ROLE_ADMIN, USER_ROLES, User
+from app.models.user import ROLE_ADMIN, ROLE_MEMBER, USER_ROLES, User
 from app.schemas import (
     AdminCreateUserRequest,
     AdminInviteUserRequest,
@@ -41,13 +41,15 @@ from app.schemas import (
     RequestResetResponse,
     ResetRequest,
     SessionOut,
+    SsoCompleteRequest,
+    SsoCompleteResponse,
     TotpCodeRequest,
     TotpDisableRequest,
     TotpSetupResponse,
     UpdateMeRequest,
     UserOut,
 )
-from app.services import audit_service, auth_service
+from app.services import audit_service, auth_service, hub_tokens
 
 router = APIRouter(tags=["auth"])
 
@@ -171,6 +173,132 @@ def reset_password(body: ResetRequest, db: Session = Depends(get_db)) -> OkRespo
     db.commit()
     audit_service.record(category="auth", actor_type="user", action="Reset password", target=user.email)
     return OkResponse()
+
+
+# ---------------------------------------------------------------- EmeHub SSO bootstrap (#480)
+def _safe_next(raw: str | None) -> str:
+    """Clamp the caller's ``next`` to an in-app path, defaulting to ``/``.
+
+    The value is echoed back and the SPA navigates to it, so anything that could
+    read as another origin (``//evil.example``, ``https://…``, a scheme-relative
+    or backslash-smuggled path) must not survive — otherwise the bootstrap route
+    becomes an open redirect that looks like it came from us.
+    """
+    value = (raw or "").strip()
+    if not value.startswith("/") or value.startswith("//") or value.startswith("/\\"):
+        return "/"
+    return value
+
+
+def resolve_hub_user(db: Session, claims: hub_tokens.HubClaims) -> User:
+    """Find-or-create the local ``User`` a hub token maps to (§3.1).
+
+    Three cases, in order:
+
+    1. **Known hub user** — ``users.hub_user_id`` already carries this ``sub``:
+       return that row untouched. This is what makes a second bootstrap reuse the
+       account instead of provisioning a duplicate.
+    2. **Email collision** — no ``hub_user_id`` match but the (lowercased) email
+       already exists locally: **auto-link** by stamping ``hub_user_id`` on the
+       existing row (§8 decision 1), with an audit entry. The local role, runs,
+       evidence and workspace path are all left exactly as they were.
+    3. **Brand new** — provision a local user from the token's email and role.
+
+    ``role`` is taken from the token **only in case 3**. Q-Agent authorises with
+    its own role once the account exists (§8 decision 2), so a later hub token
+    must never silently promote or demote a local user.
+    """
+    existing = db.query(User).filter(User.hub_user_id == claims.hub_user_id).first()
+    if existing is not None:
+        return existing
+
+    by_email = auth_service.get_user_by_email(db, claims.normalized_email)
+    if by_email is not None:
+        by_email.hub_user_id = claims.hub_user_id
+        db.add(by_email)
+        db.commit()
+        db.refresh(by_email)
+        audit_service.record(
+            category="auth",
+            actor_type="user",
+            action="Linked EmeHub account",
+            target=by_email.email,
+            meta=f"hubUserId={claims.hub_user_id}",
+        )
+        return by_email
+
+    role = claims.role if claims.role in USER_ROLES else ROLE_MEMBER
+    user = User(
+        email=claims.normalized_email,
+        role=role,
+        # No local password: this account signs in through the hub. An empty hash
+        # can never verify (`auth_service.verify_password`), so /auth/login stays
+        # closed for it until a reset token is redeemed — same posture as an
+        # invited user.
+        password_hash="",
+        hub_user_id=claims.hub_user_id,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    audit_service.record(
+        category="auth",
+        actor_type="user",
+        action="Provisioned user from EmeHub",
+        target=user.email,
+        meta=f"hubUserId={claims.hub_user_id} role={role}",
+    )
+    return user
+
+
+@router.post("/auth/sso/complete", response_model=SsoCompleteResponse)
+def sso_complete(
+    body: SsoCompleteRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> SsoCompleteResponse:
+    """Trade an EmeHub agent token for an ordinary Q-Agent session (§3 B3).
+
+    The caller arrives **anonymous** — that is the entire point — which is why
+    ``/auth/sso/complete`` is in ``main._AUTH_ALLOWLIST`` alongside ``/auth/login``.
+    Without that entry the global auth guard 401s the request before this handler
+    ever runs and the bootstrap can never complete.
+
+    Everything after ``hub_tokens.decode`` is the *normal* login path:
+    ``create_session`` + ``set_auth_cookies``, returning a login-shaped body. So
+    the hub token's only job is to identify the user once; from here on the
+    browser holds Q-Agent's own refresh cookie and the hub is out of the loop.
+
+    Returns 404 when ``QAGENT_HUB_SSO_ENABLED`` is off (the feature is dormant,
+    not forbidden), and 401 for any token that fails verification.
+    """
+    if not settings.hub_sso_enabled:
+        # 404 rather than 403: with the integration dormant this endpoint should
+        # be indistinguishable from one that was never deployed.
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    try:
+        claims = hub_tokens.decode(body.hub_token)
+    except hub_tokens.HubTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    user = resolve_hub_user(db, claims)
+    if not user.is_active:
+        # Deactivated locally — the hub authenticates, but Q-Agent authorises.
+        raise HTTPException(status_code=403, detail="This account is deactivated")
+
+    result = _issue_login(db, user, request, response, remember=True)
+    audit_service.record(
+        category="auth",
+        actor_type="user",
+        action="Signed in (EmeHub)",
+        target=user.email,
+        ip=user_ip(request),
+    )
+    return SsoCompleteResponse(
+        access_token=result.access_token,
+        user=result.user,
+        next=_safe_next(body.next),
+    )
 
 
 # ---------------------------------------------------------------- authenticated
