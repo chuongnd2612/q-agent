@@ -26,6 +26,19 @@ class Ticket(Base):
     connection_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("provider_connections.id"), index=True, nullable=True
     )
+    # The EmeHub ticket this row corresponds to (#500, docs/HUB-INTEGRATION.md §5).
+    # NULL until a hub read matches it on ``(provider_kind, external_id)``.
+    #
+    # Deliberately **not unique**: tickets are per-user private data, so the same
+    # hub work item legitimately appears once per owner. It is also not a foreign
+    # key — the hub is a different database — and never a join *source*: nothing
+    # reads a ticket *by* this column. It exists so the two stores are
+    # reconcilable, which turns an eventual cutover into a join rather than a
+    # re-import. Q-Agent keeps ownership of this table either way; the hub cannot
+    # supply the provider PAT that ticket sync needs (#497 §4c).
+    hub_ticket_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True, default=None
+    )
 
     title: Mapped[str] = mapped_column(String(500))
     work_item_type: Mapped[str] = mapped_column(String(32), default="User Story")

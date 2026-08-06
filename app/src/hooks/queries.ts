@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { ApiError, api } from "@/lib/api";
+import { fetchHubSsoConfig, mintHubDataToken } from "@/lib/hubSso";
 import { queryKeys } from "@/lib/queryKeys";
 import type {
   AnnotationShape,
@@ -432,10 +433,42 @@ export const useBuildRepoKnowledge = (key: string) => {
  * paginated Tickets screen's page-at-a-time list. */
 export const ALL_TICKETS_PAGE_SIZE = 1000;
 
+/**
+ * Is an EmeHub token even obtainable in this deployment? (#500)
+ *
+ * Memoised because it is *deployment configuration* — `GET /health`'s SSO flag —
+ * not hub data. Caching the answer avoids a `/health` probe on every ticket
+ * fetch; caching hub data itself is explicitly forbidden (the hub has no webhook,
+ * ETag or revision counter, so a data cache goes stale silently). With the flag
+ * off this resolves `false` once and no hub call is ever attempted.
+ */
+let hubDataProbe: Promise<boolean> | null = null;
+function hubTokenObtainable(): Promise<boolean> {
+  hubDataProbe ??= fetchHubSsoConfig()
+    .then((cfg) => cfg.hubSsoEnabled && !!cfg.hubBaseUrl)
+    .catch(() => false);
+  return hubDataProbe;
+}
+
+/**
+ * Mint a hub token for one ticket read, or `null`.
+ *
+ * Never throws and never blocks the query on the hub: `mintHubDataToken()`
+ * already swallows every failure into `null`, and a `null` token simply means the
+ * backend serves local tickets. That is the whole degradation story — the hub
+ * being down must never turn into an error state or an empty list (#491).
+ */
+async function hubTokenForRead(): Promise<string | null> {
+  if (!(await hubTokenObtainable())) return null;
+  return mintHubDataToken();
+}
+
 export const useTickets = (filters: TicketFilters = {}) =>
   useQuery({
+    // The token is deliberately NOT part of the key: it changes every mint, and
+    // keying on it would make every fetch a cache miss.
     queryKey: queryKeys.tickets(filters as Record<string, string | number | undefined>),
-    queryFn: () => api.listTickets(filters),
+    queryFn: async () => api.listTickets(filters, await hubTokenForRead()),
   });
 
 export const useTicket = (externalId: string | null) =>

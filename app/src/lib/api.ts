@@ -364,6 +364,18 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 }
 
 const get = <T>(p: string) => request<T>(p);
+/**
+ * A GET carrying a freshly-minted EmeHub agent token (#500).
+ *
+ * The backend spends it on one hub call and never stores it (`api/app/deps_hub.py`),
+ * which is why it rides on the request rather than living anywhere: agent tokens
+ * last 15 minutes **and** are bound to a live hub session, so a cached one is
+ * expired or about to be. A `null` token sends no header at all — the ordinary
+ * state when the hub is off or the browser has no hub session — and the backend
+ * then serves purely local data.
+ */
+const getWithHubToken = <T>(p: string, hubToken: string | null) =>
+  request<T>(p, hubToken ? { headers: { "X-Hub-Token": hubToken } } : undefined);
 const post = <T>(p: string, body?: unknown) =>
   request<T>(p, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 const put = <T>(p: string, body?: unknown) =>
@@ -530,8 +542,14 @@ export const api = {
     ),
 
   // tickets
-  listTickets: (params: TicketFilters = {}) =>
-    get<TicketPage>("/tickets" + qs(params as Record<string, string | number | undefined>)),
+  // `hubToken` is optional and purely additive: with it the backend may serve the
+  // list with EmeHub's values overlaid (#500), without it — or if the hub fails —
+  // it serves the local list. A hub read is an enhancement, never a precondition.
+  listTickets: (params: TicketFilters = {}, hubToken: string | null = null) =>
+    getWithHubToken<TicketPage>(
+      "/tickets" + qs(params as Record<string, string | number | undefined>),
+      hubToken,
+    ),
   getTicket: (externalId: string) => get<TicketDetailOut>(`/tickets/${externalId}`),
   linkedCases: (externalId: string) =>
     get<LinkedTestCaseOut[]>(`/tickets/${encodeURIComponent(externalId)}/linked-cases`),
