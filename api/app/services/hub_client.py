@@ -183,9 +183,44 @@ def get_json(path: str, hub_token: str) -> Any:
 
 
 # ---------------------------------------------------------------- typed reads
-def list_tickets(hub_token: str) -> dict[str, Any]:
-    """The hub's ticket store. Shape: ``{"items": [...], "total": n}``."""
-    return get_json("/tickets", hub_token)
+def list_tickets(hub_token: str, page: int = 1, page_size: int = 200) -> dict[str, Any]:
+    """One page of the hub's ticket store. Shape ``{"items": [...], "total": n}``.
+
+    The hub paginates with ``page``/``pageSize`` and defaults to **25**, so a
+    caller that ignores them silently mirrors only the first 25 of however many
+    tickets exist — which is exactly what happened before this was parameterised.
+    Callers wanting everything should use :func:`iter_all_tickets`.
+    """
+    return get_json(f"/tickets?page={page}&pageSize={page_size}", hub_token)
+
+
+# Cap the number of pages walked, so a hub that keeps reporting a `total` we never
+# reach cannot spin forever. 40 x 200 is far beyond any realistic backlog.
+_MAX_TICKET_PAGES = 40
+
+
+def iter_all_tickets(hub_token: str, page_size: int = 200) -> list[dict[str, Any]]:
+    """Every hub ticket, walking pages until the reported ``total`` is covered.
+
+    Stops on a short/empty page as well as on the count, so a hub whose ``total``
+    disagrees with what it actually serves terminates rather than looping.
+    """
+    collected: list[dict[str, Any]] = []
+    for page in range(1, _MAX_TICKET_PAGES + 1):
+        payload = list_tickets(hub_token, page=page, page_size=page_size)
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            break
+        collected.extend(items)
+        total = payload.get("total")
+        if not isinstance(total, int) or len(collected) >= total or len(items) < page_size:
+            break
+    else:
+        logger.warning(
+            "stopped mirroring hub tickets at the {}-page cap; some may be missing",
+            _MAX_TICKET_PAGES,
+        )
+    return collected
 
 
 def get_ticket(external_id: str, hub_token: str) -> dict[str, Any]:

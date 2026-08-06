@@ -117,9 +117,11 @@ def ensure_tickets(
     mean one hub round trip per ticket (200 here) to populate fields the list never
     shows.
     """
-    payload = hub_client.list_tickets(hub_token)
-    items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
+    # Every page, not just the first: the hub defaults to 25 per page, so a
+    # single call mirrored 25 of 200 tickets and the workspace looked
+    # arbitrarily truncated.
+    items = hub_client.iter_all_tickets(hub_token)
+    if not items:
         return 0
 
     existing_rows = db.scalars(
