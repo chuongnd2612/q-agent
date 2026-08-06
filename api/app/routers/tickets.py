@@ -8,15 +8,47 @@ Endpoints to implement:
   POST /tickets/sync                 -> SyncResult           (body: SyncRequest; live adapter pull)
   POST /tickets/delete               -> TicketDeleteResult   (body: TicketDeleteRequest; local bulk delete)
   DELETE /tickets/{external_id}      -> 204                  (local delete of a single ticket)
+
+EmeHub read-through (#500, C3 of #497)
+--------------------------------------
+``GET /tickets`` can serve the *displayed* ticket fields from the hub when
+``QAGENT_HUB_DATA_ENABLED`` (plus SSO) is on **and** the caller supplied a fresh
+``X-Hub-Token``. Four properties are load-bearing:
+
+1. **Read-through, not ownership transfer.** Local rows remain the unit of work —
+   the hub overlays title/status/assignee/sprint/epic/priority/areaPath/labels/AC
+   count onto rows we already have. Ticket *sync* still runs locally, because it
+   needs a provider PAT and the hub never hands one out (#497 §4c), so ticket
+   ownership cannot move even if we wanted it to.
+2. **No phantom rows.** A hub ticket with no local counterpart is reconciled
+   against and then ignored: it is never inserted, and never appears in the list.
+   Selecting a ticket that has no local row would produce a run that cannot
+   generate (no description, no acceptance criteria) — a worse failure than not
+   showing it. Local rows the hub does not know about keep their local values, so
+   the read-through only ever *freshens* the list, never shrinks it.
+3. **Nothing is cached.** The hub offers no webhook, ETag or revision counter, so
+   a cache would go stale silently — a smaller copy of the drift the hub exists to
+   remove. One hub call per request, or none.
+4. **Any hub failure falls back to local, silently.** Down, 401, malformed — the
+   local query runs and the user sees tickets. A failed load must never render as
+   an empty list (#491), and here it does not render at all.
+
+With the flag off, or with no ``X-Hub-Token``, none of this executes and the
+handler is byte-identical to before.
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_header
+from app.logging import logger
 from app.models.linked import LinkedTestCase
 from app.models.ticket import Ticket
 from app.models.user import User
@@ -30,11 +62,251 @@ from app.schemas import (
     TicketOut,
     TicketPageOut,
 )
-from app.services import audit_service, connection_service
+from app.services import audit_service, connection_service, hub_client
 from app.services.adapters.base import ProviderError
 from app.services.ownership import owned, stamp_owner
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
+
+# SQLite caps a statement at 999 bound parameters, so reconciliation batches its
+# ``external_id IN (...)`` lookups rather than assuming the hub page is small.
+_IN_CHUNK = 400
+
+
+# ------------------------------------------------------------- hub read-through
+def _hub_key(provider_kind: Any, external_id: Any) -> tuple[str, str] | None:
+    """The join key: ``(provider_kind, external_id)``, case-folded on the kind.
+
+    Both halves are required. Matching on ``external_id`` alone would happily
+    join an ADO ``PROJ-1`` to a Jira ``PROJ-1`` — different work items that share
+    a naming convention — so a missing kind yields no key rather than a loose one.
+    """
+    kind = str(provider_kind or "").strip().lower()
+    ext = str(external_id or "").strip()
+    if not kind or not ext:
+        return None
+    return (kind, ext)
+
+
+def _index_hub_items(items: list[Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Hub tickets keyed by ``(providerKind, externalId)``; unkeyable ones dropped."""
+    indexed: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = _hub_key(item.get("providerKind"), item.get("externalId"))
+        if key is not None:
+            indexed[key] = item
+    return indexed
+
+
+def _record_hub_ticket_ids(
+    db: Session, user: User | None, overlay: dict[tuple[str, str], dict[str, Any]]
+) -> None:
+    """Stamp ``hub_ticket_id`` on the caller's rows that the hub also knows.
+
+    **Only ever an UPDATE.** Unmatched hub tickets are dropped on the floor here —
+    inserting them would fabricate rows with no description and no acceptance
+    criteria, which is exactly the phantom data #500 forbids.
+
+    Scoped to the caller's own tickets and matched on the full
+    ``(provider_kind, external_id)`` key, so one user's reconciliation never
+    writes another's rows and no ADO id is ever joined to a Jira one. Best-effort:
+    a write failure rolls back and the read-through carries on with local ids
+    unchanged — recording the mapping is valuable, not essential.
+    """
+    if not overlay:
+        return
+    external_ids = sorted({ext for _, ext in overlay})
+    changed = 0
+    try:
+        for start in range(0, len(external_ids), _IN_CHUNK):
+            chunk = external_ids[start : start + _IN_CHUNK]
+            rows = (
+                owned(db.query(Ticket), Ticket, user)
+                .filter(Ticket.external_id.in_(chunk))
+                .all()
+            )
+            for row in rows:
+                key = _hub_key(row.provider_kind, row.external_id)
+                item = overlay.get(key) if key else None
+                if item is None:
+                    continue
+                hub_id = str(item.get("id") or "").strip()
+                if hub_id and row.hub_ticket_id != hub_id:
+                    row.hub_ticket_id = hub_id
+                    changed += 1
+        if changed:
+            db.commit()
+    except Exception as exc:  # noqa: BLE001 - the mapping is an optimisation
+        db.rollback()
+        logger.warning("hub ticket reconciliation failed: {}", exc)
+
+
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Drop the tzinfo (converting to UTC first) so datetimes stay comparable.
+
+    Load-bearing: hub-overlaid rows and local-only rows are sorted in the same
+    list, and Python raises ``TypeError`` the moment an aware datetime is compared
+    to a naive one. Stored ``synced_at`` values are aware on some backends and
+    naive on others, so both sides are flattened here rather than assumed.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_hub_timestamp(value: Any) -> datetime | None:
+    """Parse the hub's ``syncedAt`` into a naive-UTC datetime, or ``None``."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _naive_utc(parsed)
+
+
+def _overlay_ticket(row: Ticket, item: dict[str, Any] | None) -> tuple[TicketOut, datetime]:
+    """A ``TicketOut`` for ``row``, with the hub's values layered on where present.
+
+    ``id`` and ``connection_id`` are deliberately **never** overlaid: they are
+    local primary/foreign keys, and the hub's ``id``/``connectionId`` live in a
+    different namespace entirely. Overlaying them would produce ids that resolve
+    to the wrong row — or to nothing — on every follow-up request.
+    """
+    out = TicketOut.model_validate(row)
+    sort_at = _naive_utc(row.synced_at) or datetime.min
+    if item is None:
+        return out, sort_at
+
+    def take(field: str, current: str) -> str:
+        value = item.get(field)
+        return value if isinstance(value, str) and value else current
+
+    out.title = take("title", out.title)
+    out.status = take("status", out.status)
+    out.priority = take("priority", out.priority)
+    out.assignee = take("assignee", out.assignee)
+    out.sprint = take("sprint", out.sprint)
+    out.epic = take("epic", out.epic)
+    out.area_path = take("areaPath", out.area_path)
+    labels = item.get("labels")
+    if isinstance(labels, list):
+        out.labels = [str(label) for label in labels]
+    ac_count = item.get("acCount")
+    if isinstance(ac_count, int) and not isinstance(ac_count, bool):
+        out.ac_count = ac_count
+    return out, _parse_hub_timestamp(item.get("syncedAt")) or sort_at
+
+
+def _matches_filters(
+    out: TicketOut,
+    row: Ticket,
+    *,
+    status: str | None,
+    assignee: str | None,
+    sprint: str | None,
+    area_path: str | None,
+    state_list: list[str],
+    type_list: list[str],
+    priority: str | None,
+    epic: str | None,
+    q: str | None,
+) -> bool:
+    """The local query's WHERE clause, re-expressed over the merged values.
+
+    Applied to the *merged* row rather than the stored one on purpose: filtering
+    on a stale local status while displaying the hub's fresh one would produce a
+    list that visibly contradicts the filter that produced it.
+
+    ``work_item_type`` has no hub counterpart, so that one filter always reads the
+    local value — the honest answer, since the hub simply does not carry the field.
+    """
+    if status and out.status != status:
+        return False
+    if assignee and out.assignee != assignee:
+        return False
+    if sprint and out.sprint != sprint:
+        return False
+    if area_path and not (out.area_path or "").startswith(area_path):
+        return False
+    if state_list and out.status not in state_list:
+        return False
+    if type_list and row.work_item_type not in type_list:
+        return False
+    if priority and out.priority != priority:
+        return False
+    if epic and out.epic != epic:
+        return False
+    if q:
+        needle = q.lower()
+        if needle not in (out.title or "").lower() and needle not in out.external_id.lower():
+            return False
+    return True
+
+
+def _hub_read_through(
+    db: Session,
+    user: User | None,
+    hub_token: str,
+    *,
+    base_query,
+    page: int,
+    page_size: int,
+    **filters: Any,
+) -> TicketPageOut | None:
+    """Serve the list with the hub's values overlaid, or ``None`` to use local.
+
+    ``None`` means "the hub could not answer" and is the *only* failure signal —
+    every hub exception, a malformed payload and a broken reconciliation all land
+    there, and the caller runs the ordinary local query. Nothing here can turn a
+    hub outage into an error response or an empty page (#491).
+    """
+    try:
+        payload = hub_client.list_tickets(hub_token)
+    except hub_client.HubClientError as exc:
+        # Expected, routinely: 15-minute tokens expire and the hub is a remote
+        # hop. Info, not error — the user is about to get their tickets anyway.
+        logger.info("hub ticket read unavailable, serving local tickets: {}", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 - a hub read must never break the list
+        logger.warning("unexpected hub ticket read failure, serving local tickets: {}", exc)
+        return None
+
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        logger.info("hub ticket read returned an unexpected shape; serving local tickets")
+        return None
+
+    overlay = _index_hub_items(items)
+    _record_hub_ticket_ids(db, user, overlay)
+
+    # Anchored on local rows (already owner-scoped by the caller), so the hub can
+    # freshen what we show but never widen who can see it.
+    rows = base_query.all()
+    merged: list[tuple[TicketOut, datetime, int]] = []
+    for row in rows:
+        key = _hub_key(row.provider_kind, row.external_id)
+        out, sort_at = _overlay_ticket(row, overlay.get(key) if key else None)
+        if _matches_filters(out, row, **filters):
+            merged.append((out, sort_at, row.id))
+
+    # Same ordering as the local query: newest sync first (never-synced last, as
+    # `nullslast` does), id ascending to break ties so pagination is stable.
+    # Two stable passes rather than a negated key — `datetime` has no unary minus,
+    # and `.timestamp()` on `datetime.min` overflows on Windows.
+    merged.sort(key=lambda entry: entry[2])
+    merged.sort(key=lambda entry: entry[1], reverse=True)
+    start = (page - 1) * page_size
+    return TicketPageOut(
+        items=[entry[0] for entry in merged[start : start + page_size]],
+        total=len(merged),
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("", response_model=TicketPageOut)
@@ -57,13 +329,44 @@ def list_tickets(
     page_size: int = Query(25, alias="pageSize"),
     db: Session = Depends(get_db),
     user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_header),
 ) -> TicketPageOut:
-    """Tickets scoped to ``user`` (#93 — private per-user data)."""
+    """Tickets scoped to ``user`` (#93 — private per-user data).
+
+    With ``QAGENT_HUB_DATA_ENABLED`` on and an ``X-Hub-Token`` present, the
+    displayed values may come from EmeHub — see the module docstring. Every hub
+    failure falls through to the local query below, which is unchanged.
+    """
     query = owned(db.query(Ticket), Ticket, user)
     if connection_id:
         query = query.filter(Ticket.connection_id == connection_id)
     if provider_kind:
         query = query.filter(Ticket.provider_kind == provider_kind)
+
+    # Hub read-through. Scoping filters (owner / connection / provider) are already
+    # applied above, so the hub path inherits them; the value filters below are
+    # re-applied there against the merged values.
+    if hub_token and hub_client.enabled():
+        hub_page = _hub_read_through(
+            db,
+            user,
+            hub_token,
+            base_query=query,
+            page=page,
+            page_size=page_size,
+            status=status,
+            assignee=assignee,
+            sprint=sprint,
+            area_path=area_path,
+            state_list=[s for s in (states or "").split(",") if s],
+            type_list=[t for t in (work_item_types or "").split(",") if t],
+            priority=priority,
+            epic=epic,
+            q=q,
+        )
+        if hub_page is not None:
+            return hub_page
+
     if status:
         query = query.filter(Ticket.status == status)
     if assignee:
