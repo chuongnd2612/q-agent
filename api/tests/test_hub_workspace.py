@@ -12,6 +12,8 @@ Two properties matter most and are asserted repeatedly below: mirroring is
 
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
 import respx
@@ -89,15 +91,24 @@ def _projects():
 
 
 def _mock_hub(tickets=None, connections=None, projects=None):
-    respx.get(f"{HUB}/connections").mock(
+    """Stub the three hub reads and RETURN the tickets route.
+
+    Returning it matters: respx matches routes in registration order, so a test
+    that calls `respx.get(...)` again just adds a second route the first one
+    shadows — the hub keeps answering with the original payload and a
+    "hub is now empty" scenario silently never happens. Re-mock this route object
+    instead.
+    """
+    respx.get(url__startswith=f"{HUB}/connections").mock(
         return_value=httpx.Response(200, json=connections if connections is not None else _connections())
     )
-    respx.get(f"{HUB}/tickets").mock(
+    tickets_route = respx.get(url__regex=rf"{re.escape(HUB)}/tickets(\?.*)?$").mock(
         return_value=httpx.Response(200, json=tickets if tickets is not None else _tickets())
     )
-    respx.get(f"{HUB}/projects").mock(
+    respx.get(url__startswith=f"{HUB}/projects").mock(
         return_value=httpx.Response(200, json=projects if projects is not None else _projects())
     )
+    return tickets_route
 
 
 # ---------------------------------------------------------------- the fix
@@ -146,10 +157,10 @@ def test_mirroring_is_idempotent(hub_on, db_session, sso_user):
 
 @respx.mock
 def test_updates_existing_mirror_in_place(hub_on, db_session, sso_user):
-    _mock_hub()
+    tickets_route = _mock_hub()
     hub_workspace.ensure_for_user(db_session, sso_user, "tok")
 
-    respx.get(f"{HUB}/tickets").mock(
+    tickets_route.mock(
         return_value=httpx.Response(200, json=_tickets(title="Renamed at the hub", status="Done"))
     )
     hub_workspace.ensure_for_user(db_session, sso_user, "tok")
@@ -288,3 +299,88 @@ def test_detail_fetch_survives_a_hub_failure(hub_on, db_session, sso_user):
     respx.get(f"{HUB}/tickets/1442").mock(side_effect=httpx.ConnectError("refused"))
 
     assert hub_workspace.fill_ticket_detail(db_session, ticket, "tok").external_id == "1442"
+
+
+# ---------------------------------------------------------------- #522 pruning
+# Mirroring was create-or-update only, so a ticket deleted at the hub lived on in
+# Q-Agent forever. Pruning is guarded three ways, because a careless prune is far
+# worse than a stale row.
+@respx.mock
+def test_tickets_deleted_at_the_hub_are_pruned(hub_on, db_session, sso_user):
+    tickets_route = _mock_hub()
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+    assert db_session.query(Ticket).filter_by(owner_id=sso_user.id).count() == 1
+
+    # The hub is emptied — a COMPLETE read returning zero.
+    tickets_route.mock(return_value=httpx.Response(200, json={"items": [], "total": 0}))
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    assert db_session.query(Ticket).filter_by(owner_id=sso_user.id).count() == 0
+
+
+@respx.mock
+def test_locally_created_tickets_are_never_pruned(hub_on, db_session, sso_user):
+    """Only rows carrying `hub_ticket_id` were ever ours to remove."""
+    db_session.add(
+        Ticket(owner_id=sso_user.id, external_id="MINE-1", provider_kind="ado", title="Mine")
+    )
+    db_session.commit()
+    tickets_route = _mock_hub()
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    tickets_route.mock(return_value=httpx.Response(200, json={"items": [], "total": 0}))
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    remaining = db_session.query(Ticket).filter_by(owner_id=sso_user.id).all()
+    assert [t.external_id for t in remaining] == ["MINE-1"]
+
+
+@respx.mock
+def test_a_failed_hub_read_prunes_nothing(hub_on, db_session, sso_user):
+    """A transient hub error must never be read as 'the hub is empty now'."""
+    tickets_route = _mock_hub()
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    tickets_route.mock(side_effect=httpx.ConnectError("refused"))
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    assert db_session.query(Ticket).filter_by(owner_id=sso_user.id).count() == 1
+
+
+@respx.mock
+def test_a_partial_read_prunes_nothing(hub_on, db_session, sso_user):
+    """A page-capped or malformed walk looks like a short one — it must not delete."""
+    tickets_route = _mock_hub()
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    def _serve(request):
+        page = int(dict(request.url.params).get("page", 1))
+        if page == 1:
+            return httpx.Response(200, json={"items": [_tickets()["items"][0]] * 200, "total": 400})
+        return httpx.Response(200, json={"items": "not-a-list", "total": 400})
+
+    tickets_route.mock(side_effect=_serve)
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    assert db_session.query(Ticket).filter_by(owner_id=sso_user.id).count() >= 1
+
+
+@respx.mock
+def test_a_ticket_referenced_by_a_run_is_kept(hub_on, db_session, sso_user):
+    """No FK protects this: run_tickets.ticket_external_id is a plain string, so
+    deleting would silently orphan run history rather than fail."""
+    from app.models.run import Run, RunTicket
+
+    tickets_route = _mock_hub()
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+    run = Run(code="RUN-901", name="Regression sweep", owner_id=sso_user.id)
+    db_session.add(run)
+    db_session.commit()
+    db_session.add(RunTicket(run_id=run.id, ticket_external_id="1442"))
+    db_session.commit()
+
+    tickets_route.mock(return_value=httpx.Response(200, json={"items": [], "total": 0}))
+    hub_workspace.ensure_for_user(db_session, sso_user, "tok")
+
+    kept = db_session.query(Ticket).filter_by(owner_id=sso_user.id).one()
+    assert kept.external_id == "1442"
