@@ -1110,3 +1110,18 @@ export interface ProgressEvent {
   runId: string;
   payload: Record<string, unknown>;
 }
+
+
+/** Claude credential as EmeHub resolves it (#512). Sanitised server-side: the
+ * credential material is never included. `available: false` means the hub could
+ * not be consulted (flag off, no hub session, hub down) — not an error. */
+export interface HubClaudeCredential {
+  available: boolean;
+  source?: string | null;
+  status?: string | null;
+  label?: string | null;
+  expiresAt?: string | null;
+  daysLeft?: number | null;
+  scopes?: string[] | null;
+  subscriptionType?: string | null;
+}

@@ -244,7 +244,14 @@
       "credentialsSaveFailed": "Không thể lưu tệp thông tin đăng nhập đó",
       "credentialsRemoved": "Đã xóa thông tin đăng nhập cá nhân của bạn — hiện đang dùng tài khoản dùng chung",
       "credentialsRemoveFailed": "Không thể xóa thông tin đăng nhập của bạn",
-      "readFailed": "Không thể đọc tệp đó."
+      "readFailed": "Không thể đọc tệp đó.",
+      "hubManagedTitle": "Được quản lý bởi EmeHub",
+      "hubManagedBody": "Các lần chạy dùng tài khoản Claude do EmeHub cung cấp. Hãy đổi tài khoản trong EmeHub — không thể chuyển từ đây.",
+      "hubManageLink": "Quản lý trong EmeHub",
+      "hubEffective": "Đang dùng cho các lần chạy",
+      "hubSourceShared": "Tài khoản dùng chung của EmeHub",
+      "hubSourceOwn": "Tài khoản EmeHub của bạn",
+      "localFallbackNote": "Chỉ dùng khi không kết nối được EmeHub lúc bắt đầu chạy."
     },
     "dropzone": {
       "parsing": "Đang phân tích .credentials.json của bạn",

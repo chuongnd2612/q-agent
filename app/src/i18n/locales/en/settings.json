@@ -247,7 +247,14 @@
       "credentialsSaveFailed": "Could not save that credentials file",
       "credentialsRemoved": "Removed your personal credentials — now using the shared account",
       "credentialsRemoveFailed": "Failed to remove your credentials",
-      "readFailed": "Could not read that file."
+      "readFailed": "Could not read that file.",
+      "hubManagedTitle": "Managed by EmeHub",
+      "hubManagedBody": "Runs use the Claude account resolved by EmeHub. Change which account is used in EmeHub — it can't be switched from here.",
+      "hubManageLink": "Manage in EmeHub",
+      "hubEffective": "Used by runs",
+      "hubSourceShared": "EmeHub shared account",
+      "hubSourceOwn": "Your EmeHub account",
+      "localFallbackNote": "Used only if EmeHub is unavailable when a run starts."
     },
     "dropzone": {
       "parsing": "Parsing your .credentials.json",
