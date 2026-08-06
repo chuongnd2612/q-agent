@@ -33,9 +33,13 @@ __all__ = [
     "ClaudeCredentialsError",
     "delete_own",
     "delete_shared",
+    "discard_hub_run_credential",
     "get_own",
     "get_shared",
+    "hub_run_config_dir",
+    "hub_run_key",
     "materialize",
+    "materialize_raw",
     "resolve_ambient_owner_id",
     "resolve_effective_config_dir",
     "resolve_scoped_config_dir",
@@ -503,6 +507,25 @@ def _lock_down(path: Path, *, is_dir: bool) -> None:
         pass
 
 
+def _write_config_dir(key: str, contents: str) -> Path:
+    """Write ``contents`` to ``workspace/claude-config/<key>/.credentials.json``.
+
+    The single writer behind :func:`materialize` (stored, encrypted rows) and
+    :func:`materialize_raw` (material handed to us in the clear, e.g. resolved
+    from EmeHub — #499), so both produce a byte-identical, owner-only config dir.
+    Returns the directory (not the file): that is what ``CLAUDE_CONFIG_DIR``
+    points at.
+    """
+    config_dir = _config_dir_for(key)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _lock_down(config_dir, is_dir=True)
+
+    creds_path = config_dir / ".credentials.json"
+    creds_path.write_text(contents, encoding="utf-8")
+    _lock_down(creds_path, is_dir=False)
+    return config_dir
+
+
 def materialize(row: ClaudeCredentials, key: str) -> Path:
     """Decrypt ``row.credentials`` and write it to ``workspace/claude-config/<key>/.credentials.json``.
 
@@ -510,18 +533,58 @@ def materialize(row: ClaudeCredentials, key: str) -> Path:
     is set to. Rewrites the file on every call so an updated stored credential
     (re-upload) always takes effect on the next CLI invocation.
     """
-    config_dir = _config_dir_for(key)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    _lock_down(config_dir, is_dir=True)
-
     decrypted = crypto.decrypt(row.credentials)
     if decrypted is None:
         raise ClaudeCredentialsError(f"stored credentials for '{key}' could not be decrypted")
+    return _write_config_dir(key, decrypted)
 
-    creds_path = config_dir / ".credentials.json"
-    creds_path.write_text(decrypted, encoding="utf-8")
-    _lock_down(creds_path, is_dir=False)
-    return config_dir
+
+def materialize_raw(raw_credentials: str, key: str) -> Path:
+    """Write already-plaintext ``.credentials.json`` material for ``key``.
+
+    Same output as :func:`materialize`, for material that never lived in our
+    table — today only the hub-resolved credential (#499). Validated as JSON
+    first so a garbled payload fails here rather than as an opaque CLI error.
+
+    ``raw_credentials`` is a secret: it is written to an owner-only file and is
+    never logged or returned.
+    """
+    return _write_config_dir(key, _validate(raw_credentials))
+
+
+# ------------------------------------------------------- hub-resolved (per-run)
+# A run that resolved its credential from EmeHub materialises it under its own
+# key, so the background pipeline reads a *file* and never calls the hub
+# mid-run (hub agent tokens live 15 minutes and are session-bound — #497 §4b).
+_HUB_RUN_PREFIX = "hub-run-"
+
+
+def hub_run_key(run_id: int) -> str:
+    """Config-dir key for the credential a run resolved from the hub."""
+    return f"{_HUB_RUN_PREFIX}{run_id}"
+
+
+def hub_run_config_dir(run_id: int) -> Path | None:
+    """The hub-resolved config dir for ``run_id``, or ``None`` if there isn't one.
+
+    A pure filesystem check — deliberately no hub call, so this is safe on the
+    background worker threads that actually invoke the CLI.
+    """
+    config_dir = _config_dir_for(hub_run_key(run_id))
+    return config_dir if (config_dir / ".credentials.json").is_file() else None
+
+
+def discard_hub_run_credential(run_id: int) -> None:
+    """Remove any hub-resolved credential previously materialised for ``run_id``.
+
+    Called when a run start falls back to the local credential, so a *stale* dir
+    from an earlier attempt can never be picked up silently. Best-effort.
+    """
+    creds_path = _config_dir_for(hub_run_key(run_id)) / ".credentials.json"
+    try:
+        creds_path.unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - permissions/locking; not fatal
+        pass
 
 
 def resolve_effective_config_dir(db: Session, owner_id: int | None) -> Path | None:

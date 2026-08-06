@@ -240,11 +240,24 @@ def _resolve_claude_env() -> tuple[dict[str, str], int | None]:
     caller can stamp the usage row with the same user. Raises :class:`ClaudeError`
     when no credential is configured at all — there is no interactive
     ``claude login`` fallback (ADR 0001).
+
+    When the ambient run resolved its credential from EmeHub at run start (#499),
+    that already-materialized dir wins. This is a **filesystem** check — the hub
+    is never called from here, because here is a background worker thread with no
+    fresh hub token (agent tokens live 15 minutes and are session-bound).
     """
     from app.db import SessionLocal
-    from app.services import claude_credentials
+    from app.services import claude_credentials, hub_client, run_context
 
     owner_id = claude_credentials.resolve_ambient_owner_id()
+
+    if hub_client.enabled():
+        run_id = run_context.get_run()
+        if run_id is not None:
+            hub_dir = claude_credentials.hub_run_config_dir(run_id)
+            if hub_dir is not None:
+                return {**os.environ, "CLAUDE_CONFIG_DIR": str(hub_dir)}, owner_id
+
     db = SessionLocal()
     try:
         config_dir = claude_credentials.resolve_effective_config_dir(db, owner_id)
