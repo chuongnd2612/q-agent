@@ -364,7 +364,11 @@ def test_hub_ticket_id_migration_up_and_down(tmp_path, monkeypatch):
     assert not index["unique"]
     engine.dispose()
 
-    command.downgrade(cfg, "-1")
+    # Downgrade to this migration's OWN parent, not "-1". Relative steps assume
+    # this revision is still head, so the test silently starts asserting about
+    # whichever migration was added most recently (it broke the moment #514 added
+    # one). Naming the revision keeps it correct as migrations accumulate.
+    command.downgrade(cfg, "f4b2e8c17a05")
     engine = create_engine(url, connect_args={"check_same_thread": False})
     insp = inspect(engine)
     assert not any(c["name"] == "hub_ticket_id" for c in insp.get_columns("tickets"))
