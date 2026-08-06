@@ -261,6 +261,41 @@ Two consequences worth stating plainly:
 
 ---
 
+## 4-pre. What an agent token can actually do (measured)
+
+Measured against the live hub on 2026-08-06 with a real `aud: qagent` token. Recorded because the
+narrative sections below were written before anyone tried it, and were wrong in both directions.
+
+| Endpoint | Agent token | Notes |
+|---|---|---|
+| `GET /tickets` | **200** | paginated, `page`/`pageSize`, **default `pageSize=25`** |
+| `GET /tickets/{externalId}` | **200** | `description`, `acceptanceCriteria`, `acceptanceCriteriaHtml`, `attachments`, `comments`, `linkedPrs` |
+| `POST /tickets/sync` | **200** | the hub syncs with **its own** PAT — see §5, the PAT never needs to cross |
+| `GET /projects` | **200** | incl. `summary` (repo, branch, knowledge status) |
+| `GET /connections` | **200** | `hasPat` only — **never the PAT** |
+| `GET /credentials/claude/resolve` | **200** | real credential material + `source`/`status`/`expiresAt`/`scopes` |
+| `GET /credentials/claude` | 401 | hub audience only |
+| `PUT /credentials/claude/mode` | 401 | hub audience only — **an agent cannot switch the credential** |
+| `GET /connections/{id}/work-item-metadata` | 401 | hub audience only |
+| `GET /connections/{id}/sprints` | 401 | hub audience only |
+| `GET /agents`, `GET /audit/events` | 401 | hub audience only |
+
+**Two token properties that constrain every design here:**
+
+1. **Agent tokens are session-bound.** A signature-valid token whose `sid` is not a live hub session
+   is refused `401 "Session revoked or expired"` — the hub validates the session behind it, not just
+   the signature. Not documented anywhere before; found by probing.
+2. **15 minutes, and agents may not refresh.** So there is no useful server-side token cache: a
+   stored token is expired or about to be. The browser mints one per request (it holds the hub
+   cookies) and sends it in `X-Hub-Token`; the server spends it on a single call. Background work
+   must resolve everything it needs **at run start**.
+
+**Vocabulary differs across the boundary.** The hub says `azure_devops`; Q-Agent says `ado`
+(`jira`/`github` match). Any join must translate, or it silently matches nothing — which is exactly
+what shipped in #507, green, for the most-used provider.
+
+---
+
 ## 4a. What the hub owns, and where each concern stands
 
 One table, so nobody has to infer the state of play. **Only the first row is in scope now.**
