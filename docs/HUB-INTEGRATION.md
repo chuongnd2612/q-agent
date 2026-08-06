@@ -8,6 +8,11 @@
 > (the full plan this is drawn from).
 >
 > Paths without a prefix are in **this** repo. Hub paths are marked `emehub/`.
+>
+> **Verify contracts against the hub's code, not against this document.** It has been wrong twice, in
+> ways that cost real time: the CSRF header was documented as `X-CSRF` when the hub reads
+> `X-CSRF-Token`, so SSO answered 403 on every attempt until #495; and ticket sync was documented as
+> PAT-blocked when the hub had always accepted an agent token (§5, corrected above).
 
 ## Division of work
 
@@ -390,13 +395,24 @@ Recording the eventual shape so the direction is not lost:
 
 **What blocks it right now:**
 
-1. **Ticket sync needs a provider PAT, and the PAT never crosses** — §4c. Whoever syncs needs the
-   credential, so ticket ownership and connection ownership move together or not at all.
+1. ~~**Ticket sync needs a provider PAT, and the PAT never crosses.**~~ **This was wrong** — see
+   [emehub#85](https://github.com/chuongnd2612/emehub/issues/85). The hub's own contract document
+   listed `POST /tickets/sync` as hub-audience-only; its code has never done that
+   (`Depends(require_principal)` accepts any registered audience, `qagent` included). **The PAT does
+   not need to cross:** Q-Agent calls `POST /tickets/sync`, the hub resolves the connection, decrypts
+   *its own* PAT, calls the provider and upserts — the secret stays on the side that holds it.
+
+   This voids the blocker *and* its conclusion: ticket ownership no longer has to move together with
+   connection ownership, and reading tickets from the hub is implementable now, ungated by §4c.
+   (Note §4c still stands for **direct** provider calls from Q-Agent — `GET /connections` really does
+   withhold the PAT. What was wrong was treating that as blocking *hub-performed* sync.)
 2. **No cache invalidation.** Agents may cache any hub `GET`, lifetime their choice, with no
    webhook, ETag or revision counter. A ticket or project config changed at the hub goes stale in
    Q-Agent silently — a smaller version of the drift the hub exists to remove.
 3. **15-minute tokens vs. 20-minute work** — §4b, blocker 3. Reading tickets from a background
-   run hits exactly that wall.
+   run hits exactly that wall. Being addressed hub-side by a run-scoped credential grant
+   ([emehub#88](https://github.com/chuongnd2612/emehub/issues/88)), which would also cover ticket
+   reads from a background thread.
 
 **This slice dodges all three** by using the hub token exactly once, at bootstrap, and then
 running on a Q-Agent-native session. Keep it that way — the moment Q-Agent starts making hub
