@@ -17,6 +17,7 @@ from app import crypto
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_header
 from app.logging import logger
 from app.models.knowledge import ProjectKnowledge, compose_key
 from app.models.project import Project
@@ -42,6 +43,7 @@ from app.services import (
     audit_service,
     connection_service,
     exploration_agent,
+    hub_workspace,
     knowledge_service,
     playwright_runner,
     project_config_service,
@@ -57,9 +59,18 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 @router.get("", response_model=list[ProjectOut])
 def list_projects(
-    db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_header),
 ) -> list[ProjectOut]:
-    """Projects scoped to ``user`` (#93 — private per-user data)."""
+    """Projects scoped to ``user`` (#93 — private per-user data).
+
+    Mirrors the hub's projects first when the integration is on (#514): a user who
+    signed in through EmeHub owns nothing locally on first visit, so this screen
+    would otherwise read "0 connected providers" while the hub holds their work.
+    Never raises — a hub outage leaves the local query to serve what exists.
+    """
+    hub_workspace.ensure_for_user(db, user, hub_token)
     return [ProjectOut.model_validate(p) for p in owned(db.query(Project), Project, user).all()]
 
 
@@ -82,6 +93,11 @@ def refresh_projects(
 
     for connection in connections:
         if connection_service.WORK_ITEM not in connection_service.categories_for(connection.kind):
+            continue
+        # A mirrored hub connection holds no PAT and never will (#501/#514), so an
+        # adapter call through it cannot work. Its projects arrive via the hub
+        # mirror instead; skipping keeps Refresh from failing on them.
+        if connection.hub_connection_id:
             continue
         decrypted_secrets = {
             key: crypto.decrypt(value) for key, value in (connection.secrets or {}).items()

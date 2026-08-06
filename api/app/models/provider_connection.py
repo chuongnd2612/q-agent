@@ -71,6 +71,20 @@ class ProviderConnection(Base):
     owner_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
+    # Set when this row MIRRORS a connection EmeHub owns (#514). Such a row is a
+    # real local connection so per-connection scoping, the picker and ticket
+    # filters keep working unchanged — but its ``secrets`` are empty and always
+    # will be: the hub never releases the PAT (`GET /connections` returns
+    # ``hasPat`` only, #501). Nothing may attempt a direct provider call with it;
+    # provider work for these belongs to the hub.
+    hub_connection_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True, default=None
+    )
+
+    @property
+    def is_hub_backed(self) -> bool:
+        """True when this mirrors a hub-owned connection and holds no credential."""
+        return bool(self.hub_connection_id)
 
     @property
     def categories(self) -> tuple[str, ...]:

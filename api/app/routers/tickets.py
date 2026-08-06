@@ -50,6 +50,7 @@ from app.deps_auth import current_user
 from app.deps_hub import hub_token as hub_token_header
 from app.logging import logger
 from app.models.linked import LinkedTestCase
+from app.models.provider_connection import ProviderConnection
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import (
@@ -62,7 +63,7 @@ from app.schemas import (
     TicketOut,
     TicketPageOut,
 )
-from app.services import audit_service, connection_service, hub_client
+from app.services import audit_service, connection_service, hub_client, hub_workspace
 from app.services.adapters.base import ProviderError
 from app.services.ownership import owned, stamp_owner
 
@@ -368,6 +369,14 @@ def list_tickets(
     displayed values may come from EmeHub — see the module docstring. Every hub
     failure falls through to the local query below, which is unchanged.
     """
+    # A user who signed in through EmeHub owns nothing locally on first visit
+    # (everything is per-user, ADR 0009), so mirror the hub's connections and
+    # tickets into their workspace first — otherwise this screen is empty while
+    # the hub holds all their work (#514). Idempotent, additive, and silent on
+    # failure: it never raises, so a hub outage just leaves the local query below
+    # to serve whatever already exists.
+    hub_workspace.ensure_for_user(db, user, hub_token)
+
     query = owned(db.query(Ticket), Ticket, user)
     if connection_id:
         query = query.filter(Ticket.connection_id == connection_id)
@@ -442,18 +451,42 @@ def list_tickets(
     )
 
 
+def _is_hub_backed(db: Session, ticket: Ticket) -> bool:
+    """True when the ticket hangs off a mirrored hub connection.
+
+    Such a connection holds no PAT and never will (#501), so any adapter call
+    through it would fail — the hub owns provider access for these.
+    """
+    if ticket.hub_ticket_id:
+        return True
+    if not ticket.connection_id:
+        return False
+    conn = db.get(ProviderConnection, ticket.connection_id)
+    return bool(conn and conn.hub_connection_id)
+
+
 @router.get("/{external_id}", response_model=TicketDetailOut)
 def get_ticket(
-    external_id: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    external_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_header),
 ) -> TicketDetailOut:
     """Scoped to ``user`` (#93 — private per-user data)."""
     ticket = owned(db.query(Ticket), Ticket, user).filter(Ticket.external_id == external_id).first()
     if not ticket:
         raise HTTPException(status_code=404, detail=f"Ticket '{external_id}' not found")
 
+    # A mirrored ticket carries only list-level fields — description and AC are
+    # fetched here, once, because the list shows neither and pulling them for
+    # every ticket would be one hub round trip each (#514).
+    ticket = hub_workspace.fill_ticket_detail(db, ticket, hub_token)
+
     # Comments are skipped during bulk sync (N+1). Load them lazily on first view,
-    # routed through the ticket's work-item connection.
-    if not ticket.comments:
+    # routed through the ticket's work-item connection. A hub-backed connection
+    # holds no PAT, so this can only work for a locally-credentialed one; the
+    # mirror above already brought the hub's comments across.
+    if not ticket.comments and not _is_hub_backed(db, ticket):
         try:
             connection = connection_service.resolve_work_item_for_ticket(db, ticket)
             adapter = connection_service.adapter_for(db, connection)
