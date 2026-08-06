@@ -451,7 +451,11 @@ function hubTokenObtainable(): Promise<boolean> {
 }
 
 /**
- * Mint a hub token for one ticket read, or `null`.
+ * Mint a hub token for one hub-backed request, or `null`.
+ *
+ * Used for ticket reads and, since #505, for the three run-start mutations —
+ * which is what lets the backend resolve the Claude credential from the hub
+ * (#499) instead of always falling back to the local one.
  *
  * Never throws and never blocks the query on the hub: `mintHubDataToken()`
  * already swallows every failure into `null`, and a `null` token simply means the
@@ -540,7 +544,11 @@ export const useRun = (runId: number | string | null, opts?: Partial<UseQueryOpt
 export const useCreateRun = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: RunCreate) => api.createRun(body),
+    // Carries a freshly-minted hub token so the backend can resolve the Claude
+    // credential from EmeHub at run start (#499/#505). `null` -> no header, and
+    // the run starts on the local credential exactly as before: a run must never
+    // be blocked because the hub is unreachable or there is no hub session.
+    mutationFn: async (body: RunCreate) => api.createRun(body, await hubTokenForRead()),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: queryKeys.runs });
       qc.setQueryData(queryKeys.run(run.id), run);
@@ -565,7 +573,7 @@ export const useEnsureSampleRun = () => {
 export const useRegenerateRun = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.regenerateRun(runId),
+    mutationFn: async () => api.regenerateRun(runId, await hubTokenForRead()),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.run(runId) }),
   });
 };
@@ -597,7 +605,7 @@ export const useStopRun = () => {
 export const useRetryRun = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (runId: number | string) => api.retryRun(runId),
+    mutationFn: async (runId: number | string) => api.retryRun(runId, await hubTokenForRead()),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: queryKeys.runs });
       qc.invalidateQueries({ queryKey: queryKeys.run(run.id) });

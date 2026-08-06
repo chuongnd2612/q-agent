@@ -376,6 +376,14 @@ const get = <T>(p: string) => request<T>(p);
  */
 const getWithHubToken = <T>(p: string, hubToken: string | null) =>
   request<T>(p, hubToken ? { headers: { "X-Hub-Token": hubToken } } : undefined);
+/** POST variant of {@link getWithHubToken} — same contract: a `null` token sends
+ * no header, and the backend then resolves everything locally (#505). */
+const postWithHubToken = <T>(p: string, body: unknown, hubToken: string | null) =>
+  request<T>(p, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+    ...(hubToken ? { headers: { "X-Hub-Token": hubToken } } : {}),
+  });
 const post = <T>(p: string, body?: unknown) =>
   request<T>(p, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 const put = <T>(p: string, body?: unknown) =>
@@ -561,18 +569,24 @@ export const api = {
 
   // runs
   listRuns: () => get<RunOut[]>("/runs"),
-  createRun: (body: RunCreate) => post<RunDetailOut>("/runs", body),
+  // The three run-start calls accept an optional hub token so the backend can
+  // resolve the Claude credential from EmeHub (#499/#505). Omitted -> resolved
+  // locally, exactly as before.
+  createRun: (body: RunCreate, hubToken: string | null = null) =>
+    postWithHubToken<RunDetailOut>("/runs", body, hubToken),
   // Seed (or return the existing) fully-populated demo run for the product tour
   // / Getting Started page. No AI pipeline — the backend inserts the row graph
   // directly, owner-stamped and idempotent (one `RUN-DEMO` per user).
   createSampleRun: () => post<RunDetailOut>("/runs/sample"),
   getRun: (runId: number | string) => get<RunDetailOut>(`/runs/${runId}`),
-  regenerateRun: (runId: number | string) => post<RunDetailOut>(`/runs/${runId}/regenerate`),
+  regenerateRun: (runId: number | string, hubToken: string | null = null) =>
+    postWithHubToken<RunDetailOut>(`/runs/${runId}/regenerate`, undefined, hubToken),
   cancelRun: (runId: number | string) => post<RunOut>(`/runs/${runId}/cancel`),
   // Stop + clean up a run in ANY status (in-progress → cancel; terminal → force
   // clean up orphaned in-flight rows/queues). See #420.
   stopRun: (runId: number | string) => post<RunOut>(`/runs/${runId}/stop`),
-  retryRun: (runId: number | string) => post<RunOut>(`/runs/${runId}/retry`),
+  retryRun: (runId: number | string, hubToken: string | null = null) =>
+    postWithHubToken<RunOut>(`/runs/${runId}/retry`, undefined, hubToken),
   deleteRun: (runId: number | string) => del<void>(`/runs/${runId}`),
   runRepos: (runId: number | string) => get<RunRepoOption[]>(`/runs/${runId}/repos`),
   runAiUsage: (runId: number | string) => get<RunAiUsage>(`/runs/${runId}/ai-usage`),
