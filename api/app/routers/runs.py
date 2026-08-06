@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_dep
 from app.models.claude_usage import ClaudeUsage
 from app.models.comment import TicketComment
 from app.models.execution import Execution, ExecutionResult
@@ -48,6 +49,7 @@ from app.schemas import (
 from app.services import (
     ai_usage_service,
     audit_service,
+    hub_credentials,
     link_service,
     project_config_service,
     run_control,
@@ -160,6 +162,30 @@ def _attach_run_aggregates(db: Session, runs: list[Run]) -> list[Run]:
     return runs
 
 
+def _prepare_claude_credential(db: Session, run: Run, hub_token: str | None) -> None:
+    """Pin the Claude credential this run will use, before any worker starts (#499).
+
+    With the hub integration on and a fresh hub token on the request, the
+    credential is resolved from EmeHub *here* — in the request, while the token is
+    still valid — and materialized to disk; the background pipeline then reads
+    that file and never calls the hub. With the flag off (or no token) this is a
+    no-op and the run resolves locally exactly as before.
+
+    A hub that authoritatively reports no usable credential fails the run
+    immediately with 409 rather than letting it proceed on a possibly-stale local
+    one. The run is marked ``failed`` first so it doesn't sit in ``processing``
+    forever.
+    """
+    try:
+        hub_credentials.prepare_run_credential(run.id, hub_token)
+    except hub_credentials.HubCredentialRefusedError as exc:
+        run.failed_stage = "processing"
+        db.add(run)
+        db.commit()
+        force_status(db, run, "failed")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def _run_result(execution: Execution | None) -> str:
     """QA verdict for a run from its latest execution, independent of pipeline stage.
 
@@ -187,7 +213,10 @@ def list_runs(db: Session = Depends(get_db), user: User | None = Depends(current
 
 @router.post("", response_model=RunDetailOut)
 def create_run(
-    body: RunCreate, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    body: RunCreate,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> Run:
     ticket_ids = list(body.ticket_ids or [])
     # For a sprint-scoped run without explicit ids, resolve the sprint's tickets
@@ -238,6 +267,8 @@ def create_run(
         target=f"{run.code} · {run.name}",
         meta=f"{run.framework} · {run.env} · {run.workers} workers",
     )
+
+    _prepare_claude_credential(db, run, hub_token)
 
     run_generation_pipeline(run.id, blocking=False)
 
@@ -354,7 +385,10 @@ def set_run_ticket_repo(
 
 @router.post("/{run_id}/regenerate", response_model=RunDetailOut)
 def regenerate_run(
-    run_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> Run:
     run = get_owned_or_404(db, Run, run_id, user)
 
@@ -373,6 +407,8 @@ def regenerate_run(
         category="run", actor_type="user", action="Regenerated run",
         target=f"{run.code} · {run.name}",
     )
+
+    _prepare_claude_credential(db, run, hub_token)
 
     run_generation_pipeline(run.id, blocking=False)
 
@@ -545,7 +581,10 @@ def stop_run(
 
 @router.post("/{run_id}/retry", response_model=RunOut)
 def retry_run(
-    run_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> Run:
     """Resume a terminal run from ``failed_stage`` (ADR 0005 dispatch table).
 
@@ -575,6 +614,11 @@ def retry_run(
         category="run", actor_type="user", action="Retried run",
         target=f"{run.code} · resumed at {resume_stage}",
     )
+
+    # Every resume stage can end up calling Claude, so re-pin the credential here
+    # (the retry request carries its own fresh hub token; the one the original run
+    # used is long expired).
+    _prepare_claude_credential(db, run, hub_token)
 
     if resume_stage == "processing":
         # Clear prior AI output so the pipeline starts fresh (mirrors regenerate_run).
