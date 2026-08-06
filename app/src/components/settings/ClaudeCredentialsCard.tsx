@@ -8,13 +8,15 @@ import { Pill } from "@/components/ui/badges";
 import { ClaudeLogo, Spinner } from "@/components/ui/misc";
 import {
   useClaudeCredentialsStatus,
+  useHubClaudeCredential,
   useDeleteOwnClaudeCredentials,
   useTestClaudeCredentials,
   useUploadOwnClaudeCredentials,
 } from "@/hooks/queries";
 import { cn } from "@/lib/cn";
+import { fetchHubSsoConfig } from "@/lib/hubSso";
 import { relativeTime } from "@/screens/auth/profile/sessions";
-import type { ClaudeCredentialsMeta } from "@/types/api";
+import type { ClaudeCredentialsMeta, HubClaudeCredential } from "@/types/api";
 
 /** "in N days"/"in N hours" for a future ISO timestamp; "Expired" once past;
  * "—" if absent. Exported so the admin shared-account card can reuse it. */
@@ -444,6 +446,7 @@ function UploadDropzone({
 export function ClaudeCredentialsCard() {
   const { t } = useTranslation("settings");
   const { data: status } = useClaudeCredentialsStatus();
+  const { data: hubCred } = useHubClaudeCredential();
   const uploadOwn = useUploadOwnClaudeCredentials();
   const deleteOwn = useDeleteOwnClaudeCredentials();
 
@@ -491,6 +494,12 @@ export function ClaudeCredentialsCard() {
           }}
         />
       </p>
+
+      {hubCred?.available ? <HubManagedCredential cred={hubCred} /> : null}
+
+      {hubCred?.available ? (
+        <p className="mb-2 text-[12.5px] text-[#8b8b9e]">{t("credential.card.localFallbackNote")}</p>
+      ) : null}
 
       <div className="mb-[18px] flex gap-3">
         <SourceCard
@@ -548,6 +557,102 @@ export function ClaudeCredentialsCard() {
       ) : (
         <UploadDropzone uploading={uploadOwn.isPending} onFile={handleFile} error={fileError} />
       )}
+    </div>
+  );
+}
+
+
+/**
+ * The credential EmeHub resolves — what runs actually use (#512).
+ *
+ * Rendered above the local picker because it outranks it: with hub data on, a run
+ * resolves from the hub and only falls back to the local credential when the hub
+ * is unreachable. Before this, Settings showed a local account marked "Active"
+ * that no run would use — the screen asserted something false, which is worse
+ * than saying nothing.
+ *
+ * There is deliberately **no switch here.** The hub reserves credential mutation
+ * to itself: `PUT /credentials/claude/mode` refuses an agent token (401, "Token is
+ * not valid for this audience"), so offering a control that cannot work would be
+ * a lie of a different kind. The deep link goes where the change can actually be
+ * made.
+ */
+function HubManagedCredential({ cred }: { cred: HubClaudeCredential }) {
+  const { t } = useTranslation("settings");
+  const [hubWebUrl, setHubWebUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchHubSsoConfig()
+      .then(({ hubBaseUrl }) => {
+        // hubBaseUrl carries the API prefix (…/api); the UI lives at the origin.
+        if (!cancelled && hubBaseUrl) setHubWebUrl(hubBaseUrl.replace(/\/api\/?$/, ""));
+      })
+      .catch(() => {
+        /* no link rather than a broken one */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const sourceLabel =
+    cred.source === "own"
+      ? t("credential.card.hubSourceOwn")
+      : t("credential.card.hubSourceShared");
+
+  return (
+    <div
+      className="mb-[18px] rounded-[16px] border p-4"
+      style={{ background: "rgba(139,92,246,.07)", borderColor: "rgba(139,92,246,.28)" }}
+    >
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <span className="text-[14px] font-bold text-ink">{t("credential.card.hubManagedTitle")}</span>
+        <span
+          className="rounded-full px-2 py-[2px] text-[10.5px] font-bold uppercase tracking-wider"
+          style={{ background: "rgba(52,211,153,.16)", color: "#6ee7b7" }}
+        >
+          {t("credential.card.hubEffective")}
+        </span>
+      </div>
+      <p className="m-0 mb-3 text-[12.5px] leading-relaxed text-[#a6a6b6]">
+        {t("credential.card.hubManagedBody")}
+      </p>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12.5px]">
+        <span className="font-semibold text-ink">{cred.label || sourceLabel}</span>
+        <span className="text-[#8b8b9e]">{sourceLabel}</span>
+        {cred.subscriptionType ? (
+          <span className="text-[#8b8b9e]">{cred.subscriptionType}</span>
+        ) : null}
+        {/* `refreshable` is the common live value — a Claude OAuth access token
+            expires within hours — so it must read as usable, not expired. */}
+        {cred.status ? (
+          <span className="text-[#8b8b9e]">
+            {cred.status === "refreshable" ? "auto-renewing" : cred.status}
+          </span>
+        ) : null}
+        {cred.expiresAt ? (
+          <span className="text-[#8b8b9e]">{formatExpiry(cred.expiresAt)}</span>
+        ) : null}
+      </div>
+
+      {cred.scopes?.length ? (
+        <div className="mt-2.5">
+          <ScopeChips scopes={cred.scopes} />
+        </div>
+      ) : null}
+
+      {hubWebUrl ? (
+        <a
+          href={`${hubWebUrl}/app/claude`}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-3 inline-flex items-center gap-1.5 text-[12.5px] font-bold text-violet"
+        >
+          {t("credential.card.hubManageLink")}
+        </a>
+      ) : null}
     </div>
   );
 }

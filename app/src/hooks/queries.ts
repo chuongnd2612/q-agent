@@ -467,6 +467,19 @@ async function hubTokenForRead(): Promise<string | null> {
   return mintHubDataToken();
 }
 
+/**
+ * The credential EmeHub would resolve for this user (#512).
+ *
+ * Mints a hub token per read like every other hub-backed query. Always resolves —
+ * `available: false` when the hub can't be consulted — so Settings renders
+ * whether or not the hub is reachable.
+ */
+export const useHubClaudeCredential = () =>
+  useQuery({
+    queryKey: ["claude-credentials", "hub"] as const,
+    queryFn: async () => api.claudeCredentials.hub(await hubTokenForRead()),
+  });
+
 export const useTickets = (filters: TicketFilters = {}) =>
   useQuery({
     // The token is deliberately NOT part of the key: it changes every mint, and

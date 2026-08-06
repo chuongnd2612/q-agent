@@ -16,7 +16,9 @@ from app.schemas import (
     ClaudeCredentialsUpload,
     OkResponse,
 )
+from app.deps_hub import hub_token
 from app.services import activity, ai_usage_service, claude_cli, claude_usage_reader
+from app.services import hub_client
 from app.services.claude_credentials import ClaudeCredentialsError, delete_own, delete_shared
 from app.services.claude_credentials import persist_refreshed, resolve_scoped_config_dir
 from app.services.claude_credentials import set_preferred_mode, set_scoped_status
@@ -65,6 +67,46 @@ def get_credentials_status(
     """
     owner_id = user.id if user is not None else None
     return ClaudeCredentialsStatusOut.model_validate(credentials_status_for(db, owner_id))
+
+
+@router.get("/ai/credentials/hub")
+def get_hub_credential(hub: str | None = Depends(hub_token)) -> dict:
+    """The Claude credential EmeHub would resolve for the caller (#512).
+
+    Settings used to show only local state while runs resolved from the hub, so
+    the screen asserted an "Active" credential that no run would use. This is what
+    the card needs to tell the truth.
+
+    **Returns a sanitised subset — never the credential material.** The hub's
+    ``/credentials/claude/resolve`` payload carries the real token; the whitelist
+    below is applied by construction rather than by deleting keys, so a new field
+    appearing upstream cannot leak by default.
+
+    Never raises. Settings must render whether or not the hub answers, so every
+    failure — flag off, no hub token, expired token, hub down — collapses to
+    ``{"available": false}``. That is not an error state: the local credential is
+    a genuine fallback and the card still describes it accurately.
+    """
+    if not hub_client.enabled() or not hub:
+        return {"available": False}
+    try:
+        resolved = hub_client.resolve_claude_credential(hub)
+    except hub_client.HubClientError:
+        # Expected routinely: 15-minute tokens expire, the hub is a remote hop.
+        return {"available": False}
+    if not isinstance(resolved, dict):
+        return {"available": False}
+
+    return {
+        "available": True,
+        "source": resolved.get("source"),
+        "status": resolved.get("status"),
+        "label": resolved.get("label"),
+        "expiresAt": resolved.get("expiresAt"),
+        "daysLeft": resolved.get("daysLeft"),
+        "scopes": resolved.get("scopes") or [],
+        "subscriptionType": resolved.get("subscriptionType"),
+    }
 
 
 @router.post("/ai/credentials/test", response_model=ClaudeCredentialsTestOut)

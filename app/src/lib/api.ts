@@ -6,6 +6,7 @@
 
 import { useAuth } from "@/store/auth";
 import type {
+  HubClaudeCredential,
   AdminUser,
   AgentDeviceOut,
   AiActivity,
@@ -412,6 +413,12 @@ export const api = {
   // Claude CLI credentials management (#95): own (per-user) + shared (admin-only).
   claudeCredentials: {
     status: () => get<ClaudeCredentialsStatus>("/ai/credentials"),
+    // The credential EmeHub would resolve for this user (#512). Sanitised
+    // server-side — the material never reaches the browser. `available: false`
+    // covers flag-off, no hub session and hub-down alike; all mean "show the
+    // local card as-is".
+    hub: (hubToken: string | null = null) =>
+      getWithHubToken<HubClaudeCredential>("/ai/credentials/hub", hubToken),
     // Real minimal Claude call under a credential — authoritative. `scope`
     // selects which: effective (default), the shared account, or own.
     test: (scope?: "effective" | "shared" | "own") =>
