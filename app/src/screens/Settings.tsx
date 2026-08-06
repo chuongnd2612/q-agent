@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/Dropdown";
 import { Spinner } from "@/components/ui/misc";
 import { ClaudeCredentialsCard } from "@/components/settings/ClaudeCredentialsCard";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
+import { HubConnections } from "@/components/settings/HubConnections";
 import { ProviderGroup } from "@/components/settings/ProviderGroup";
 import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
 import { ToggleRow } from "@/components/settings/ToggleRow";
@@ -103,6 +104,11 @@ export function Settings() {
             {PROVIDER_ORDER.map((kind) => (
               <ProviderGroup key={kind} group={groupFor(kind)} />
             ))}
+            {/* Hub-owned connections, read-only (#501). Rendered *after* the
+                local groups and self-hiding when there are none, so the local
+                picker above is unaffected by anything the hub does or doesn't
+                do — and with the flag off this renders nothing at all. */}
+            <HubConnections />
           </div>
         )}
       </CollapsibleSection>
