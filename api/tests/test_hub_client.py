@@ -220,3 +220,52 @@ def test_hub_token_dependency_treats_absent_as_none():
     assert hub_token(None) is None
     assert hub_token("") is None
     assert hub_token("   ") is None
+
+
+# ---------------------------------------------------------------- pagination
+# The hub defaults to pageSize=25, so a caller that ignores page/pageSize mirrors
+# only the first 25 tickets of however many exist — which is what shipped in #514
+# before this was parameterised.
+@respx.mock
+def test_list_tickets_sends_pagination(hub_on):
+    captured = {}
+
+    def _record(request):
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"items": [], "total": 0})
+
+    respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_record)
+    hub_client.list_tickets("tok", page=2, page_size=50)
+
+    assert "page=2" in captured["url"]
+    assert "pageSize=50" in captured["url"]
+
+
+@respx.mock
+def test_iter_all_tickets_walks_every_page(hub_on):
+    pages = {
+        1: {"items": [{"id": f"t{i}"} for i in range(200)], "total": 320},
+        2: {"items": [{"id": f"t{i}"} for i in range(200, 320)], "total": 320},
+    }
+
+    def _serve(request):
+        page = int(dict(request.url.params).get("page", 1))
+        return httpx.Response(200, json=pages.get(page, {"items": [], "total": 320}))
+
+    respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_serve)
+
+    assert len(hub_client.iter_all_tickets("tok")) == 320
+
+
+@respx.mock
+def test_iter_all_tickets_stops_on_a_short_page(hub_on):
+    """A hub whose `total` disagrees with what it serves must still terminate."""
+    def _serve(request):
+        page = int(dict(request.url.params).get("page", 1))
+        if page == 1:
+            return httpx.Response(200, json={"items": [{"id": "a"}], "total": 9999})
+        return httpx.Response(200, json={"items": [], "total": 9999})
+
+    respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_serve)
+
+    assert len(hub_client.iter_all_tickets("tok")) == 1
