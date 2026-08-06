@@ -613,6 +613,40 @@ class WorkItemMetadataOut(ApiModel):
     epics: list[EpicOut] = Field(default_factory=list)
 
 
+class TicketFilterOptionsOut(ApiModel):
+    """Distinct filter values read off the caller's OWN ticket rows (#517).
+
+    The query builder's dropdowns are populated from here rather than from
+    ``WorkItemMetadataOut``, because that one calls a provider adapter and a
+    mirrored hub connection holds no PAT and never will (#501/#514) — so on the
+    screen this exists to serve, it cannot answer at all.
+
+    Reading the rows instead has a property the provider read does not: **every
+    value offered is a value some ticket actually has**, so no clause the builder
+    can build returns an empty list. The tradeoff, which the UI states: a value
+    absent from the mirrored set is not offered.
+
+    ``labels`` is returned for completeness of "what is in your rows"; ``GET
+    /tickets`` has no label filter, so the builder offers no label clause.
+    """
+
+    work_item_types: list[str] = Field(default_factory=list)
+    states: list[str] = Field(default_factory=list)
+    area_paths: list[str] = Field(default_factory=list)
+    sprints: list[str] = Field(default_factory=list)
+    epics: list[str] = Field(default_factory=list)
+    assignees: list[str] = Field(default_factory=list)
+    priorities: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
+    #: How many of the caller's tickets the values were read from.
+    ticket_count: int = 0
+    #: True when the tickets in scope are EmeHub's to manage — a mirrored
+    #: connection (no PAT, by design) or rows already reconciled to a hub ticket.
+    #: The Tickets screen hides its own Sync control on this, because that path
+    #: needs a local provider credential that a mirrored connection has not got.
+    hub_managed: bool = False
+
+
 class SyncResult(ApiModel):
     synced: int
     tickets: list[TicketOut] = Field(default_factory=list)

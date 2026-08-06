@@ -2,7 +2,17 @@ import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -11,12 +21,27 @@ import { StatusBadge, priorityColor, providerGlyph } from "@/components/ui/badge
 import { EmptyState, ErrorState } from "@/components/ui/misc";
 import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
 import { SyncTicketsModal } from "@/components/tickets/SyncTicketsModal";
+import { QueryBuilder, describeQuery } from "@/components/tickets/query/QueryBuilder";
+import {
+  compileQuery,
+  emptyQuery,
+  validateQuery,
+  type TicketQuery,
+} from "@/components/tickets/query/model";
+import {
+  deleteSavedQuery,
+  loadSavedQueries,
+  presetsFor,
+  saveQuery,
+  type SavedQuery,
+} from "@/components/tickets/query/queryStore";
 import {
   useConnectionSprints,
   useConnectionWorkItemMetadata,
   useDeleteTicket,
   useDeleteTickets,
   useProviders,
+  useTicketFilterOptions,
   useTickets,
 } from "@/hooks/queries";
 import { toast } from "@/lib/toast";
@@ -176,17 +201,38 @@ export function Tickets() {
   const user = useAuth((s) => s.user);
   const userName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "";
 
-  // Combine every active filter into the ticket query.
-  const filters: TicketFilters = {
-    connectionId: connectionId ?? undefined,
-    providerKind: selectedConn?.kind,
+  // The query builder (#517): dropdown values read off the caller's own rows,
+  // plus whether these tickets are EmeHub's to manage. No hub token and no
+  // provider call, so it resolves with the hub down and on a mirrored connection
+  // that holds no PAT — the two situations it exists for.
+  const { data: filterOptions } = useTicketFilterOptions(connectionId, selectedConn?.kind ?? null);
+  const hubManaged = filterOptions?.hubManaged === true;
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [draft, setDraft] = useState<TicketQuery>(emptyQuery);
+  const [appliedQuery, setAppliedQuery] = useState<TicketQuery | null>(null);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(loadSavedQueries);
+  const presets = useMemo(() => presetsFor(filterOptions, userName), [filterOptions, userName]);
+
+  // Combine every active filter into the ticket query. An applied builder query
+  // REPLACES the flat filters rather than intersecting with them: two filter
+  // surfaces silently ANDed would produce a list neither of them describes.
+  // Nothing is removed — Reset drops the query and the flat rail is back.
+  const flatFilters: TicketFilters = {
     sprint: selectedSprint?.name,
     areaPath: isAdo ? areaPath || undefined : undefined,
     states: states.length ? states.join(",") : undefined,
     workItemTypes: workItemTypes.length ? workItemTypes.join(",") : undefined,
     priority: ticketPriority || undefined,
     epic: isJira ? ticketEpic || undefined : undefined,
-    q: ticketSearch || undefined,
+  };
+  const compiled = appliedQuery ? compileQuery(appliedQuery) : null;
+  const filters: TicketFilters = {
+    connectionId: connectionId ?? undefined,
+    providerKind: selectedConn?.kind,
+    ...(compiled ?? flatFilters),
+    // The search box keeps driving `q` unless the query names `title`, in which
+    // case the applied query wins — one parameter, one owner.
+    q: compiled?.q ?? (ticketSearch || undefined),
     page: ticketPage,
     pageSize: PAGE_SIZE,
   };
@@ -195,6 +241,18 @@ export function Tickets() {
   const total = ticketsPage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const [syncOpen, setSyncOpen] = useState(false);
+
+  // Apply on press: nothing above runs a query until one of these fires.
+  const applyQuery = () => {
+    if (validateQuery(draft).length > 0) return;
+    setAppliedQuery(draft);
+    setTicketPage(1);
+  };
+  const resetQuery = () => {
+    setDraft(emptyQuery());
+    setAppliedQuery(null);
+    setTicketPage(1);
+  };
 
   const selCount = useMemo(() => Object.values(selected).filter(Boolean).length, [selected]);
 
@@ -263,9 +321,12 @@ export function Tickets() {
     <div className="px-1 pb-10 pt-0.5">
       <div className="mb-4 flex items-end justify-between">
         <div>
+          {/* Where these tickets come from. In hub-managed mode this line is
+              carrying weight: the Sync control is gone, and without a sentence
+              saying EmeHub keeps the list current its absence is a mystery. */}
           <div className="mb-[5px] text-[13px] font-medium text-ink-dim">
             {(selectedConn ? `${PROVIDER_META[selectedConn.kind].name} · ${selectedConn.name}` : t("noConnection")) +
-              ` · ${t("syncedAgo")}`}
+              ` · ${hubManaged ? t("managedByHub") : t("syncedAgo")}`}
           </div>
           <h1 className="m-0 text-[24px] font-black tracking-tight md:text-[28px]">{t("title")}</h1>
         </div>
@@ -301,10 +362,18 @@ export function Tickets() {
                   {t("removeSelected", { n: selCount })}
                 </Button>
               )}
-              <Button variant="glass" onClick={() => setSyncOpen(true)}>
-                <RefreshCw size={13} />
-                {t("sync")}
-              </Button>
+              {/* Hidden when the hub manages these tickets (#517). Sync is the
+                  pre-integration path: it needs a local provider PAT, and a
+                  mirrored hub connection holds none by design (#501/#514), so
+                  the button could only ever fail. The row is flex with a gap,
+                  so removing it closes up rather than leaving a hole; the
+                  header line above says who keeps the list current instead. */}
+              {!hubManaged && (
+                <Button variant="glass" onClick={() => setSyncOpen(true)}>
+                  <RefreshCw size={13} />
+                  {t("sync")}
+                </Button>
+              )}
               <Button variant="primary" className="hidden md:inline-flex" onClick={openCreateRun}>
                 <Plus size={14} strokeWidth={2.3} />
                 {t("createRun")} {selCount > 0 && `(${selCount})`}
@@ -314,8 +383,38 @@ export function Tickets() {
         </div>
 
         {/* Row 2 — attribute filters. A single horizontal-scroll rail on mobile
-            (chips never shrink); wraps normally from `md` up. */}
+            (chips never shrink); wraps normally from `md` up.
+
+            While a builder query is in force the flat chips are replaced by a
+            summary of it: leaving both visible would show two filter surfaces
+            where only one is driving the list. Reset brings the chips back. */}
         <div className="flex items-center gap-[9px] overflow-x-auto border-t border-white/[0.06] pt-[10px] scrollbar-none [&>*]:shrink-0 md:flex-wrap">
+          <button
+            type="button"
+            onClick={() => setBuilderOpen((open) => !open)}
+            data-on={builderOpen || appliedQuery !== null}
+            aria-expanded={builderOpen}
+            className="flex cursor-pointer items-center gap-2 rounded-[11px] border border-white/[0.09] bg-white/[0.05] px-[13px] py-2 text-[12.5px] font-semibold text-[#dcdce4] transition-colors hover:bg-white/[0.1] data-[on=true]:border-[rgba(139,92,246,.35)] data-[on=true]:bg-[rgba(139,92,246,.2)] data-[on=true]:text-white"
+          >
+            <SlidersHorizontal size={13} />
+            {t("builder.toggle")}
+          </button>
+
+          {appliedQuery !== null ? (
+            <>
+              <span className="min-w-0 max-w-[520px] truncate rounded-[11px] border border-[rgba(139,92,246,.3)] bg-[rgba(139,92,246,.14)] px-[13px] py-2 text-[12.5px] font-semibold text-ink">
+                {describeQuery(appliedQuery, t)}
+              </span>
+              <button
+                type="button"
+                onClick={resetQuery}
+                className="cursor-pointer rounded-[11px] border border-white/[0.09] bg-white/[0.05] px-[13px] py-2 text-[12.5px] font-semibold text-[#dcdce4] hover:bg-white/[0.1]"
+              >
+                {t("builder.clearQuery")}
+              </button>
+            </>
+          ) : (
+            <>
           <Select
             value={selectedSprint?.path ?? null}
             options={sprintOptions}
@@ -359,6 +458,9 @@ export function Tickets() {
             placeholder={t("filters.priority")}
             onChange={setTicketPriority}
           />
+            </>
+          )}
+          {/* A selection action, not a filter — it stays put in both modes. */}
           {userName && (
             <button
               onClick={selectAssigned}
@@ -368,6 +470,26 @@ export function Tickets() {
             </button>
           )}
         </div>
+
+        {/* Row 3 — the query builder, when opened. Inside the same glass card so
+            it reads as an expansion of the filter bar rather than a new screen. */}
+        {builderOpen && (
+          <div className="border-t border-white/[0.06] pt-[12px]">
+            <QueryBuilder
+              draft={draft}
+              onDraftChange={setDraft}
+              applied={appliedQuery}
+              options={filterOptions}
+              presets={presets}
+              saved={savedQueries}
+              onSave={(name) => setSavedQueries(saveQuery(name, draft))}
+              onDeleteSaved={(id) => setSavedQueries(deleteSavedQuery(id))}
+              onApply={applyQuery}
+              onReset={resetQuery}
+              busy={isLoading}
+            />
+          </div>
+        )}
       </div>
 
       {isLoading ? (

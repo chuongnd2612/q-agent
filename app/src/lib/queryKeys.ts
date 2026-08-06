@@ -25,6 +25,8 @@ export const queryKeys = {
   tickets: (filters?: Record<string, string | number | undefined>) =>
     ["tickets", filters ?? {}] as const,
   ticket: (externalId: string) => ["tickets", "detail", externalId] as const,
+  ticketFilterOptions: (connectionId: number | null, providerKind: string | null) =>
+    ["tickets", "filter-options", connectionId ?? 0, providerKind ?? ""] as const,
   linkedCases: (externalId: string) => ["tickets", externalId, "linked-cases"] as const,
   linkStatus: (runId: number | string) => ["runs", runId, "linked"] as const,
   runs: ["runs"] as const,
