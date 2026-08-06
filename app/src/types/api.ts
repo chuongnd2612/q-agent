@@ -458,6 +458,32 @@ export interface TicketFilters {
   /** Page size; defaults to 25 on the backend. */
   pageSize?: number;
 }
+/**
+ * `GET /tickets/filter-options` — the query builder's dropdown values, read off
+ * the caller's own ticket rows (#517).
+ *
+ * Not `WorkItemMetadataOut`: that one calls a provider adapter, and a mirrored
+ * EmeHub connection holds no PAT by design (#501/#514), so on hub-managed
+ * tickets it cannot answer at all.
+ */
+export interface TicketFilterOptions {
+  workItemTypes: string[];
+  states: string[];
+  areaPaths: string[];
+  sprints: string[];
+  epics: string[];
+  assignees: string[];
+  priorities: string[];
+  /** Present in the rows, but `GET /tickets` has no label filter — unused by the
+   * builder, kept because it is part of "what is in your tickets". */
+  labels: string[];
+  ticketCount: number;
+  /** True when the tickets in scope are EmeHub's to manage; the screen hides its
+   * own Sync control on this, because Sync needs a local provider credential a
+   * mirrored connection has not got. */
+  hubManaged: boolean;
+}
+
 export interface SyncResult {
   synced: number;
   tickets: TicketOut[];

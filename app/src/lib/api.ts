@@ -70,6 +70,7 @@ import type {
   TestConnectionResult,
   TicketCommentOut,
   TicketDetailOut,
+  TicketFilterOptions,
   TicketFilters,
   TicketOut,
   TicketPage,
@@ -564,6 +565,14 @@ export const api = {
     getWithHubToken<TicketPage>(
       "/tickets" + qs(params as Record<string, string | number | undefined>),
       hubToken,
+    ),
+  // The query builder's dropdown source (#517). No hub token: it is a distinct
+  // read over local rows, so it answers with the hub down and with a mirrored
+  // connection that has no credential — which is exactly when it is needed.
+  ticketFilterOptions: (connectionId: number | null, providerKind: string | null) =>
+    get<TicketFilterOptions>(
+      "/tickets/filter-options" +
+        qs({ connectionId: connectionId ?? undefined, providerKind: providerKind ?? undefined }),
     ),
   getTicket: (externalId: string) => get<TicketDetailOut>(`/tickets/${externalId}`),
   linkedCases: (externalId: string) =>

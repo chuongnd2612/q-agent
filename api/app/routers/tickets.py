@@ -4,6 +4,8 @@ Endpoints to implement:
   GET  /tickets                     -> TicketPageOut         (query: status, assignee, sprint,
                                                                 connection_id, provider_kind,
                                                                 priority, epic, q, page, page_size)
+  GET  /tickets/filter-options       -> TicketFilterOptionsOut (query: connection_id,
+                                                                provider_kind)
   GET  /tickets/{external_id}        -> TicketDetailOut
   POST /tickets/sync                 -> SyncResult           (body: SyncRequest; live adapter pull)
   POST /tickets/delete               -> TicketDeleteResult   (body: TicketDeleteRequest; local bulk delete)
@@ -60,6 +62,7 @@ from app.schemas import (
     TicketDeleteRequest,
     TicketDeleteResult,
     TicketDetailOut,
+    TicketFilterOptionsOut,
     TicketOut,
     TicketPageOut,
 )
@@ -448,6 +451,66 @@ def list_tickets(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+def _distinct(values: list[Any]) -> list[str]:
+    """Sorted, de-duplicated, blank-free strings — one column's offerable values."""
+    seen = {str(value).strip() for value in values if str(value or "").strip()}
+    return sorted(seen, key=str.casefold)
+
+
+# NOTE: declared BEFORE ``GET /{external_id}`` on purpose. FastAPI matches routes
+# in declaration order, so the other way round this path would be swallowed as a
+# ticket whose external id is the literal string "filter-options".
+@router.get("/filter-options", response_model=TicketFilterOptionsOut)
+def ticket_filter_options(
+    connection_id: int | None = Query(None, alias="connectionId"),
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> TicketFilterOptionsOut:
+    """The query builder's dropdown values, read off the caller's own tickets (#517).
+
+    Owner-scoped through :func:`owned` exactly like ``GET /tickets`` — one user's
+    assignees, sprints and area paths must never appear in another's picker,
+    which would leak the shape of their work even though no ticket is returned.
+
+    No provider call and no hub call: this is a ``SELECT DISTINCT`` over rows we
+    already hold, so it answers whether or not EmeHub is reachable (#491) and
+    whether or not the connection has a credential.
+    """
+    query = owned(db.query(Ticket), Ticket, user)
+    if connection_id:
+        query = query.filter(Ticket.connection_id == connection_id)
+    if provider_kind:
+        query = query.filter(Ticket.provider_kind == provider_kind)
+    rows = query.all()
+
+    labels: list[Any] = []
+    for row in rows:
+        if isinstance(row.labels, list):
+            labels.extend(row.labels)
+
+    # Hub-managed is asked of the *connection* first: a mirrored connection with
+    # no tickets yet is still the hub's to manage, and answering False there
+    # would show a Sync button that cannot work until the first row arrives.
+    hub_managed = any(row.hub_ticket_id for row in rows)
+    if not hub_managed and connection_id:
+        conn = db.get(ProviderConnection, connection_id)
+        hub_managed = bool(conn and conn.hub_connection_id)
+
+    return TicketFilterOptionsOut(
+        work_item_types=_distinct([row.work_item_type for row in rows]),
+        states=_distinct([row.status for row in rows]),
+        area_paths=_distinct([row.area_path for row in rows]),
+        sprints=_distinct([row.sprint for row in rows]),
+        epics=_distinct([row.epic for row in rows]),
+        assignees=_distinct([row.assignee for row in rows]),
+        priorities=_distinct([row.priority for row in rows]),
+        labels=_distinct(labels),
+        ticket_count=len(rows),
+        hub_managed=hub_managed,
     )
 
 

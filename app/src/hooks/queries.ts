@@ -488,6 +488,25 @@ export const useTickets = (filters: TicketFilters = {}) =>
     queryFn: async () => api.listTickets(filters, await hubTokenForRead()),
   });
 
+/**
+ * The query builder's dropdown values, plus whether these tickets are the hub's
+ * to manage (#517).
+ *
+ * Deliberately **not** hub-token-carrying: the endpoint is a distinct read over
+ * local rows, so it resolves whether or not EmeHub is reachable. That is the
+ * point — the screen must stay usable on local rows with no error state (#491),
+ * and the Sync control's visibility must not flicker with hub availability.
+ */
+export const useTicketFilterOptions = (
+  connectionId: number | null,
+  providerKind: string | null,
+) =>
+  useQuery({
+    queryKey: queryKeys.ticketFilterOptions(connectionId, providerKind),
+    queryFn: () => api.ticketFilterOptions(connectionId, providerKind),
+    staleTime: 60_000,
+  });
+
 export const useTicket = (externalId: string | null) =>
   useQuery({
     queryKey: queryKeys.ticket(externalId ?? ""),
