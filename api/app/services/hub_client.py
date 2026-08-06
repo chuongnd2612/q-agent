@@ -199,28 +199,38 @@ def list_tickets(hub_token: str, page: int = 1, page_size: int = 200) -> dict[st
 _MAX_TICKET_PAGES = 40
 
 
-def iter_all_tickets(hub_token: str, page_size: int = 200) -> list[dict[str, Any]]:
-    """Every hub ticket, walking pages until the reported ``total`` is covered.
+def iter_all_tickets(hub_token: str, page_size: int = 200) -> tuple[list[dict[str, Any]], bool]:
+    """Every hub ticket, plus whether the walk actually covered the whole set.
 
-    Stops on a short/empty page as well as on the count, so a hub whose ``total``
-    disagrees with what it actually serves terminates rather than looping.
+    Returns ``(items, complete)``. Stops on a short/empty page as well as on the
+    reported ``total``, so a hub whose ``total`` disagrees with what it serves
+    terminates rather than looping.
+
+    **``complete`` is load-bearing** and is why this returns a tuple rather than a
+    bare list. Callers that reconcile deletions (#522) may only remove rows when
+    the read was exhaustive: a page-capped walk looks exactly like a short one, so
+    without this signal a truncated read is indistinguishable from "the hub has
+    fewer tickets now" — and the difference is whether we delete the user's
+    mirrored workspace.
     """
     collected: list[dict[str, Any]] = []
     for page in range(1, _MAX_TICKET_PAGES + 1):
         payload = list_tickets(hub_token, page=page, page_size=page_size)
         items = payload.get("items") if isinstance(payload, dict) else None
-        if not isinstance(items, list) or not items:
-            break
+        if not isinstance(items, list):
+            # A malformed page is not an exhaustive read.
+            return collected, False
+        if not items:
+            return collected, True
         collected.extend(items)
         total = payload.get("total")
         if not isinstance(total, int) or len(collected) >= total or len(items) < page_size:
-            break
-    else:
-        logger.warning(
-            "stopped mirroring hub tickets at the {}-page cap; some may be missing",
-            _MAX_TICKET_PAGES,
-        )
-    return collected
+            return collected, True
+    logger.warning(
+        "stopped mirroring hub tickets at the {}-page cap; not pruning, some may be missing",
+        _MAX_TICKET_PAGES,
+    )
+    return collected, False
 
 
 def get_ticket(external_id: str, hub_token: str) -> dict[str, Any]:

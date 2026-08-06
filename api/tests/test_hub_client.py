@@ -254,7 +254,9 @@ def test_iter_all_tickets_walks_every_page(hub_on):
 
     respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_serve)
 
-    assert len(hub_client.iter_all_tickets("tok")) == 320
+    items, complete = hub_client.iter_all_tickets("tok")
+    assert len(items) == 320
+    assert complete is True
 
 
 @respx.mock
@@ -268,4 +270,37 @@ def test_iter_all_tickets_stops_on_a_short_page(hub_on):
 
     respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_serve)
 
-    assert len(hub_client.iter_all_tickets("tok")) == 1
+    items, complete = hub_client.iter_all_tickets("tok")
+    assert len(items) == 1
+    assert complete is True
+
+
+@respx.mock
+def test_iter_all_tickets_reports_incomplete_on_a_malformed_page(hub_on):
+    """A malformed page is NOT an exhaustive read — callers must not prune (#522)."""
+    def _serve(request):
+        page = int(dict(request.url.params).get("page", 1))
+        if page == 1:
+            return httpx.Response(200, json={"items": [{"id": "a"}] * 200, "total": 400})
+        return httpx.Response(200, json={"items": "not-a-list", "total": 400})
+
+    respx.get(url__startswith=f"{HUB}/tickets").mock(side_effect=_serve)
+
+    items, complete = hub_client.iter_all_tickets("tok")
+
+    assert len(items) == 200
+    assert complete is False
+
+
+@respx.mock
+def test_empty_hub_is_a_complete_read(hub_on):
+    """An empty hub must be distinguishable from a failed read, or a legitimately
+    emptied hub could never be reconciled (#522)."""
+    respx.get(url__startswith=f"{HUB}/tickets").mock(
+        return_value=httpx.Response(200, json={"items": [], "total": 0})
+    )
+
+    items, complete = hub_client.iter_all_tickets("tok")
+
+    assert items == []
+    assert complete is True

@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.logging import logger
 from app.models.project import Project
 from app.models.provider_connection import ProviderConnection
+from app.models.run import RunTicket
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.services import hub_client
@@ -119,9 +120,10 @@ def ensure_tickets(
     """
     # Every page, not just the first: the hub defaults to 25 per page, so a
     # single call mirrored 25 of 200 tickets and the workspace looked
-    # arbitrarily truncated.
-    items = hub_client.iter_all_tickets(hub_token)
-    if not items:
+    # arbitrarily truncated. `complete` says whether the walk was exhaustive —
+    # only then may we prune (#522).
+    items, complete = hub_client.iter_all_tickets(hub_token)
+    if not items and not complete:
         return 0
 
     existing_rows = db.scalars(
@@ -161,8 +163,60 @@ def ensure_tickets(
         if conn is not None:
             row.connection_id = conn.id
 
+    if complete:
+        _prune_vanished(db, user, seen_hub_ids={_str(i.get("id")) for i in items if isinstance(i, dict)})
+
     db.commit()
     return created
+
+
+def _prune_vanished(db: Session, user: User, seen_hub_ids: set[str]) -> int:
+    """Delete the caller's mirrored tickets the hub no longer has. Returns the count.
+
+    Only ever called after an **exhaustive** hub read: a partial or failed read
+    would otherwise look like "the hub is empty now" and wipe the workspace. That
+    is why :func:`hub_client.iter_all_tickets` reports completeness.
+
+    Two rows are deliberately spared:
+
+    * anything without ``hub_ticket_id`` — a ticket the user created or synced
+      locally was never ours to remove;
+    * anything a run references. ``runs.run_tickets.ticket_external_id`` is a
+      plain string with **no foreign key**, so deleting would not fail loudly — it
+      would silently orphan run history, leaving a run pointing at a ticket that
+      no longer exists.
+    """
+    mirrored = db.scalars(
+        select(Ticket).where(Ticket.owner_id == user.id, Ticket.hub_ticket_id.is_not(None))
+    ).all()
+    vanished = [row for row in mirrored if row.hub_ticket_id not in seen_hub_ids]
+    if not vanished:
+        return 0
+
+    referenced = {
+        ext
+        for (ext,) in db.execute(
+            select(RunTicket.ticket_external_id).where(
+                RunTicket.ticket_external_id.in_([row.external_id for row in vanished])
+            )
+        ).all()
+    }
+
+    removed = 0
+    kept = 0
+    for row in vanished:
+        if row.external_id in referenced:
+            kept += 1
+            continue
+        db.delete(row)
+        removed += 1
+
+    if removed or kept:
+        logger.info(
+            "pruned {} mirrored tickets the hub no longer has for user {} ({} kept, referenced by a run)",
+            removed, user.id, kept,
+        )
+    return removed
 
 
 def ensure_projects(
