@@ -12,6 +12,7 @@ Provider connections (ADR 0006 revision 2) — a provider *kind* holds many name
   GET    /connections/{id}/sprints             -> list[SprintOut]         (work-item)
   GET    /connections/{id}/work-item-metadata  -> WorkItemMetadataOut     (work-item)
   GET    /connections/{id}/repos               -> AvailableReposOut  (repository)
+  GET    /hub/connections                      -> list[HubConnectionOut]  (read-only)
   GET    /settings                             -> SettingsOut
   PUT    /settings                             -> SettingsOut
 
@@ -22,9 +23,10 @@ This router has no prefix — provider/connection paths are spelled out explicit
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app import crypto
+from app import crypto, deps_hub
 from app.db import get_db, utcnow
 from app.deps_auth import current_user
 from app.logging import logger
@@ -53,7 +55,7 @@ from app.schemas import (
     TestConnectionResult,
     WorkItemMetadataOut,
 )
-from app.services import audit_service, settings_store
+from app.services import audit_service, hub_client, settings_store
 from app.services.adapters import get_adapter
 from app.services.adapters.base import ProviderError
 from app.services.ownership import get_owned_or_404, owned, stamp_owner
@@ -341,6 +343,113 @@ def list_connection_repos(
         logger.warning("Repo list for connection {} unavailable: {}", connection_id, exc)
         return {"provider": conn.kind, "repos": [], "error": f"Could not list repos: {exc}"}
     return {"provider": conn.kind, "repos": repos, "error": ""}
+
+
+# ------------------------------------------------------------- hub connections
+#
+# C4 of #497. **Informational only, and deliberately so.**
+#
+# The hub's ``GET /connections`` returns ``hasPat: true`` and never the PAT, and
+# the endpoint that would let us borrow a hub connection —
+# ``POST /connections/{id}/proxy`` — is deliberately unbuilt (a generic forwarder
+# is an SSRF/header-leak surface needing its own security design). So nothing
+# here can be used to make a provider call: every real ticket sync, repo clone
+# and connection test keeps running on Q-Agent's own ``provider_connections``.
+#
+# What this adds is visibility — a user who has configured a connection in the
+# hub can see it here instead of wondering why Q-Agent can't see it. The UI says
+# plainly that these are hub-owned and not usable for sync here, because a user
+# seeing their ADO connection listed would otherwise reasonably assume it works.
+
+
+class HubConnectionOut(BaseModel):
+    """One hub-owned provider connection, as the hub reports it.
+
+    Deliberately a *subset*: no PAT, no secret field of any kind. The hub does
+    not send one, and this model would drop it if it ever did.
+    """
+
+    id: str
+    kind: str
+    label: str
+    base_url: str = Field(default="", serialization_alias="baseUrl")
+    capabilities: list[str] = Field(default_factory=list)
+    supported_capabilities: list[str] = Field(
+        default_factory=list, serialization_alias="supportedCapabilities"
+    )
+    connected: bool = False
+    has_pat: bool = Field(default=False, serialization_alias="hasPat")
+    last_sync: str | None = Field(default=None, serialization_alias="lastSync")
+    last_tested_at: str | None = Field(default=None, serialization_alias="lastTestedAt")
+    shared: bool = False
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+def _str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, (str, int))]
+
+
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _to_hub_connection_out(raw: dict) -> HubConnectionOut | None:
+    """Map one hub payload to our shape, dropping anything unrecognisable.
+
+    A connection without an id or kind is not something we can render honestly,
+    so it is skipped rather than shown half-formed.
+    """
+    conn_id = raw.get("id")
+    kind = raw.get("kind")
+    if not isinstance(conn_id, (str, int)) or not isinstance(kind, str) or not kind:
+        return None
+    return HubConnectionOut(
+        id=str(conn_id),
+        kind=kind,
+        label=str(raw.get("label") or kind),
+        base_url=str(raw.get("baseUrl") or ""),
+        capabilities=_str_list(raw.get("capabilities")),
+        supported_capabilities=_str_list(raw.get("supportedCapabilities")),
+        connected=bool(raw.get("connected")),
+        has_pat=bool(raw.get("hasPat")),
+        last_sync=_opt_str(raw.get("lastSync")),
+        last_tested_at=_opt_str(raw.get("lastTestedAt")),
+        shared=bool(raw.get("shared")),
+    )
+
+
+@router.get("/hub/connections", response_model=list[HubConnectionOut], response_model_by_alias=True)
+def list_hub_connections(
+    hub_token: str | None = Depends(deps_hub.hub_token),
+    user: User | None = Depends(current_user),
+) -> list[HubConnectionOut]:
+    """Provider connections EmeHub holds — read-only, never used for a call.
+
+    Returns ``[]`` — never an error — for every "we don't have this" case: flag
+    off, no hub token on the request, an expired token, or a hub that isn't
+    answering. This screen's job is the *local* connection picker; a hub hiccup
+    must not put an error banner over it or block it. The caller cannot tell
+    "hub off" from "hub down" from that empty list, and deliberately should not
+    have to: in all three the honest UI is to show nothing extra.
+    """
+    del user  # auth is enforced by the dependency; the hub read is not per-user here
+    if not hub_client.enabled() or not hub_token:
+        return []
+    try:
+        raw = hub_client.list_connections(hub_token)
+    except hub_client.HubClientError as exc:
+        # Includes HubDisabledError / HubUnauthorizedError / HubRefusedError /
+        # HubUnavailableError. Logged at info: none of these is our bug, and an
+        # expired 15-minute token is the ordinary end of a token's life.
+        logger.info("hub connections unavailable ({}); showing local connections only", type(exc).__name__)
+        return []
+    if not isinstance(raw, list):
+        return []
+    out = [mapped for item in raw if isinstance(item, dict) and (mapped := _to_hub_connection_out(item))]
+    return out
 
 
 @router.get("/settings", response_model=SettingsOut, tags=["settings"])

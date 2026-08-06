@@ -156,6 +156,23 @@
     "deleteFailed": "Không thể xóa kết nối",
     "deleteMessage": "Xóa \"{{name}}\"? Các dự án và ticket gắn với nó sẽ chuyển sang một kết nối khác cùng loại."
   },
+  "hubConnections": {
+    "title": "Kết nối từ EmeHub",
+    "badge": "Chỉ đọc",
+    "description": "Các kết nối nhà cung cấp được cấu hình trong EmeHub, hiển thị để bạn biết hub đang có gì. Q-Agent không sử dụng chúng.",
+    "notice": "Không thể dùng những kết nối này để đồng bộ ticket, truy cập kho mã nguồn hay bất kỳ lời gọi nhà cung cấp nào trong Q-Agent. EmeHub giữ thông tin đăng nhập của chúng và không bao giờ chia sẻ, nên Q-Agent không có cách nào kết nối. Để đồng bộ tại đây, hãy thêm kết nối của riêng bạn ở trên.",
+    "notUsableHere": "Không dùng để đồng bộ tại đây",
+    "credentialAtHub": "Thông tin đăng nhập {{state}} tại EmeHub",
+    "credentialHeld": "được lưu",
+    "credentialMissing": "chưa có",
+    "shared": "Chia sẻ",
+    "lastSync": "Đồng bộ {{when}}",
+    "lastTested": "kiểm tra {{when}}",
+    "status": {
+      "connected": "Đã kết nối ở hub",
+      "disconnected": "Chưa kết nối"
+    }
+  },
   "connection": {
     "notConfigured": "Chưa cấu hình",
     "connected": "Đã kết nối",

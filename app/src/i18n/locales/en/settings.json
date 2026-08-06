@@ -157,6 +157,23 @@
     "deleteFailed": "Failed to delete connection",
     "deleteMessage": "Delete \"{{name}}\"? Projects and tickets bound to it fall back to another connection of the same kind."
   },
+  "hubConnections": {
+    "title": "EmeHub connections",
+    "badge": "Read-only",
+    "description": "Provider connections configured in EmeHub, shown so you can see what the hub holds. Q-Agent does not use them.",
+    "notice": "These cannot be used for ticket sync, repository access, or any other provider call in Q-Agent. EmeHub keeps their credentials and never shares them, so Q-Agent has no way to connect with them. To sync a provider here, add your own connection above.",
+    "notUsableHere": "Not usable for sync here",
+    "credentialAtHub": "Credential {{state}} at EmeHub",
+    "credentialHeld": "held",
+    "credentialMissing": "missing",
+    "shared": "Shared",
+    "lastSync": "Synced {{when}}",
+    "lastTested": "tested {{when}}",
+    "status": {
+      "connected": "Connected at hub",
+      "disconnected": "Not connected"
+    }
+  },
   "connection": {
     "notConfigured": "Not configured",
     "connected": "Connected",
