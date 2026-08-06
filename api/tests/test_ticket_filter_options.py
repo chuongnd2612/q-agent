@@ -240,3 +240,36 @@ def test_the_path_is_not_swallowed_by_the_ticket_detail_route(client, path):
 
     assert resp.status_code == 200
     assert "workItemTypes" in resp.json()
+
+
+def test_hub_managed_ignores_another_users_connection(client, db_session, monkeypatch):
+    """Probing someone else's connection id must not report their hub state.
+
+    An unscoped lookup would leak a boolean about another user's setup, and would
+    decide *this* user's Sync button from a row they cannot see.
+
+    ``auth_required`` on, and the request carries a real token — with the suite
+    default ``current_user`` is ``None`` and :func:`owned` is a passthrough, so
+    this would pass without exercising any scoping.
+    """
+    import app.config as config_module
+    from app.models.provider_connection import ProviderConnection
+
+    monkeypatch.setattr(config_module.settings, "auth_required", True)
+
+    mine = _user(db_session, email="mine-options@example.com")
+    stranger = _user(db_session, email="stranger-options@example.com")
+    theirs = ProviderConnection(
+        owner_id=stranger.id, kind="ado", name="Theirs", hub_connection_id="hub-99", secrets={}
+    )
+    db_session.add(theirs)
+    db_session.commit()
+
+    token = auth_service.create_access_token(mine, sid=f"sid-{mine.id}")
+    resp = client.get(
+        f"/tickets/filter-options?connectionId={theirs.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["hubManaged"] is False

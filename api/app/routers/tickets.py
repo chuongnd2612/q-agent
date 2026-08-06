@@ -497,7 +497,13 @@ def ticket_filter_options(
     # would show a Sync button that cannot work until the first row arrives.
     hub_managed = any(row.hub_ticket_id for row in rows)
     if not hub_managed and connection_id:
-        conn = db.get(ProviderConnection, connection_id)
+        # Owner-scoped like everything else here: an unscoped lookup would let a
+        # caller probe another user's connection id and learn whether it is
+        # hub-backed, and would decide THIS user's Sync button from someone
+        # else's row.
+        conn = owned(db.query(ProviderConnection), ProviderConnection, user).filter(
+            ProviderConnection.id == connection_id
+        ).first()
         hub_managed = bool(conn and conn.hub_connection_id)
 
     return TicketFilterOptionsOut(
