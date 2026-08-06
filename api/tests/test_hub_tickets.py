@@ -64,7 +64,12 @@ def _hub_ticket(**kwargs) -> dict:
     item = {
         "id": "hub-1",
         "externalId": "SUR-1",
-        "providerKind": "ado",
+        # The REAL hub vocabulary. This fixture originally said "ado" — our own
+        # spelling on both sides of the join — which is exactly why #507 slipped
+        # through: every test matched, while the live hub (which says
+        # `azure_devops`) matched nothing. Keeping the hub's real spelling here
+        # means the whole file exercises the translation.
+        "providerKind": "azure_devops",
         "projectId": "hub-project",
         "connectionId": "hub-conn",
         "title": "Hub title",
@@ -365,3 +370,44 @@ def test_hub_ticket_id_migration_up_and_down(tmp_path, monkeypatch):
     assert not any(c["name"] == "hub_ticket_id" for c in insp.get_columns("tickets"))
     assert all(i["name"] != "ix_tickets_hub_ticket_id" for i in insp.get_indexes("tickets"))
     engine.dispose()
+
+
+# ---------------------------------------------------------------- #507
+# The hub names Azure DevOps `azure_devops`; we name it `ado`. Reconciling
+# without translating matched nothing for our most-used provider, and did so
+# silently — a read that matches nothing satisfies every other rule.
+def test_hub_key_translates_azure_devops_to_ado():
+    from app.routers.tickets import _hub_key
+
+    assert _hub_key("azure_devops", "1442") == _hub_key("ado", "1442")
+    assert _hub_key("azure_devops", "1442") == ("ado", "1442")
+
+
+@pytest.mark.parametrize("spelling", ["azure_devops", "azure-devops", "AZURE_DEVOPS", "AzureDevOps"])
+def test_hub_key_tolerates_azure_devops_spellings(spelling):
+    from app.routers.tickets import _hub_key
+
+    assert _hub_key(spelling, "1442") == ("ado", "1442")
+
+
+def test_hub_key_leaves_matching_vocabularies_alone():
+    """`jira` and `github` are spelled the same on both sides."""
+    from app.routers.tickets import _hub_key
+
+    assert _hub_key("jira", "PROJ-1") == ("jira", "PROJ-1")
+    assert _hub_key("github", "77") == ("github", "77")
+
+
+def test_hub_key_keeps_unknown_kinds_verbatim():
+    """An unrecognised kind must fail to match, never join the wrong rows."""
+    from app.routers.tickets import _hub_key
+
+    assert _hub_key("gitlab", "5") == ("gitlab", "5")
+    assert _hub_key("ado", "5") != _hub_key("gitlab", "5")
+
+
+def test_hub_key_still_requires_both_halves():
+    from app.routers.tickets import _hub_key
+
+    assert _hub_key("", "1442") is None
+    assert _hub_key("azure_devops", "") is None

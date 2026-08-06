@@ -74,14 +74,34 @@ _IN_CHUNK = 400
 
 
 # ------------------------------------------------------------- hub read-through
+# The hub names Azure DevOps `azure_devops`; we name it `ado`
+# (``provider_connection.py``: ado/jira/github). Reconciling without translating
+# means the join key is ("ado", …) on one side and ("azure_devops", …) on the
+# other, so nothing ever matches for our most-used provider — and it fails
+# *silently*, because a read that matches nothing satisfies every other rule
+# (#507). `jira` and `github` are spelled the same on both sides.
+_HUB_KIND_ALIASES = {
+    "azure_devops": "ado",
+    "azure-devops": "ado",
+    "azuredevops": "ado",
+}
+
+
 def _hub_key(provider_kind: Any, external_id: Any) -> tuple[str, str] | None:
-    """The join key: ``(provider_kind, external_id)``, case-folded on the kind.
+    """The join key: ``(provider_kind, external_id)``, normalised to OUR vocabulary.
 
     Both halves are required. Matching on ``external_id`` alone would happily
     join an ADO ``PROJ-1`` to a Jira ``PROJ-1`` — different work items that share
     a naming convention — so a missing kind yields no key rather than a loose one.
+
+    The kind is case-folded **and** translated through :data:`_HUB_KIND_ALIASES`,
+    so a hub `azure_devops` and a local `ado` produce the same key. Applied to
+    both sides: local kinds pass through unchanged (they are already ours), and
+    an unrecognised kind is kept verbatim so it simply fails to match rather than
+    joining the wrong rows.
     """
     kind = str(provider_kind or "").strip().lower()
+    kind = _HUB_KIND_ALIASES.get(kind, kind)
     ext = str(external_id or "").strip()
     if not kind or not ext:
         return None
@@ -283,6 +303,17 @@ def _hub_read_through(
 
     overlay = _index_hub_items(items)
     _record_hub_ticket_ids(db, user, overlay)
+
+    # A hub page that returns tickets yet matches none of ours is the signature of
+    # a vocabulary or key mismatch (#507) — and it is otherwise indistinguishable
+    # from the flag being off, because matching nothing satisfies every other
+    # rule here. Say so once per read rather than letting it look like success.
+    if items and not overlay:
+        logger.warning(
+            "hub returned {} tickets but none produced a usable join key — "
+            "check the providerKind vocabulary",
+            len(items),
+        )
 
     # Anchored on local rows (already owner-scoped by the caller), so the hub can
     # freshen what we show but never widen who can see it.
