@@ -38,6 +38,12 @@ services:
       # HUB_JWT_SECRET must EQUAL the hub's EMEHUB_JWT_SECRET.
       QAGENT_HUB_SSO_ENABLED: ${QAGENT_HUB_SSO_ENABLED:-false}
       QAGENT_HUB_BASE_URL: ${QAGENT_HUB_BASE_URL:-}
+      # ...and HUB_INTERNAL_BASE_URL is the same hub as *this container* should
+      # reach it, which is a different place. Sending server-side reads to the
+      # public URL costs ~498ms each — out to the Cloudflare edge and back to this
+      # same machine — against ~2ms over the bridge. Optional; falls back to the
+      # public URL. The browser can never use this value.
+      QAGENT_HUB_INTERNAL_BASE_URL: ${QAGENT_HUB_INTERNAL_BASE_URL:-}
       QAGENT_HUB_JWT_SECRET: ${QAGENT_HUB_JWT_SECRET:-}
       QAGENT_HUB_AUDIENCE: ${QAGENT_HUB_AUDIENCE:-qagent}
       # Hub-owned data reads (#497). Requires HUB_SSO_ENABLED as well.

@@ -54,6 +54,62 @@ def test_requires_a_base_url(hub_on, monkeypatch):
     assert hub_client.enabled() is False
 
 
+# ------------------------------------------------- public vs internal hub URL
+#
+# The browser and this process reach the hub from different places. Sending the
+# server to the browser's public URL costs ~498ms per read — out to the
+# Cloudflare edge and back to the same machine — against ~2ms over the bridge,
+# and `hub_workspace.ensure_for_user` makes one call per ticket page.
+
+INTERNAL = "http://emehub-api:8790"
+
+
+@respx.mock
+def test_reads_go_to_the_internal_url_when_one_is_set(hub_on, monkeypatch):
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "hub_internal_base_url", INTERNAL)
+    public = respx.get(f"{HUB}/tickets").mock(return_value=httpx.Response(200, json={}))
+    internal = respx.get(f"{INTERNAL}/tickets").mock(
+        return_value=httpx.Response(200, json={"items": [], "total": 0})
+    )
+
+    hub_client.list_tickets("tok")
+
+    assert internal.called
+    assert not public.called, "the read went out to the public internet"
+
+
+@respx.mock
+def test_reads_fall_back_to_the_public_url(hub_on):
+    """No internal URL configured is the ordinary case, not an error."""
+    public = respx.get(f"{HUB}/tickets").mock(
+        return_value=httpx.Response(200, json={"items": [], "total": 0})
+    )
+
+    hub_client.list_tickets("tok")
+
+    assert public.called
+
+
+def test_a_trailing_slash_on_the_internal_url_does_not_double_up(hub_on, monkeypatch):
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "hub_internal_base_url", INTERNAL + "/")
+    assert hub_client._base_url() == INTERNAL
+
+
+def test_an_internal_url_alone_does_not_enable_the_integration(hub_on, monkeypatch):
+    """The token every read spends is minted by the *browser* against the public
+    origin. A hub we can reach but can never be authorised to read is a
+    misconfiguration, and enabling on it would surface as runtime 401s."""
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "hub_base_url", "")
+    monkeypatch.setattr(config_module.settings, "hub_internal_base_url", INTERNAL)
+    assert hub_client.enabled() is False
+
+
 @respx.mock
 def test_disabled_makes_no_network_call(monkeypatch):
     """Off must mean *no outbound request*, not a request we ignore."""
