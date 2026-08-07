@@ -6,6 +6,7 @@ import shutil
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.logging import logger
@@ -59,6 +60,30 @@ class Settings(BaseSettings):
     # Set the `Secure` flag on auth cookies. Default False so http-localhost dev
     # works; set QAGENT_COOKIE_SECURE=true behind HTTPS in production.
     cookie_secure: bool = False
+    #: The URL prefix this app is served under, as the BROWSER sees it — ``""``
+    #: on its own hostname, ``/qagent`` behind the suite's shared front door.
+    #:
+    #: The application itself never sees the prefix: the proxy strips it, so
+    #: every route is registered and matched exactly as it is standalone. The one
+    #: thing that cannot ignore it is a **cookie Path**, which the browser
+    #: evaluates against the address bar. Set it wrong and the refresh cookie
+    #: lands on a path that is never requested — the session then appears to end
+    #: at the next reload, with nothing in the logs.
+    #:
+    #: Must match the frontend's ``VITE_BASE`` (minus its trailing slash).
+    mount_path: str = ""
+
+    @field_validator("mount_path", mode="after")
+    @classmethod
+    def _normalize_mount_path(cls, value: str) -> str:
+        """A leading slash and no trailing one, so callers can concatenate.
+
+        Accepts what an operator is likely to type — ``qagent``, ``/qagent``,
+        ``/qagent/`` — because a cookie path that is wrong by one slash fails in
+        a way nobody would think to look for.
+        """
+        trimmed = (value or "").strip().strip("/")
+        return f"/{trimmed}" if trimmed else ""
     # Optional admin seed: when both are set and the users table is empty, an
     # active Admin is created on startup.
     admin_email: str = ""

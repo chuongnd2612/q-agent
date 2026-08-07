@@ -36,6 +36,11 @@ services:
       # (a bare /auth/agent-token there answers 405), and the browser calls this
       # origin directly, so it must be the PUBLIC url — not localhost:8790.
       # HUB_JWT_SECRET must EQUAL the hub's EMEHUB_JWT_SECRET.
+      # URL prefix this app is served under, as the BROWSER sees it. Empty when
+      # it owns its hostname; "/qagent" behind the suite's shared front door,
+      # which strips the prefix before requests arrive — so this affects cookie
+      # Path only, never routing. Must match the web build's VITE_BASE.
+      QAGENT_MOUNT_PATH: ${QAGENT_BASE_PATH:-}
       QAGENT_HUB_SSO_ENABLED: ${QAGENT_HUB_SSO_ENABLED:-false}
       QAGENT_HUB_BASE_URL: ${QAGENT_HUB_BASE_URL:-}
       # ...and HUB_INTERNAL_BASE_URL is the same hub as *this container* should
@@ -92,6 +97,12 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
+      args:
+        # Where the SPA is mounted in the URL. "/" standalone; "/qagent/" behind
+        # the suite's shared front door. MUST match QAGENT_MOUNT_PATH on `api`
+        # above — they are two halves of one setting, and a mismatch scopes the
+        # refresh cookie to a path the browser never requests.
+        VITE_BASE: ${QAGENT_BASE_PATH:-/}
     depends_on:
       api:
         condition: service_healthy
@@ -103,7 +114,27 @@ services:
       # (agent: npm run release) and dropped here — no image rebuild to publish.
       - ./downloads:/usr/share/nginx/html/downloads:ro
     restart: unless-stopped
+    networks:
+      # `default` is listed explicitly because naming any network on a service
+      # replaces the implicit one — omit it and `web` loses `api`.
+      default:
+      emesoft:
+        # An explicit alias: the emehub stack also has a service called `web`,
+        # and on a shared network they would both claim that name.
+        aliases:
+          - qagent-web
 
 volumes:
   qagent-workspace:
   qagent-db:
+
+networks:
+  default:
+  # The suite's shared network, so the front door (emehub's edge/) can reach this
+  # stack by name rather than through a published host port.
+  #
+  # External on purpose: the emehub stack attaches to it too, and whichever
+  # project composes down last must not delete it from under the other. Create it
+  # once with `docker network create emesoft`.
+  emesoft:
+    external: true

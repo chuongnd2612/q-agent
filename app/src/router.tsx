@@ -43,10 +43,19 @@ import { LocalAgent } from "@/screens/LocalAgent";
  * there while still authed). The entire authenticated app is gated by
  * `RequireAuth`, which restores the session (via the refresh cookie) before
  * mounting `<App/>` (providers + shell + <Outlet/>). Run-scoped routes nest
- * under `RunLayout`, which owns the single run WebSocket. Vite base is '/', so
- * no basename.
+ * under `RunLayout`, which owns the single run WebSocket.
+ *
+ * The `basename` comes from Vite's `base` (see `vite.config.ts`): '/' when this
+ * app owns its hostname, '/qagent/' when it is mounted behind the suite's shared
+ * front door. Setting it here is what keeps every `navigate("/runs")` and
+ * `to="/settings"` in the app written as though the app owned the root — React
+ * Router prepends the basename on the way out and strips it on the way in, so
+ * no screen has to know where it is deployed.
+ *
+ * The exception is anything that bypasses the router — `window.location.*` and
+ * plain `<a href>` — which must use `withBase()` from `lib/basePath.ts`.
  */
-export const router = createBrowserRouter([
+const ROUTES = [
   // Public sign-in screens — no app shell; authed visitors get bounced to `/`.
   {
     element: <RedirectIfAuthed />,
@@ -106,4 +115,8 @@ export const router = createBrowserRouter([
       },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(ROUTES, {
+  basename: import.meta.env.BASE_URL,
+});

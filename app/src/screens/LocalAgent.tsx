@@ -11,6 +11,8 @@
  * an execution target on the Execution screen.
  */
 
+import { API_BASE } from "@/lib/api";
+import { withBase } from "@/lib/basePath";
 import { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Check, Copy, Cpu, Download, Laptop, Trash2 } from "lucide-react";
@@ -86,7 +88,7 @@ export function LocalAgent() {
   // deployment those live under `/api`. Local dev with a separate API port
   // should instead point --server straight at the API (see the note below).
   const command = pairing
-    ? `npx @q-agent/agent pair ${pairing.code} --server ${window.location.origin}/api`
+    ? `npx @q-agent/agent pair ${pairing.code} --server ${window.location.origin}${API_BASE}`
     : "";
 
   return (
@@ -124,7 +126,7 @@ export function LocalAgent() {
 
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <a
-            href="/downloads/qagent-agent-setup.exe"
+            href={withBase("/downloads/qagent-agent-setup.exe")}
             download
             className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
             style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)" }}

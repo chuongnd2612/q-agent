@@ -17,6 +17,7 @@
  * `RedirectIfAuthed` above it, so this gate never has to reason about auth state.
  */
 
+import { withBase } from "@/lib/basePath";
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { RedirectLoader } from "@/components/auth/AuthLayout";
@@ -38,7 +39,7 @@ export function HubSsoEntry() {
           markHubSsoAttempted();
           // A full assign rather than `navigate`: the callback screen must mount
           // clean, outside this guard's subtree.
-          window.location.assign("/sso/callback");
+          window.location.assign(withBase("/sso/callback"));
           return;
         }
       } catch {

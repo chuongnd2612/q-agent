@@ -4,18 +4,35 @@ import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "node:path";
 
+// Where this app is mounted in the URL. `/` standalone — on its own hostname it
+// owns the root, and that stays the default so nothing changes unless a
+// deployment asks otherwise. Behind the suite's shared front door it is served
+// under a prefix (`VITE_BASE=/qagent/`), and the router `basename`, every asset
+// URL and the API/auth prefixes all derive from this one value at runtime via
+// `import.meta.env.BASE_URL`.
+//
+// Normalised to a trailing slash because Vite concatenates it with asset paths:
+// `/qagent` would emit `/qagentassets/index.js`.
+const BASE = (() => {
+  const raw = (process.env.VITE_BASE || "/").trim();
+  return raw.endsWith("/") ? raw : `${raw}/`;
+})();
+
 // Dev-only stopgap: serve the Local Agent installers from the repo `downloads/`
 // dir at `/downloads/*`, mirroring the production nginx route. Lets the dev
 // server (when it's what a Cloudflare tunnel fronts) hand out the installer;
 // in real production the docker `web`/nginx container serves this instead.
-function serveDownloads(): PluginOption {
+function serveDownloads(base: string): PluginOption {
   const dir = path.resolve(__dirname, "../downloads");
+  // Mirrors the production route, which sits under whatever prefix the app is
+  // mounted at — so this has to follow `base` rather than assume the root.
+  const prefix = `${base.replace(/\/$/, "")}/downloads/`;
   return {
     name: "serve-downloads",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url || !req.url.startsWith("/downloads/")) return next();
-        const rel = decodeURIComponent(req.url.split("?")[0].slice("/downloads/".length));
+        if (!req.url || !req.url.startsWith(prefix)) return next();
+        const rel = decodeURIComponent(req.url.split("?")[0].slice(prefix.length));
         const filePath = path.join(dir, rel);
         if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
           res.statusCode = 403;
@@ -38,7 +55,8 @@ function serveDownloads(): PluginOption {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), serveDownloads()],
+  base: BASE,
+  plugins: [react(), tailwindcss(), serveDownloads(BASE)],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

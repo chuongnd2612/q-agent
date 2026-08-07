@@ -4,6 +4,7 @@
  * TanStack Query hooks (see src/hooks/) using the keys in src/lib/queryKeys.ts.
  */
 
+import { BASE_PREFIX, stripBase, withBase } from "@/lib/basePath";
 import { useAuth } from "@/store/auth";
 import type {
   HubClaudeCredential,
@@ -87,8 +88,20 @@ import type {
 // with the SPA's own client routes (`/runs`, `/projects`, …). Override with
 // `VITE_API_BASE` (e.g. an absolute `https://api.example.com`) when the API is
 // served from a different origin.
+//
+// Both prefixes follow the app's mount point, so an app served at `/qagent/`
+// calls `/qagent/api/*` and `/qagent/auth/*`. The front door strips that prefix
+// again, so the backend sees exactly the paths it sees standalone.
 export const API_BASE: string =
-  (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "/api";
+  (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ??
+  withBase("/api");
+
+/** Same-origin prefix for `/auth/*` — see `isAuthPath` for why it is separate.
+ *
+ * `BASE_PREFIX`, not `withBase("")`: that helper only rewrites paths that start
+ * with a slash and returns `""` unchanged, which silently produced an unprefixed
+ * `/auth/refresh` — a 405 against the hub's SPA rather than this app's API. */
+export const AUTH_BASE: string = BASE_PREFIX;
 
 /** Absolute websocket base for `new WebSocket(...)`. When `API_BASE` is an
  * absolute http(s) URL, swap the scheme to ws(s). When it's a same-origin
@@ -263,7 +276,10 @@ function tryRefresh(): Promise<RefreshOutcome> {
 
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const authPath = isAuthPath(path);
-  const url = authPath ? path : API_BASE + path;
+  // `/auth/*` keeps its own prefix rather than riding under API_BASE, so the
+  // refresh cookie stays path-scoped to it (ADR 0007). Both are still relative
+  // to wherever the app is mounted.
+  const url = authPath ? AUTH_BASE + path : API_BASE + path;
 
   const token = useAuth.getState().accessToken;
   const csrf = getCookie("qagent_csrf");
@@ -334,11 +350,14 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     // trip RequireAuth to /login) or hard-redirect over it.
     if (!loggingOut) {
       useAuth.getState().logout();
+      // `pathname` arrives with the mount prefix attached and this is a hard
+      // navigation the router never sees, so both sides need converting: strip
+      // the prefix before matching a route, add it back before assigning.
       const onPublicAuthRoute =
         typeof window !== "undefined" &&
-        /^\/(login|signed-out|forgot)/.test(window.location.pathname);
+        /^\/(login|signed-out|forgot)/.test(stripBase(window.location.pathname));
       if (typeof window !== "undefined" && !onPublicAuthRoute) {
-        window.location.assign("/login");
+        window.location.assign(withBase("/login"));
       }
     }
   }
