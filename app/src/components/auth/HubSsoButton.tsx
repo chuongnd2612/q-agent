@@ -22,6 +22,7 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
+import { withBase } from "@/lib/basePath";
 import { clearHubSsoAttempt, fetchHubSsoConfig } from "@/lib/hubSso";
 
 /** The hub's mark, inline so the button needs no network fetch and no binary asset. */
@@ -87,7 +88,7 @@ export function HubSsoButton() {
           clearHubSsoAttempt();
           // A full assign rather than `navigate`, matching HubSsoEntry: the
           // callback screen must mount clean, outside this route's subtree.
-          window.location.assign("/sso/callback");
+          window.location.assign(withBase("/sso/callback"));
         }}
         className="mt-[14px] flex h-[46px] w-full items-center justify-center gap-[9px] rounded-xl border text-[14.5px] font-bold text-ink transition-colors hover:bg-white/[.07]"
         style={outlineBtn}

@@ -11,8 +11,20 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# Where the app is mounted in the URL. "/" standalone — on its own hostname it
+# owns the root. Behind the suite's shared front door, build with
+# `--build-arg VITE_BASE=/qagent/` so every asset URL, the router basename and
+# the /api + /auth prefixes come out prefixed. It must match the backend's
+# QAGENT_MOUNT_PATH, or the refresh cookie is scoped to a path the browser never
+# requests.
+#
+# A build arg rather than runtime config because Vite bakes `base` into the
+# bundle: the emitted `<script src>` in index.html is fixed at build time and
+# there is nothing left to configure afterwards.
+ARG VITE_BASE=/
+ENV VITE_BASE=$VITE_BASE
 # VITE_API_BASE is intentionally left unset → the client defaults to the
-# same-origin "/api" prefix that nginx proxies to the backend.
+# same-origin "/api" prefix (under VITE_BASE) that nginx proxies to the backend.
 RUN npm run build
 
 FROM nginx:1.27-alpine

@@ -20,6 +20,7 @@
  *    typed client's bearer-token + 401→refresh behaviour.
  */
 
+import { withBase } from "@/lib/basePath";
 import { API_BASE } from "@/lib/api";
 import type { User } from "@/types/api";
 
@@ -204,7 +205,9 @@ export async function completeSsoBootstrap(
   hubToken: string,
   next: string | null,
 ): Promise<SsoCompleteResult> {
-  const res = await fetch("/auth/sso/complete", {
+  // Same-origin, but the app may be mounted under a prefix — and this is a raw
+  // fetch rather than a call through `lib/api.ts`, so nothing else adds it.
+  const res = await fetch(withBase("/auth/sso/complete"), {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },

@@ -170,6 +170,22 @@ def current_user(
 
 
 # ---------------------------------------------------------------- cookies
+#
+# Cookie `Path` is what the BROWSER sees, not what this app sees. Behind the
+# suite's shared front door the SPA lives at `/qagent/` and the prefix is
+# stripped before requests arrive here — so these paths have to be written from
+# the browser's point of view or the refresh cookie is set on a path that is
+# never requested, and every session silently ends at the next reload.
+def _refresh_cookie_path() -> str:
+    """Where the refresh cookie is scoped — `/auth`, under the mount point.
+
+    Narrow on purpose (ADR 0007): the refresh token is only ever presented to
+    `/auth/*`, so scoping it there keeps it off every other request, including
+    the whole of `/api`.
+    """
+    return f"{settings.mount_path}/auth"
+
+
 def set_auth_cookies(response: Response, *, refresh_token: str, csrf_token: str, remember: bool) -> None:
     max_age = int(
         (auth_service.REFRESH_TTL_REMEMBER if remember else auth_service.REFRESH_TTL_DEFAULT).total_seconds()
@@ -181,7 +197,7 @@ def set_auth_cookies(response: Response, *, refresh_token: str, csrf_token: str,
         httponly=True,
         secure=settings.cookie_secure,
         samesite="lax",
-        path="/auth",
+        path=_refresh_cookie_path(),
     )
     response.set_cookie(
         CSRF_COOKIE,
@@ -190,13 +206,16 @@ def set_auth_cookies(response: Response, *, refresh_token: str, csrf_token: str,
         httponly=False,  # readable by the SPA so it can echo it in X-CSRF-Token
         secure=settings.cookie_secure,
         samesite="lax",
-        path="/",
+        # The whole app, not just `/auth`: every mutating request echoes it.
+        path=settings.mount_path or "/",
     )
 
 
 def clear_auth_cookies(response: Response) -> None:
-    response.delete_cookie(REFRESH_COOKIE, path="/auth")
-    response.delete_cookie(CSRF_COOKIE, path="/")
+    # Must match the paths above exactly — a delete with a different Path is a
+    # no-op the browser accepts silently, leaving the cookie in place.
+    response.delete_cookie(REFRESH_COOKIE, path=_refresh_cookie_path())
+    response.delete_cookie(CSRF_COOKIE, path=settings.mount_path or "/")
 
 
 def read_refresh_cookie(request: Request) -> str | None:
