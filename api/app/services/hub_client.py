@@ -96,13 +96,20 @@ class HubUnavailableError(HubClientError):
 
 
 def _base_url() -> str:
-    """Hub API origin, including whatever path prefix it is served under.
+    """Hub API origin **as this container should reach it**.
 
-    Behind the tunnel the hub's API lives under ``/api``, so
-    ``QAGENT_HUB_BASE_URL`` is expected to carry it (a bare ``/auth/agent-token``
-    on that host answers 405 — see #495 and the compose comments).
+    Prefers ``QAGENT_HUB_INTERNAL_BASE_URL`` and falls back to the public
+    ``QAGENT_HUB_BASE_URL``. The two exist because the browser and this process
+    are in different places: the SPA must be given a public origin, and sending
+    the server there too means every read leaves the host for the Cloudflare edge
+    and comes back to the same machine — ~498 ms measured, against ~2 ms over the
+    Docker bridge.
+
+    Either way the value carries the hub's ``/api`` prefix; behind the tunnel a
+    bare ``/auth/agent-token`` answers 405 (#495, and the compose comments).
     """
-    return settings.hub_base_url.rstrip("/")
+    internal = settings.hub_internal_base_url.strip()
+    return (internal or settings.hub_base_url).rstrip("/")
 
 
 def enabled() -> bool:
@@ -110,8 +117,17 @@ def enabled() -> bool:
 
     Requires **both** flags: identity has to be in play for a hub token to exist
     at all, so data-without-SSO is a misconfiguration rather than a mode.
+
+    Gated on the **public** URL, not on :func:`_base_url`. The token every read
+    spends is minted by the browser against the public origin, so an internal URL
+    without a public one is a hub we can reach and can never be authorised to
+    read — enabling on it would turn a misconfiguration into 401s at runtime.
     """
-    return bool(settings.hub_sso_enabled and settings.hub_data_enabled and _base_url())
+    return bool(
+        settings.hub_sso_enabled
+        and settings.hub_data_enabled
+        and settings.hub_base_url.strip()
+    )
 
 
 def _require_enabled() -> None:

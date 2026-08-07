@@ -70,7 +70,25 @@ class Settings(BaseSettings):
     # and /login shows only the local form. This gates a feature, not an
     # authentication check, unlike `auth_required` above.
     hub_sso_enabled: bool = False
-    hub_base_url: str = ""  # e.g. https://hub.chuongnd.click
+    #: The hub's API as **the browser** must reach it — a public origin, because
+    #: the SPA calls `/auth/agent-token` on it directly. Served to the client by
+    #: `GET /health`.
+    hub_base_url: str = ""  # e.g. https://hub.chuongnd.click/api
+    #: The hub's API as **this container** should reach it. Optional; falls back
+    #: to `hub_base_url`.
+    #:
+    #: These are two different vantage points and conflating them is expensive.
+    #: Measured from inside the api container: the public URL answers in ~498 ms
+    #: because the request leaves the host, crosses the Cloudflare edge and comes
+    #: back to the same machine, while `http://host.docker.internal:8790` answers
+    #: in ~2 ms. `hub_workspace.ensure_for_user` makes one call per ticket page
+    #: plus two more, so a large hub cost seconds of pure round-trip for data
+    #: sitting one bridge away.
+    #:
+    #: The browser cannot use this value — it names a host only reachable from
+    #: inside Docker — which is exactly why it is a second setting rather than a
+    #: correction to the first.
+    hub_internal_base_url: str = ""
     # Must equal the hub's EMEHUB_JWT_SECRET (Phase 1 shared secret). Kept
     # SEPARATE from `secret_key` on purpose: that one already signs local JWTs
     # *and* derives the Fernet key for every encrypted credential
