@@ -135,14 +135,14 @@ def _require_enabled() -> None:
         raise HubDisabledError("Hub data integration is disabled")
 
 
-def get_json(path: str, hub_token: str) -> Any:
-    """GET ``path`` from the hub with ``hub_token`` and return parsed JSON.
+def _request(method: str, path: str, hub_token: str, json_body: Any | None = None) -> Any:
+    """Call the hub and return parsed JSON, mapping every failure to our taxonomy.
+
+    Shared by :func:`get_json` and :func:`post_json` so a POST cannot drift into
+    treating "the hub is down" as "the hub said no" — the distinction every caller
+    branches on.
 
     ``hub_token`` is used for this call only and never persisted or logged.
-
-    Raises :class:`HubDisabledError`, :class:`HubUnauthorizedError`,
-    :class:`HubRefusedError` or :class:`HubUnavailableError` — see each for what
-    the caller is expected to do.
     """
     _require_enabled()
     if not hub_token:
@@ -153,8 +153,10 @@ def get_json(path: str, hub_token: str) -> Any:
     url = f"{_base_url()}{path}"
     try:
         with httpx.Client(timeout=_TIMEOUT_S, follow_redirects=False) as client:
-            resp = client.get(
+            resp = client.request(
+                method,
                 url,
+                json=json_body,
                 headers={
                     "Authorization": f"Bearer {hub_token}",
                     "Accept": "application/json",
@@ -162,28 +164,43 @@ def get_json(path: str, hub_token: str) -> Any:
             )
     except httpx.HTTPError as exc:
         # Transport-level: refused, DNS, timeout, TLS. The hub is not answering.
-        logger.warning("hub read {} failed to reach the hub: {}", path, exc)
+        logger.warning("hub {} {} failed to reach the hub: {}", method, path, exc)
         raise HubUnavailableError(f"Could not reach EmeHub: {exc}") from exc
 
     if resp.status_code == 401:
         # Expired token, or the hub session behind it was revoked. Deliberately
         # not logged as an error — it is the ordinary end of a 15-minute token.
-        logger.info("hub read {} unauthorized (token expired or session gone)", path)
+        logger.info("hub {} {} unauthorized (token expired or session gone)", method, path)
         raise HubUnauthorizedError("EmeHub rejected the agent token")
 
     if 502 <= resp.status_code <= 504:
-        logger.warning("hub read {} got gateway {}", path, resp.status_code)
+        logger.warning("hub {} {} got gateway {}", method, path, resp.status_code)
         raise HubUnavailableError(f"EmeHub gateway error {resp.status_code}")
 
     if resp.status_code >= 400:
         detail = ""
         try:
             body = resp.json()
-            if isinstance(body, dict) and isinstance(body.get("detail"), str):
-                detail = body["detail"]
+            if isinstance(body, dict):
+                if isinstance(body.get("detail"), str):
+                    detail = body["detail"]
+                # A rejected clause query answers 422 {problems: [{message,
+                # clauseIndex}]} — surface the first message rather than a bare
+                # status, because the whole point of the hub refusing (instead of
+                # dropping) a clause is that the user can be told which one.
+                problems = body.get("problems")
+                if not detail and isinstance(problems, list) and problems:
+                    first = problems[0]
+                    if isinstance(first, dict) and isinstance(first.get("message"), str):
+                        idx = first.get("clauseIndex")
+                        detail = (
+                            f"condition {idx + 1}: {first['message']}"
+                            if isinstance(idx, int)
+                            else first["message"]
+                        )
         except Exception:  # noqa: BLE001 - a non-JSON error body is not fatal
             pass
-        logger.info("hub read {} refused {} {}", path, resp.status_code, detail)
+        logger.info("hub {} {} refused {} {}", method, path, resp.status_code, detail)
         raise HubRefusedError(resp.status_code, detail or f"EmeHub returned {resp.status_code}")
 
     if len(resp.content) > _MAX_RESPONSE_BYTES:
@@ -196,6 +213,16 @@ def get_json(path: str, hub_token: str) -> Any:
         # hub API — a tunnel error page, or a wrong base URL (a missing /api
         # prefix serves the SPA's index.html with status 200).
         raise HubUnavailableError("EmeHub returned a non-JSON response") from exc
+
+
+def get_json(path: str, hub_token: str) -> Any:
+    """GET ``path`` from the hub. See :func:`_request` for the failure taxonomy."""
+    return _request("GET", path, hub_token)
+
+
+def post_json(path: str, hub_token: str, body: Any) -> Any:
+    """POST ``body`` to ``path`` on the hub. See :func:`_request`."""
+    return _request("POST", path, hub_token, json_body=body)
 
 
 # ---------------------------------------------------------------- typed reads
@@ -282,3 +309,106 @@ def resolve_claude_credential(hub_token: str) -> dict[str, Any]:
     The returned material is a secret: never log it, never return it to the SPA.
     """
     return get_json("/credentials/claude/resolve", hub_token)
+
+
+# ------------------------------------------------------- clause-query surface
+# The hub's clause model (emehub#130, our #519):
+#   {"clauses": [{"field", "operator", "values"}], "match": "all"|"any",
+#    "sort": {"field", "direction"}}
+#
+# It is the same shape the Tickets query builder already produces (#517), which
+# is why these take the query through untouched rather than re-encoding it.
+#
+# An unrunnable clause is REFUSED, not dropped — 422 {problems:[{message,
+# clauseIndex}]}, surfaced by `_request` as a HubRefusedError naming the
+# condition. That is deliberate on the hub's side and worth preserving here: a
+# dropped filter returns MORE work items than were asked for, which is the
+# failure a caller is least likely to notice.
+
+
+def search_tickets(
+    hub_token: str,
+    query: dict[str, Any],
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    provider_kind: str | None = None,
+) -> dict[str, Any]:
+    """Run a clause query against the hub's own mirror. Paged, reads only.
+
+    Shape: ``{"items": [...], "total": n, "page": n, "pageSize": n}``.
+    """
+    body: dict[str, Any] = {"query": query, "page": page, "pageSize": page_size}
+    if provider_kind:
+        body["providerKind"] = provider_kind
+    return post_json("/tickets/search", hub_token, body)
+
+
+def preview_query(
+    hub_token: str,
+    query: dict[str, Any],
+    *,
+    provider_kind: str | None = None,
+    connection_id: int | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """What a query *would* pull from the provider. Writes nothing.
+
+    Note this asks the **provider**, not the hub's mirror — measured against the
+    live hub, a preview returned 51 items while the mirror held 0. So it answers
+    "what is out there", which is what makes it worth showing before a sync.
+
+    Shape: ``{"total": n, "sample": [...]}`` — the total is uncapped and honest.
+    """
+    body: dict[str, Any] = {"query": query}
+    if provider_kind:
+        body["providerKind"] = provider_kind
+    if connection_id is not None:
+        body["connectionId"] = connection_id
+    if project:
+        body["project"] = project
+    return post_json("/tickets/query/preview", hub_token, body)
+
+
+def sync_tickets(
+    hub_token: str,
+    *,
+    query: dict[str, Any] | None = None,
+    ticket_ids: list[str] | None = None,
+    provider_kind: str | None = None,
+    connection_id: int | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """Ask the hub to pull work items from the provider into its store.
+
+    **This writes.** The hub performs the provider call with its *own* PAT — which
+    is why ticket sync is possible at all without a credential ever crossing the
+    boundary (#503). It must be user-initiated and preview-confirmed, never fired
+    implicitly on a page load.
+
+    The body names either a clause ``query`` or explicit ``ticket_ids``; the old
+    ``mode``/``sprint``/``states`` fields were removed and are now a 422 naming
+    the field rather than a silent whole-project pull.
+    """
+    body: dict[str, Any] = {}
+    if query is not None:
+        body["query"] = query
+    if ticket_ids:
+        body["ticketIds"] = ticket_ids
+    if provider_kind:
+        body["providerKind"] = provider_kind
+    if connection_id is not None:
+        body["connectionId"] = connection_id
+    if project:
+        body["project"] = project
+    return post_json("/tickets/sync", hub_token, body)
+
+
+def list_saved_queries(hub_token: str) -> list[dict[str, Any]]:
+    """The hub's saved ticket queries — built-in presets and the user's own.
+
+    Each carries ``id``, ``name``, ``destination``, ``query``, ``description``,
+    ``builtIn`` and ``shared``. Reading these means the two apps offer the *same*
+    saved queries instead of Q-Agent keeping a private browser-local copy.
+    """
+    return get_json("/ticket-queries", hub_token)
