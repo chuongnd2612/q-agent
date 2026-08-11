@@ -109,8 +109,12 @@ export const AUTH_BASE: string = BASE_PREFIX;
  * page so the URL is absolute (relative WS URLs are invalid). */
 function wsBase(): string {
   if (/^https?:\/\//.test(API_BASE)) return API_BASE.replace(/^http/, "ws");
-  const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss:" : "ws:";
-  const host = typeof location !== "undefined" ? location.host : "127.0.0.1:8787";
+  const proto =
+    typeof location !== "undefined" && location.protocol === "https:"
+      ? "wss:"
+      : "ws:";
+  const host =
+    typeof location !== "undefined" ? location.host : "127.0.0.1:8787";
   return `${proto}//${host}${API_BASE}`;
 }
 
@@ -129,7 +133,9 @@ export class ApiError extends Error {
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const escaped = name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1");
-  const match = document.cookie.match(new RegExp("(?:^|; )" + escaped + "=([^;]*)"));
+  const match = document.cookie.match(
+    new RegExp("(?:^|; )" + escaped + "=([^;]*)"),
+  );
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -179,7 +185,9 @@ export function isServiceReachable(): boolean {
   return serviceReachable;
 }
 
-export function subscribeServiceReachable(listener: (reachable: boolean) => void): () => void {
+export function subscribeServiceReachable(
+  listener: (reachable: boolean) => void,
+): () => void {
   reachabilityListeners.add(listener);
   return () => reachabilityListeners.delete(listener);
 }
@@ -217,7 +225,9 @@ const SLOW_PATHS: RegExp[] = [
 ];
 
 function timeoutFor(path: string): number {
-  return SLOW_PATHS.some((re) => re.test(path)) ? SLOW_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+  return SLOW_PATHS.some((re) => re.test(path))
+    ? SLOW_TIMEOUT_MS
+    : DEFAULT_TIMEOUT_MS;
 }
 
 /** Outcome of a refresh attempt. The three cases must stay distinguishable:
@@ -233,6 +243,26 @@ type RefreshOutcome =
 /** Single in-flight refresh shared by all callers, so a burst of concurrent
  * 401s triggers exactly one `POST /auth/refresh`. */
 let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+/**
+ * Fallback renewal, injected rather than imported (#531).
+ *
+ * An SSO session has no `qagent_refresh` cookie, so `/auth/refresh` is *supposed*
+ * to fail for it — identity is re-derived from the hub instead. This module must
+ * not know that: `lib/hubSso.ts` reads `API_BASE` from here, so importing it back
+ * would make the cycle real, and the whole point of the login-shaped bootstrap
+ * response is that `lib/api.ts` stays ignorant of the hub. So the renewer is
+ * registered at startup by whoever does know (`app/sessionRenewal.ts`).
+ *
+ * Returns `refreshed` when a session was installed, `expired` when the authority
+ * says nobody is signed in, and `unreachable` when it could not tell — the same
+ * three cases, and the same rule: only `expired` justifies signing someone out.
+ */
+type SessionRenewer = () => Promise<RefreshOutcome>;
+let renewFromAuthority: SessionRenewer | null = null;
+export function setSessionRenewer(renewer: SessionRenewer | null): void {
+  renewFromAuthority = renewer;
+}
 
 /** Set while an *explicit* logout is in progress. In-flight authenticated
  * requests 401 once the refresh cookie is cleared; without this, the 401
@@ -255,7 +285,7 @@ function tryRefresh(): Promise<RefreshOutcome> {
         useAuth.getState().setSession({ accessToken, user });
         return "refreshed";
       })
-      .catch((err): RefreshOutcome => {
+      .catch((err): RefreshOutcome | Promise<RefreshOutcome> => {
         // The critical branch. Previously every failure collapsed to `false`,
         // which the caller read as "session dead" and answered with a logout +
         // redirect to /login — so a backend that was merely unreachable told the
@@ -264,7 +294,14 @@ function tryRefresh(): Promise<RefreshOutcome> {
         if (err instanceof NetworkError) return "unreachable";
         // 502-504 mean the proxy answered but the app behind it did not — that
         // is the service being down, not the session ending.
-        if (err instanceof ApiError && err.status >= 502 && err.status <= 504) return "unreachable";
+        if (err instanceof ApiError && err.status >= 502 && err.status <= 504)
+          return "unreachable";
+        // Cookie renewal is out, but it may never have been the authority. An SSO
+        // session has no refresh cookie at all (#531), so reaching here is its
+        // NORMAL renewal path, not the end of it — ask the hub before concluding
+        // anything. Local logins have no renewer registered and fall straight
+        // through, so their fast path is unchanged.
+        if (renewFromAuthority) return renewFromAuthority();
         return "expired";
       })
       .finally(() => {
@@ -274,7 +311,11 @@ function tryRefresh(): Promise<RefreshOutcome> {
   return refreshInFlight;
 }
 
-async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  retried = false,
+): Promise<T> {
   const authPath = isAuthPath(path);
   // `/auth/*` keeps its own prefix rather than riding under API_BASE, so the
   // refresh cookie stays path-scoped to it (ADR 0007). Both are still relative
@@ -340,7 +381,9 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
       // if it were: no logout, no redirect to /login. Fail closed — the caller
       // gets an error and the shell shows "unreachable" — but never fall open.
       setServiceReachable(false);
-      throw new NetworkError("Could not reach the service to renew your session");
+      throw new NetworkError(
+        "Could not reach the service to renew your session",
+      );
     }
     // `expired`: the server authoritatively refused the refresh. The session is
     // genuinely over — this is the one case that means "you are logged out".
@@ -355,7 +398,9 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
       // the prefix before matching a route, add it back before assigning.
       const onPublicAuthRoute =
         typeof window !== "undefined" &&
-        /^\/(login|signed-out|forgot)/.test(stripBase(window.location.pathname));
+        /^\/(login|signed-out|forgot)/.test(
+          stripBase(window.location.pathname),
+        );
       if (typeof window !== "undefined" && !onPublicAuthRoute) {
         window.location.assign(withBase("/login"));
       }
@@ -377,7 +422,8 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     // behind the tunnel), which previously produced a blank error toast when the
     // body carried no string detail. Fall back to the status text, then a
     // status-coded default so the toast always says something.
-    if (!detail.trim()) detail = res.statusText.trim() || `Request failed (HTTP ${res.status})`;
+    if (!detail.trim())
+      detail = res.statusText.trim() || `Request failed (HTTP ${res.status})`;
     throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
@@ -396,17 +442,27 @@ const get = <T>(p: string) => request<T>(p);
  * then serves purely local data.
  */
 const getWithHubToken = <T>(p: string, hubToken: string | null) =>
-  request<T>(p, hubToken ? { headers: { "X-Hub-Token": hubToken } } : undefined);
+  request<T>(
+    p,
+    hubToken ? { headers: { "X-Hub-Token": hubToken } } : undefined,
+  );
 /** POST variant of {@link getWithHubToken} — same contract: a `null` token sends
  * no header, and the backend then resolves everything locally (#505). */
-const postWithHubToken = <T>(p: string, body: unknown, hubToken: string | null) =>
+const postWithHubToken = <T>(
+  p: string,
+  body: unknown,
+  hubToken: string | null,
+) =>
   request<T>(p, {
     method: "POST",
     body: body === undefined ? undefined : JSON.stringify(body),
     ...(hubToken ? { headers: { "X-Hub-Token": hubToken } } : {}),
   });
 const post = <T>(p: string, body?: unknown) =>
-  request<T>(p, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+  request<T>(p, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 const put = <T>(p: string, body?: unknown) =>
   request<T>(p, { method: "PUT", body: JSON.stringify(body ?? {}) });
 const patch = <T>(p: string, body?: unknown) =>
@@ -414,9 +470,14 @@ const patch = <T>(p: string, body?: unknown) =>
 const del = <T>(p: string) => request<T>(p, { method: "DELETE" });
 
 function qs(params: Record<string, string | number | undefined>): string {
-  const entries = Object.entries(params).filter(([, v]) => v != null && v !== "");
+  const entries = Object.entries(params).filter(
+    ([, v]) => v != null && v !== "",
+  );
   if (!entries.length) return "";
-  return "?" + entries.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
+  return (
+    "?" +
+    entries.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&")
+  );
 }
 
 export const api = {
@@ -431,9 +492,11 @@ export const api = {
       hubSsoEnabled: boolean;
       hubDataEnabled: boolean;
     }>("/health"),
-  capabilities: () => get<{ claude: boolean; version: string }>("/capabilities"),
+  capabilities: () =>
+    get<{ claude: boolean; version: string }>("/capabilities"),
   aiActivity: () => get<AiActivity>("/ai/activity"),
-  aiStats: (force = false) => get<ClaudeStats>(`/ai/stats${force ? "?refresh=true" : ""}`),
+  aiStats: (force = false) =>
+    get<ClaudeStats>(`/ai/stats${force ? "?refresh=true" : ""}`),
   aiWsUrl: () => `${wsBase()}/ws/ai${wsToken()}`,
 
   // Claude CLI credentials management (#95): own (per-user) + shared (admin-only).
@@ -448,12 +511,17 @@ export const api = {
     // Real minimal Claude call under a credential — authoritative. `scope`
     // selects which: effective (default), the shared account, or own.
     test: (scope?: "effective" | "shared" | "own") =>
-      post<ClaudeCredentialsTestResult>(`/ai/credentials/test${scope ? `?scope=${scope}` : ""}`),
-    uploadOwn: (body: ClaudeCredentialsUpload) => put<void>("/ai/credentials", body),
+      post<ClaudeCredentialsTestResult>(
+        `/ai/credentials/test${scope ? `?scope=${scope}` : ""}`,
+      ),
+    uploadOwn: (body: ClaudeCredentialsUpload) =>
+      put<void>("/ai/credentials", body),
     // Non-destructive switch between own/shared (keeps the uploaded token on file).
-    setMode: (mode: "own" | "shared") => put<void>("/ai/credentials/mode", { mode }),
+    setMode: (mode: "own" | "shared") =>
+      put<void>("/ai/credentials/mode", { mode }),
     deleteOwn: () => del<void>("/ai/credentials"),
-    uploadShared: (body: ClaudeCredentialsUpload) => put<void>("/ai/credentials/shared", body),
+    uploadShared: (body: ClaudeCredentialsUpload) =>
+      put<void>("/ai/credentials/shared", body),
     deleteShared: () => del<void>("/ai/credentials/shared"),
   },
 
@@ -474,15 +542,20 @@ export const api = {
     changePassword: (body: { currentPassword: string; newPassword: string }) =>
       post<void>("/auth/change-password", body),
 
-    requestReset: (body: { email: string }) => post<void>("/auth/request-reset", body),
-    reset: (body: { token: string; password: string }) => post<void>("/auth/reset", body),
+    requestReset: (body: { email: string }) =>
+      post<void>("/auth/request-reset", body),
+    reset: (body: { token: string; password: string }) =>
+      post<void>("/auth/reset", body),
 
     twofaSetup: () => post<TwoFactorSetup>("/auth/2fa/setup"),
-    twofaEnable: (body: { code: string }) => post<void>("/auth/2fa/enable", body),
-    twofaDisable: (body: { code: string }) => post<void>("/auth/2fa/disable", body),
+    twofaEnable: (body: { code: string }) =>
+      post<void>("/auth/2fa/enable", body),
+    twofaDisable: (body: { code: string }) =>
+      post<void>("/auth/2fa/disable", body),
 
     sessions: () => get<AuthSession[]>("/auth/sessions"),
-    revokeSession: (id: string) => del<void>(`/auth/sessions/${encodeURIComponent(id)}`),
+    revokeSession: (id: string) =>
+      del<void>(`/auth/sessions/${encodeURIComponent(id)}`),
     revokeOthers: () => post<void>("/auth/sessions/revoke-others"),
     deleteMe: () => del<void>("/auth/me"),
 
@@ -495,11 +568,20 @@ export const api = {
       role: UserRole;
       password?: string;
     }) => post<User>("/auth/users", body),
-    inviteUser: (body: { email: string; firstName?: string; lastName?: string; role: UserRole }) =>
-      post<InviteUserResponse>("/auth/users/invite", body),
+    inviteUser: (body: {
+      email: string;
+      firstName?: string;
+      lastName?: string;
+      role: UserRole;
+    }) => post<InviteUserResponse>("/auth/users/invite", body),
     updateUser: (
       id: number,
-      body: Partial<{ firstName: string; lastName: string; role: UserRole; isActive: boolean }>,
+      body: Partial<{
+        firstName: string;
+        lastName: string;
+        role: UserRole;
+        isActive: boolean;
+      }>,
     ) => patch<User>(`/auth/users/${id}`, body),
     deleteUser: (id: number) => del<void>(`/auth/users/${id}`),
   },
@@ -511,13 +593,16 @@ export const api = {
   updateConnection: (id: number, body: ConnectionUpdate) =>
     put<ConnectionOut>(`/connections/${id}`, body),
   deleteConnection: (id: number) => del<void>(`/connections/${id}`),
-  testConnection: (id: number) => post<TestConnectionResult>(`/connections/${id}/test`),
+  testConnection: (id: number) =>
+    post<TestConnectionResult>(`/connections/${id}/test`),
   connectionProjects: (id: number) =>
     get<ConnectionProjectOut[]>(`/connections/${id}/projects`),
-  connectionSprints: (id: number) => get<SprintOut[]>(`/connections/${id}/sprints`),
+  connectionSprints: (id: number) =>
+    get<SprintOut[]>(`/connections/${id}/sprints`),
   connectionWorkItemMetadata: (id: number) =>
     get<WorkItemMetadataOut>(`/connections/${id}/work-item-metadata`),
-  connectionRepos: (id: number) => get<AvailableReposOut>(`/connections/${id}/repos`),
+  connectionRepos: (id: number) =>
+    get<AvailableReposOut>(`/connections/${id}/repos`),
 
   // settings
   getSettings: () => get<SettingsOut>("/settings"),
@@ -534,8 +619,15 @@ export const api = {
   createSharedProject: (key: string, body: SharedProjectCreate) =>
     post<ProjectConfigOut>(`/shared/projects/${encodeURIComponent(key)}`, body),
   buildSharedKnowledge: (key: string, body: KnowledgeBuildRequest) =>
-    post<ProjectKnowledgeOut>(`/shared/projects/${encodeURIComponent(key)}/knowledge/build`, body),
-  buildSharedRepoKnowledge: (key: string, repo: string, body: KnowledgeBuildRequest) =>
+    post<ProjectKnowledgeOut>(
+      `/shared/projects/${encodeURIComponent(key)}/knowledge/build`,
+      body,
+    ),
+  buildSharedRepoKnowledge: (
+    key: string,
+    repo: string,
+    body: KnowledgeBuildRequest,
+  ) =>
     post<ProjectKnowledgeOut>(
       `/shared/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge/build`,
       body,
@@ -555,7 +647,10 @@ export const api = {
   getProjectKnowledge: (key: string) =>
     get<ProjectKnowledgeOut>(`/projects/${encodeURIComponent(key)}/knowledge`),
   buildKnowledge: (key: string, body: KnowledgeBuildRequest) =>
-    post<ProjectKnowledgeOut>(`/projects/${encodeURIComponent(key)}/knowledge/build`, body),
+    post<ProjectKnowledgeOut>(
+      `/projects/${encodeURIComponent(key)}/knowledge/build`,
+      body,
+    ),
 
   // project config (test account, base URL, environments, repos)
   getProjectConfig: (key: string) =>
@@ -564,8 +659,10 @@ export const api = {
     put<ProjectConfigOut>(`/projects/${encodeURIComponent(key)}/config`, body),
 
   // project manual-login (saved browser session)
-  getProjectAuth: (key: string) => get<AuthState>(`/projects/${encodeURIComponent(key)}/auth`),
-  clearProjectAuth: (key: string) => del<AuthState>(`/projects/${encodeURIComponent(key)}/auth`),
+  getProjectAuth: (key: string) =>
+    get<AuthState>(`/projects/${encodeURIComponent(key)}/auth`),
+  clearProjectAuth: (key: string) =>
+    del<AuthState>(`/projects/${encodeURIComponent(key)}/auth`),
   captureProjectAuth: (key: string) =>
     post<AuthState>(`/projects/${encodeURIComponent(key)}/auth/capture`),
 
@@ -576,7 +673,11 @@ export const api = {
     get<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge`,
     ),
-  buildRepoKnowledge: (key: string, repo: string, body: KnowledgeBuildRequest) =>
+  buildRepoKnowledge: (
+    key: string,
+    repo: string,
+    body: KnowledgeBuildRequest,
+  ) =>
     post<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge/build`,
       body,
@@ -594,17 +695,27 @@ export const api = {
   // The query builder's dropdown source (#517). No hub token: it is a distinct
   // read over local rows, so it answers with the hub down and with a mirrored
   // connection that has no credential — which is exactly when it is needed.
-  ticketFilterOptions: (connectionId: number | null, providerKind: string | null) =>
+  ticketFilterOptions: (
+    connectionId: number | null,
+    providerKind: string | null,
+  ) =>
     get<TicketFilterOptions>(
       "/tickets/filter-options" +
-        qs({ connectionId: connectionId ?? undefined, providerKind: providerKind ?? undefined }),
+        qs({
+          connectionId: connectionId ?? undefined,
+          providerKind: providerKind ?? undefined,
+        }),
     ),
-  getTicket: (externalId: string) => get<TicketDetailOut>(`/tickets/${externalId}`),
+  getTicket: (externalId: string) =>
+    get<TicketDetailOut>(`/tickets/${externalId}`),
   linkedCases: (externalId: string) =>
-    get<LinkedTestCaseOut[]>(`/tickets/${encodeURIComponent(externalId)}/linked-cases`),
+    get<LinkedTestCaseOut[]>(
+      `/tickets/${encodeURIComponent(externalId)}/linked-cases`,
+    ),
   syncTickets: (body: SyncRequest) => post<SyncResult>("/tickets/sync", body),
   // Local-only delete — never calls the provider, so a re-sync restores tickets.
-  deleteTicket: (externalId: string) => del<void>(`/tickets/${encodeURIComponent(externalId)}`),
+  deleteTicket: (externalId: string) =>
+    del<void>(`/tickets/${encodeURIComponent(externalId)}`),
   deleteTickets: (externalIds: string[]) =>
     post<{ deleted: number }>("/tickets/delete", { externalIds }),
 
@@ -621,7 +732,11 @@ export const api = {
   createSampleRun: () => post<RunDetailOut>("/runs/sample"),
   getRun: (runId: number | string) => get<RunDetailOut>(`/runs/${runId}`),
   regenerateRun: (runId: number | string, hubToken: string | null = null) =>
-    postWithHubToken<RunDetailOut>(`/runs/${runId}/regenerate`, undefined, hubToken),
+    postWithHubToken<RunDetailOut>(
+      `/runs/${runId}/regenerate`,
+      undefined,
+      hubToken,
+    ),
   cancelRun: (runId: number | string) => post<RunOut>(`/runs/${runId}/cancel`),
   // Stop + clean up a run in ANY status (in-progress → cancel; terminal → force
   // clean up orphaned in-flight rows/queues). See #420.
@@ -629,25 +744,37 @@ export const api = {
   retryRun: (runId: number | string, hubToken: string | null = null) =>
     postWithHubToken<RunOut>(`/runs/${runId}/retry`, undefined, hubToken),
   deleteRun: (runId: number | string) => del<void>(`/runs/${runId}`),
-  runRepos: (runId: number | string) => get<RunRepoOption[]>(`/runs/${runId}/repos`),
-  runAiUsage: (runId: number | string) => get<RunAiUsage>(`/runs/${runId}/ai-usage`),
+  runRepos: (runId: number | string) =>
+    get<RunRepoOption[]>(`/runs/${runId}/repos`),
+  runAiUsage: (runId: number | string) =>
+    get<RunAiUsage>(`/runs/${runId}/ai-usage`),
   setRunTicketRepo: (runId: number | string, tid: string, repo: string) =>
-    post<RunTicketOut>(`/runs/${runId}/tickets/${encodeURIComponent(tid)}/repo`, { repo }),
+    post<RunTicketOut>(
+      `/runs/${runId}/tickets/${encodeURIComponent(tid)}/repo`,
+      { repo },
+    ),
 
   // review
-  listCases: (runId: number | string) => get<TestCaseOut[]>(`/runs/${runId}/cases`),
+  listCases: (runId: number | string) =>
+    get<TestCaseOut[]>(`/runs/${runId}/cases`),
   addCase: (runId: number | string, body: TestCaseCreate) =>
     post<TestCaseOut>(`/runs/${runId}/cases`, body),
-  updateCase: (caseId: number, body: TestCaseUpdate) => patch<TestCaseOut>(`/cases/${caseId}`, body),
-  setApproval: (caseId: number, approval: "approved" | "rejected" | "pending") =>
-    post<TestCaseOut>(`/cases/${caseId}/approval`, { approval }),
-  regenerateCase: (caseId: number) => post<TestCaseOut>(`/cases/${caseId}/regenerate`),
-  approveAll: (runId: number | string) => post<TestCaseOut[]>(`/runs/${runId}/approve-all`),
+  updateCase: (caseId: number, body: TestCaseUpdate) =>
+    patch<TestCaseOut>(`/cases/${caseId}`, body),
+  setApproval: (
+    caseId: number,
+    approval: "approved" | "rejected" | "pending",
+  ) => post<TestCaseOut>(`/cases/${caseId}/approval`, { approval }),
+  regenerateCase: (caseId: number) =>
+    post<TestCaseOut>(`/cases/${caseId}/regenerate`),
+  approveAll: (runId: number | string) =>
+    post<TestCaseOut[]>(`/runs/${runId}/approve-all`),
   approveTicket: (runId: number | string, tid: string) =>
     post<TestCaseOut[]>(`/runs/${runId}/tickets/${tid}/approve`),
   createAndLink: (runId: number | string, body: CreateLinkRequest) =>
     post<LinkStatusOut>(`/runs/${runId}/testcases/create-link`, body),
-  linkStatus: (runId: number | string) => get<LinkStatusOut>(`/runs/${runId}/linked`),
+  linkStatus: (runId: number | string) =>
+    get<LinkStatusOut>(`/runs/${runId}/linked`),
 
   // automation
   generateAutomation: (runId: number | string, force = false) =>
@@ -656,7 +783,8 @@ export const api = {
     ),
   automationStatus: (runId: number | string) =>
     get<AutomationStatus>(`/runs/${runId}/automation/status`),
-  listSpecs: (runId: number | string) => get<AutomationSpecOut[]>(`/runs/${runId}/automation`),
+  listSpecs: (runId: number | string) =>
+    get<AutomationSpecOut[]>(`/runs/${runId}/automation`),
   getSpec: (caseId: number) => get<AutomationSpecOut>(`/cases/${caseId}/spec`),
   // Fire-and-forget: regeneration runs off-request on the server (it makes
   // multiple Claude calls and would otherwise exceed the proxy timeout). The
@@ -670,21 +798,31 @@ export const api = {
   // -request on the server; the reply + edited spec arrive over the run WS as
   // `automation.chat.reply` (or `automation.chat.error`). `messageId` correlates
   // the WS reply back to the pending client-side message.
-  sendSpecChat: (caseId: number, message: string, model?: string, messageId?: string) =>
+  sendSpecChat: (
+    caseId: number,
+    message: string,
+    model?: string,
+    messageId?: string,
+  ) =>
     post<{ started: boolean; caseId: number }>(`/cases/${caseId}/spec/chat`, {
       message,
       model,
       messageId,
     }),
-  updateSpec: (caseId: number, code: string) => patch<AutomationSpecOut>(`/cases/${caseId}/spec`, { code }),
+  updateSpec: (caseId: number, code: string) =>
+    patch<AutomationSpecOut>(`/cases/${caseId}/spec`, { code }),
   healSpec: (caseId: number) =>
-    post<{ started: boolean; maxAttempts: number }>(`/cases/${caseId}/spec/heal`),
+    post<{ started: boolean; maxAttempts: number }>(
+      `/cases/${caseId}/spec/heal`,
+    ),
   healStatus: (caseId: number) =>
     get<{ healing: boolean; attempt: number; maxAttempts: number }>(
       `/cases/${caseId}/spec/heal/status`,
     ),
   healReport: (caseId: number) =>
-    get<HealReport | Record<string, never>>(`/cases/${caseId}/spec/heal/report`),
+    get<HealReport | Record<string, never>>(
+      `/cases/${caseId}/spec/heal/report`,
+    ),
   runSpec: (caseId: number) => post<ExecutionOut>(`/cases/${caseId}/spec/run`),
 
   // DOM exploration (ADR 0010) — user-triggered from a blocked case. Fire-and-
@@ -706,7 +844,8 @@ export const api = {
     runId: number | string,
     body: { workers?: number; env?: string; target?: ExecutionTarget } = {},
   ) => post<ExecutionOut>(`/runs/${runId}/execution`, body),
-  getExecution: (runId: number | string) => get<ExecutionOut>(`/runs/${runId}/execution`),
+  getExecution: (runId: number | string) =>
+    get<ExecutionOut>(`/runs/${runId}/execution`),
 
   // Local Agent device pairing (#? Local Agent feature) — user-authed device
   // management. The job-claim/push protocol (`/agent/jobs/*`) is device-authed
@@ -718,35 +857,50 @@ export const api = {
   },
 
   // evidence
-  getEvidence: (runId: number | string) => get<EvidenceGrouped>(`/runs/${runId}/evidence`),
+  getEvidence: (runId: number | string) =>
+    get<EvidenceGrouped>(`/runs/${runId}/evidence`),
   annotate: (evidenceId: number, shapes: AnnotationShape[]) =>
     post<EvidenceOut>(`/evidence/${evidenceId}/annotate`, { shapes }),
   autoAnnotateEvidence: (evidenceId: number) =>
     post<EvidenceOut>(`/evidence/${evidenceId}/auto-annotate`),
 
   // reports
-  buildReport: (runId: number | string) => post<ReportOut>(`/runs/${runId}/report`),
-  getReport: (runId: number | string) => get<ReportOut>(`/runs/${runId}/report`),
+  buildReport: (runId: number | string) =>
+    post<ReportOut>(`/runs/${runId}/report`),
+  getReport: (runId: number | string) =>
+    get<ReportOut>(`/runs/${runId}/report`),
   listReports: () => get<ReportOut[]>("/reports"),
 
   // comments / publish
   prepareComments: (runId: number | string) =>
     post<TicketCommentOut[]>(`/runs/${runId}/comments/prepare`),
-  listComments: (runId: number | string) => get<TicketCommentOut[]>(`/runs/${runId}/comments`),
-  editComment: (commentId: number, body: { body?: string; targetStatus?: string }) =>
-    patch<TicketCommentOut>(`/comments/${commentId}`, body),
-  publishComment: (commentId: number) => post<TicketCommentOut>(`/comments/${commentId}/publish`),
+  listComments: (runId: number | string) =>
+    get<TicketCommentOut[]>(`/runs/${runId}/comments`),
+  editComment: (
+    commentId: number,
+    body: { body?: string; targetStatus?: string },
+  ) => patch<TicketCommentOut>(`/comments/${commentId}`, body),
+  publishComment: (commentId: number) =>
+    post<TicketCommentOut>(`/comments/${commentId}/publish`),
   publishAll: (runId: number | string, ticketIds: string[] = []) =>
     post<TicketCommentOut[]>(`/runs/${runId}/comments/publish`, { ticketIds }),
-  retryComments: (runId: number | string) => post<TicketCommentOut[]>(`/runs/${runId}/comments/retry`),
+  retryComments: (runId: number | string) =>
+    post<TicketCommentOut[]>(`/runs/${runId}/comments/retry`),
 
   // audit log
-  auditEvents: (params: { category?: string; actor?: string; q?: string; run?: string } = {}) =>
-    get<AuditEventOut[]>("/audit/events" + qs(params)),
+  auditEvents: (
+    params: {
+      category?: string;
+      actor?: string;
+      q?: string;
+      run?: string;
+    } = {},
+  ) => get<AuditEventOut[]>("/audit/events" + qs(params)),
   auditStats: () => get<AuditStats>("/audit/stats"),
   clearAuditEvents: () => del<{ deleted: number }>("/audit/events"),
-  backendLogs: (params: { level?: string; service?: string; q?: string } = {}) =>
-    get<BackendLogOut[]>("/audit/logs" + qs(params)),
+  backendLogs: (
+    params: { level?: string; service?: string; q?: string } = {},
+  ) => get<BackendLogOut[]>("/audit/logs" + qs(params)),
   backendLogStats: () => get<BackendLogStats>("/audit/logs/stats"),
 
   // artifacts — a browser <img>/<video> can't send the Authorization header,

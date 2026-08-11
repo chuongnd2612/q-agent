@@ -119,7 +119,9 @@ export class HubSsoError extends Error {
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const escaped = name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1");
-  const match = document.cookie.match(new RegExp("(?:^|; )" + escaped + "=([^;]*)"));
+  const match = document.cookie.match(
+    new RegExp("(?:^|; )" + escaped + "=([^;]*)"),
+  );
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -135,7 +137,9 @@ function readCookie(name: string): string | null {
  * (`emehub/api/app/deps_auth.py`: `CSRF_HEADER = "X-CSRF-Token"`), so the
  * double-submit check saw no header at all and answered 403 every time.
  */
-export async function requestHubAgentToken(hubBaseUrl: string): Promise<string> {
+export async function requestHubAgentToken(
+  hubBaseUrl: string,
+): Promise<string> {
   let res: Response;
   try {
     res = await fetch(`${hubBaseUrl}/auth/agent-token`, {
@@ -150,19 +154,30 @@ export async function requestHubAgentToken(hubBaseUrl: string): Promise<string> 
   } catch (err) {
     // A network-layer throw is refused/DNS/timeout — the hub is down, and the
     // user's session is very likely still fine.
-    throw new HubSsoError("hub-unreachable", err instanceof Error ? err.message : "Network error");
+    throw new HubSsoError(
+      "hub-unreachable",
+      err instanceof Error ? err.message : "Network error",
+    );
   }
 
   if (!res.ok) {
-    if (res.status === 401) throw new HubSsoError("not-signed-in", "Not signed in at EmeHub");
-    if (res.status === 403) throw new HubSsoError("csrf-mismatch", "EmeHub CSRF check failed");
-    if (res.status === 400) throw new HubSsoError("misconfigured", "Audience not registered");
-    if (res.status >= 500) throw new HubSsoError("hub-unreachable", `EmeHub error ${res.status}`);
-    throw new HubSsoError("hub-unreachable", `Unexpected EmeHub response ${res.status}`);
+    if (res.status === 401)
+      throw new HubSsoError("not-signed-in", "Not signed in at EmeHub");
+    if (res.status === 403)
+      throw new HubSsoError("csrf-mismatch", "EmeHub CSRF check failed");
+    if (res.status === 400)
+      throw new HubSsoError("misconfigured", "Audience not registered");
+    if (res.status >= 500)
+      throw new HubSsoError("hub-unreachable", `EmeHub error ${res.status}`);
+    throw new HubSsoError(
+      "hub-unreachable",
+      `Unexpected EmeHub response ${res.status}`,
+    );
   }
 
   const body = (await res.json()) as { accessToken?: string };
-  if (!body.accessToken) throw new HubSsoError("hub-unreachable", "EmeHub returned no token");
+  if (!body.accessToken)
+    throw new HubSsoError("hub-unreachable", "EmeHub returned no token");
   return body.accessToken;
 }
 
@@ -204,15 +219,20 @@ export interface SsoCompleteResult {
 }
 
 /**
- * Trade the hub token for a normal Q-Agent session.
+ * Trade the hub token for a Q-Agent session.
  *
- * Same-origin relative path (like every other `/auth/*` call) so the httpOnly
- * `qagent_refresh` cookie is set on our own origin — from here on the hub is
- * out of the loop and the session behaves like any password login.
+ * Same-origin relative path, like every other `/auth/*` call. Since #531 the
+ * response sets **no** `qagent_refresh` cookie and clears any it was sent: the
+ * session it returns is renewed against the hub, not from a cookie here, so
+ * Q-Agent's identity cannot outlive the hub session that authorised it.
+ *
+ * `silent` marks a renewal rather than a sign-in. The exchange is identical; the
+ * backend uses it to decide whether the event belongs in the audit trail.
  */
 export async function completeSsoBootstrap(
   hubToken: string,
   next: string | null,
+  { silent = false }: { silent?: boolean } = {},
 ): Promise<SsoCompleteResult> {
   // Same-origin, but the app may be mounted under a prefix — and this is a raw
   // fetch rather than a call through `lib/api.ts`, so nothing else adds it.
@@ -220,14 +240,83 @@ export async function completeSsoBootstrap(
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hubToken, next: next ?? undefined }),
+    body: JSON.stringify({ hubToken, next: next ?? undefined, silent }),
   });
   if (!res.ok) {
-    throw new HubSsoError("rejected-by-qagent", `Q-Agent refused the EmeHub token (${res.status})`);
+    throw new HubSsoError(
+      "rejected-by-qagent",
+      `Q-Agent refused the EmeHub token (${res.status})`,
+    );
   }
   const body = (await res.json()) as Partial<SsoCompleteResult>;
   if (!body.accessToken || !body.user) {
-    throw new HubSsoError("rejected-by-qagent", "Bootstrap response was not a session");
+    throw new HubSsoError(
+      "rejected-by-qagent",
+      "Bootstrap response was not a session",
+    );
   }
-  return { accessToken: body.accessToken, user: body.user, next: body.next ?? "/" };
+  return {
+    accessToken: body.accessToken,
+    user: body.user,
+    next: body.next ?? "/",
+  };
+}
+
+/**
+ * What a silent renewal concluded (#531).
+ *
+ * `renewed` carries the session rather than installing it: this module stays free
+ * of the auth store, which is what lets `lib/api.ts` consume it without either
+ * file importing the other.
+ */
+export type RenewResult =
+  /** A session for the hub's CURRENT user — install it. */
+  | { outcome: "renewed"; session: SsoCompleteResult }
+  /** The hub says nobody is signed in. Q-Agent must sign out too. */
+  | { outcome: "signed-out-at-hub" }
+  /** Could not tell — hub down, probe failed, integration off. Change nothing. */
+  | { outcome: "unknown" };
+
+/**
+ * Re-derive the session from the hub, without navigating (#531).
+ *
+ * This is what replaces the refresh cookie for an SSO session, and it is why the
+ * stale-identity bug cannot come back: the answer always describes whoever is
+ * signed in at the hub *now*. Sign out there and this reports `signed-out-at-hub`;
+ * sign in as somebody else and it installs a session for **them**.
+ *
+ * It deliberately does not consult the one-shot `hasAttemptedHubSso` marker. That
+ * sentinel exists to stop `/login` and `/sso/callback` ping-ponging via
+ * navigation, and this path never navigates — honouring it here would mean a tab
+ * that once saw a signed-out hub could never renew again.
+ *
+ * `unknown` is not a failure to act on. Treating "the hub is unreachable" as
+ * "you are logged out" is the single most confusing outcome available (§5), so
+ * the caller leaves the current session exactly as it is.
+ */
+export async function renewSessionFromHub(): Promise<RenewResult> {
+  let hubBaseUrl: string;
+  try {
+    const config = await fetchHubSsoConfig();
+    if (!config.hubSsoEnabled || !config.hubBaseUrl)
+      return { outcome: "unknown" };
+    hubBaseUrl = config.hubBaseUrl;
+  } catch {
+    return { outcome: "unknown" };
+  }
+
+  try {
+    const hubToken = await requestHubAgentToken(hubBaseUrl);
+    const session = await completeSsoBootstrap(hubToken, null, {
+      silent: true,
+    });
+    return { outcome: "renewed", session };
+  } catch (err) {
+    if (err instanceof HubSsoError && err.reason === "not-signed-in") {
+      return { outcome: "signed-out-at-hub" };
+    }
+    // Anything else — hub down, CSRF, misconfiguration, a token Q-Agent refused —
+    // says nothing reliable about whether the user is still signed in.
+    return { outcome: "unknown" };
+  }
 }
