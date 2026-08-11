@@ -75,11 +75,22 @@ export function Settings() {
 
   // Deep-link support for in-page anchors — e.g. the AI status popover's
   // "Manage Claude account" button (`/settings#claude-account`) and the
-  // Execution screen's target chip (`/settings#execution`). Sections default
-  // open, so the target's content is visible after scrolling to it.
+  // Execution screen's target chip (`/settings#execution`).
+  //
+  // Sections are collapsed by default now, so the anchored one is opened
+  // explicitly: scrolling to a collapsed heading would land the user on a title
+  // and nothing else, which is worse than the long page this collapsing fixes.
+  const anchoredSection = location.hash.slice(1);
   useEffect(() => {
     if (!location.hash) return;
-    document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // One frame, so the section has opened before we measure where to scroll —
+    // otherwise the target's height is still 0 and the page lands short of it.
+    const id = requestAnimationFrame(() =>
+      document
+        .getElementById(location.hash.slice(1))
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+    return () => cancelAnimationFrame(id);
   }, [location.hash]);
 
   // Always render one group per known kind — synthesize an empty group when the
@@ -129,7 +140,11 @@ export function Settings() {
         </GlassCard>
       </CollapsibleSection>
 
-      <CollapsibleSection title={t("sections.defaultExecution")} id="execution">
+      <CollapsibleSection
+        title={t("sections.defaultExecution")}
+        id="execution"
+        defaultOpen={anchoredSection === "execution"}
+      >
         <GlassCard lift className="p-[22px]">
           {settingsLoading || !draft ? (
             <div className="flex justify-center py-10">
@@ -432,7 +447,11 @@ export function Settings() {
         </GlassCard>
       </CollapsibleSection>
 
-      <CollapsibleSection title={t("sections.claudeAccount")} id="claude-account">
+      <CollapsibleSection
+        title={t("sections.claudeAccount")}
+        id="claude-account"
+        defaultOpen={anchoredSection === "claude-account"}
+      >
         <GlassCard lift className="p-[22px]">
           <ClaudeCredentialsCard />
         </GlassCard>
