@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
@@ -611,6 +613,38 @@ class WorkItemMetadataOut(ApiModel):
     work_item_types: list[str] = Field(default_factory=list)
     states: list[str] = Field(default_factory=list)
     epics: list[EpicOut] = Field(default_factory=list)
+
+
+class HubQueryRequest(ApiModel):
+    """A clause query bound for EmeHub, plus the destination it runs against.
+
+    ``query`` is passed to the hub **untouched**. It is the same shape the Tickets
+    query builder already produces — ``{"clauses": [{field, operator, values}],
+    "match": "all"|"any"}`` — and the hub validates it, refusing an unrunnable
+    clause with the offending index rather than dropping it. Re-encoding it here
+    would put a second, weaker validator in the path of the one that matters.
+    """
+
+    query: dict[str, Any] = Field(default_factory=dict)
+    provider_kind: str | None = None
+    connection_id: int | None = None
+    project: str | None = None
+    page: int = 1
+    page_size: int = 50
+
+
+class HubSyncRequest(ApiModel):
+    """Ask EmeHub to pull work items from the provider into its store.
+
+    Either a clause ``query`` or explicit ``ticket_ids``. The hub does the
+    provider call with its own PAT, so no credential crosses (#503).
+    """
+
+    query: dict[str, Any] | None = None
+    ticket_ids: list[str] = Field(default_factory=list)
+    provider_kind: str | None = None
+    connection_id: int | None = None
+    project: str | None = None
 
 
 class TicketFilterOptionsOut(ApiModel):

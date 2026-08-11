@@ -62,6 +62,8 @@ from app.schemas import (
     TicketDeleteRequest,
     TicketDeleteResult,
     TicketDetailOut,
+    HubQueryRequest,
+    HubSyncRequest,
     TicketFilterOptionsOut,
     TicketOut,
     TicketPageOut,
@@ -739,3 +741,128 @@ def delete_ticket(
     audit_service.record(
         category="sync", action="Removed ticket", target=external_id,
     )
+
+
+# --------------------------------------------------------- hub clause queries
+# These proxy the caller's clause query to EmeHub (#519). The query is passed
+# through untouched: the hub validates it and REFUSES an unrunnable clause with
+# the offending index, which `hub_client` surfaces as a message naming the
+# condition. Re-validating here would add a second, weaker gate in front of the
+# one that matters — and a filter silently dropped returns MORE tickets than
+# asked for, the failure a user is least likely to notice.
+#
+# All three are POST because a clause query is a body, not a query string.
+@router.post("/hub/search")
+def hub_search_tickets(
+    body: HubQueryRequest,
+    hub: str | None = Depends(hub_token_header),
+    user: User | None = Depends(current_user),  # noqa: ARG001 - auth gate only
+) -> dict:
+    """Run a clause query against EmeHub's ticket mirror. Reads only.
+
+    Returns ``{"available": false}`` rather than an error when the hub cannot be
+    consulted (flag off, no hub session, hub down), so the Tickets screen can fall
+    back to filtering local rows instead of showing an error state (#491).
+    """
+    if not hub_client.enabled() or not hub:
+        return {"available": False}
+    try:
+        result = hub_client.search_tickets(
+            hub,
+            body.query,
+            page=body.page,
+            page_size=body.page_size,
+            provider_kind=body.provider_kind,
+        )
+    except hub_client.HubRefusedError as exc:
+        # The hub rejected the QUERY itself — a real answer the user must see,
+        # not a reason to silently fall back.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except hub_client.HubClientError as exc:
+        logger.info("hub ticket search unavailable: {}", exc)
+        return {"available": False}
+    return {"available": True, **(result if isinstance(result, dict) else {})}
+
+
+@router.post("/hub/preview")
+def hub_preview_query(
+    body: HubQueryRequest,
+    hub: str | None = Depends(hub_token_header),
+    user: User | None = Depends(current_user),  # noqa: ARG001 - auth gate only
+) -> dict:
+    """What a clause query *would* pull from the provider. Writes nothing.
+
+    Asks the provider through the hub, not the hub's mirror — so it answers "what
+    is out there", which is the number worth showing before a sync commits to
+    pulling it.
+    """
+    if not hub_client.enabled() or not hub:
+        return {"available": False}
+    try:
+        result = hub_client.preview_query(
+            hub,
+            body.query,
+            provider_kind=body.provider_kind,
+            connection_id=body.connection_id,
+            project=body.project,
+        )
+    except hub_client.HubRefusedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except hub_client.HubClientError as exc:
+        logger.info("hub query preview unavailable: {}", exc)
+        return {"available": False}
+    return {"available": True, **(result if isinstance(result, dict) else {})}
+
+
+@router.post("/hub/sync")
+def hub_sync_tickets(
+    body: HubSyncRequest,
+    db: Session = Depends(get_db),
+    hub: str | None = Depends(hub_token_header),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """Ask EmeHub to pull work items from the provider, then mirror them here.
+
+    **This writes**, on the hub and then locally, so unlike the reads above a
+    failure is reported rather than swallowed: a user who pressed Sync is owed an
+    answer. The hub performs the provider call with its own PAT (#503), which is
+    why this works without a credential ever crossing.
+
+    Mirroring immediately afterwards means the pulled work is usable in a run
+    without waiting for the next page load.
+    """
+    if not hub_client.enabled() or not hub:
+        raise HTTPException(status_code=409, detail="EmeHub ticket sync is not available")
+    try:
+        result = hub_client.sync_tickets(
+            hub,
+            query=body.query,
+            ticket_ids=body.ticket_ids or None,
+            provider_kind=body.provider_kind,
+            connection_id=body.connection_id,
+            project=body.project,
+        )
+    except hub_client.HubRefusedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except hub_client.HubClientError as exc:
+        raise HTTPException(status_code=503, detail=f"EmeHub could not sync: {exc}") from exc
+
+    mirrored = hub_workspace.ensure_for_user(db, user, hub)
+    return {"hub": result if isinstance(result, dict) else {}, "mirrored": mirrored}
+
+
+@router.get("/hub/saved-queries")
+def hub_saved_queries(hub: str | None = Depends(hub_token_header)) -> dict:
+    """EmeHub's saved ticket queries — built-ins and the user's own.
+
+    Reading these means both apps offer the *same* saved queries, rather than
+    Q-Agent keeping a private browser-local copy that silently diverges.
+    """
+    if not hub_client.enabled() or not hub:
+        return {"available": False, "queries": []}
+    try:
+        queries = hub_client.list_saved_queries(hub)
+    except hub_client.HubClientError as exc:
+        logger.info("hub saved queries unavailable: {}", exc)
+        return {"available": False, "queries": []}
+    return {"available": True, "queries": queries if isinstance(queries, list) else []}
