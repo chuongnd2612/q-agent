@@ -25,11 +25,19 @@ def health() -> dict:
     is anonymous too, and it needs the hub's origin to call
     ``POST {hubBaseUrl}/auth/agent-token``. It is a public URL, not a secret —
     the shared JWT secret stays server-side and is never exposed here.
+
+    ``hubDataEnabled`` rides along too (#528). When the hub owns Claude credentials
+    and projects, Q-Agent must present that state read-only and hide its own
+    configuration controls — offering a switch that doesn't decide the outcome is
+    the defect #512 fixed for Settings. The flag *is* the switch, so the SPA reads
+    it from one place rather than guessing per resource. Deployment configuration,
+    not a secret.
     """
     return {
         "status": "ok",
         "version": __version__,
         "hubSsoEnabled": settings.hub_sso_enabled,
+        "hubDataEnabled": settings.hub_data_enabled,
         "hubBaseUrl": settings.hub_base_url.rstrip("/"),
     }
 

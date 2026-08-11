@@ -1,13 +1,22 @@
 import { ChevronDown, Info, RefreshCw, ShieldCheck, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
-import { isCredentialExpired, readFileText } from "@/components/settings/ClaudeCredentialsCard";
+import {
+  hubExpiryLabel,
+  isCredentialExpired,
+  isHubCredentialHealthy,
+  readFileText,
+} from "@/components/settings/ClaudeCredentialsCard";
 import { Pill } from "@/components/ui/badges";
 import { ClaudeLogo, Spinner } from "@/components/ui/misc";
 import {
   useAiStats,
   useClaudeCredentialsStatus,
+  useHubClaudeCredential,
+  useHubDataEnabled,
+  useHubWebUrl,
   useRefreshAiStats,
   useSetClaudeCredentialMode,
   useTestClaudeCredentials,
@@ -20,6 +29,7 @@ import type {
   ClaudeCredentialsMeta,
   ClaudeCredentialsStatus,
   ClaudeStats,
+  HubClaudeCredential,
   UsageWindow,
 } from "@/types/api";
 
@@ -27,6 +37,29 @@ import type {
 function effectiveCredMeta(s: ClaudeCredentialsStatus | undefined): ClaudeCredentialsMeta | null {
   if (!s) return null;
   return s.mode === "own" ? s.own : s.mode === "shared" ? s.shared : null;
+}
+
+/**
+ * Does the *effective* credential look expired? (#528)
+ *
+ * With hub data on, "effective" means the credential EmeHub resolved — that is
+ * what a run uses — so the local file's `expiresAt` is beside the point. Two
+ * details are load-bearing:
+ *
+ *  - `status: "refreshable"` is healthy (see `isHubCredentialHealthy`), not
+ *    expired. It is the ordinary live value, so getting it wrong pins an amber
+ *    warning to the top bar of every working hub deployment.
+ *  - When the hub can't be read (`available: false`) we fall back to judging the
+ *    local credential — because that is exactly what the backend falls back to.
+ *    An unreachable hub must not become a warning of its own (#491).
+ */
+function credentialLooksExpired(
+  hubData: boolean,
+  hubCred: HubClaudeCredential | undefined,
+  credStatus: ClaudeCredentialsStatus | undefined,
+): boolean {
+  if (hubData && hubCred?.available) return !isHubCredentialHealthy(hubCred);
+  return isCredentialExpired(effectiveCredMeta(credStatus));
 }
 
 const PANEL_WIDTH = 300;
@@ -87,8 +120,15 @@ const EMPTY_WINDOW: UsageWindow = {
  * with an opaque background, and closes on outside-click or Escape.
  */
 export function ClaudeStatsButton() {
+  // The hub-mode strings are credential vocabulary, so they live in the
+  // `settings` namespace alongside the Settings card's. The rest of this panel
+  // predates i18n and is deliberately left as it was — flag off must render
+  // exactly what it renders today.
+  const { t } = useTranslation("settings");
   const { data: stats, isPending } = useAiStats();
   const { data: credStatus } = useClaudeCredentialsStatus();
+  const { enabled: hubData } = useHubDataEnabled();
+  const { data: hubCred } = useHubClaudeCredential();
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -98,14 +138,16 @@ export function ClaudeStatsButton() {
   const operational = stats?.operational ?? false;
   // Three-state health: down (no CLI) → red, warn (CLI up but the credential is
   // expired/invalid) → amber, ok → green. The old dot only reflected the binary.
-  const expired = isCredentialExpired(effectiveCredMeta(credStatus));
+  const expired = credentialLooksExpired(hubData, hubCred, credStatus);
   const health = !operational ? "down" : expired ? "warn" : "ok";
   const dotColor = health === "down" ? "#f43f5e" : health === "warn" ? "#f59e0b" : "#34d399";
   const healthTitle =
     health === "down"
       ? "Claude CLI unavailable"
       : health === "warn"
-        ? "Claude credential expired — open to test or re-upload"
+        ? hubData
+          ? t("credential.popover.hubExpiredTitle")
+          : "Claude credential expired — open to test or re-upload"
         : undefined;
 
   return (
@@ -233,8 +275,12 @@ function StatsPanel({
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   stats: ClaudeStats;
 }) {
+  const { t } = useTranslation("settings");
   const refresh = useRefreshAiStats();
   const { data: credStatus } = useClaudeCredentialsStatus();
+  const { enabled: hubData } = useHubDataEnabled();
+  const { data: hubCred } = useHubClaudeCredential();
+  const hubWebUrl = useHubWebUrl();
   const setMode = useSetClaudeCredentialMode();
   const uploadOwn = useUploadOwnClaudeCredentials();
   const test = useTestClaudeCredentials();
@@ -243,7 +289,7 @@ function StatsPanel({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const switching = setMode.isPending || uploadOwn.isPending;
   const effMeta = effectiveCredMeta(credStatus);
-  const expired = isCredentialExpired(effMeta);
+  const expired = credentialLooksExpired(hubData, hubCred, credStatus);
   const accountName = effMeta?.accountEmail ?? null;
   const accountOrg = effMeta?.accountOrg ?? null;
   // Three-state health line (mirrors the chip dot): down / warn / ok.
@@ -419,7 +465,14 @@ function StatsPanel({
         </button>
       </div>
 
-      {/* Credential summary + Shared/Personal shortcuts */}
+      {/* Credential summary. With hub data on, EmeHub owns the credential: show
+          what it resolved and drop the self-configuration controls — the
+          mode switch and upload wouldn't change which account a run uses, and
+          `POST /ai/credentials/test` exercises the *local* resolution, so a
+          green result there would say nothing about the hub's credential. */}
+      {hubData ? (
+        <HubCredentialSummary cred={hubCred} hubWebUrl={hubWebUrl} />
+      ) : (
       <div className="mt-[14px] rounded-xl border border-[rgba(217,119,87,.22)] bg-[rgba(217,119,87,.06)] p-3">
         <div className="mb-[9px] flex items-center gap-2">
           <span className="text-[10px] font-bold tracking-[0.06em] text-[#e0a58c]">CREDENTIAL</span>
@@ -490,6 +543,7 @@ function StatsPanel({
           </div>
         )}
       </div>
+      )}
 
       {/* Rolling windows */}
       <UsageRow label="Current session" window={session} status={limitsStatus} />
@@ -582,5 +636,91 @@ function StatsPanel({
       {content}
     </div>,
     document.body,
+  );
+}
+
+/**
+ * Read-only credential summary for hub mode (#528).
+ *
+ * Everything here comes from `GET /ai/credentials/hub` — the account EmeHub
+ * resolves, which is what a run actually authenticates with. There is no mode
+ * switch, no upload and no "Test credential" button, because none of the three
+ * would decide or describe the outcome: `POST /ai/credentials/test` exercises
+ * the *local* resolution, so a green result would be an answer to a different
+ * question. The deep link goes where the account can really be changed.
+ *
+ * When the hub can't be read this degrades to a plain statement of that fact
+ * plus the fallback note. It never renders an error state and never disappears —
+ * an unreachable hub must leave every screen usable (#491).
+ */
+function HubCredentialSummary({
+  cred,
+  hubWebUrl,
+}: {
+  cred: HubClaudeCredential | undefined;
+  hubWebUrl: string | null;
+}) {
+  const { t } = useTranslation("settings");
+  const available = cred?.available === true;
+  const healthy = isHubCredentialHealthy(cred);
+  const sourceLabel =
+    cred?.source === "own"
+      ? t("credential.card.hubSourceOwn")
+      : t("credential.card.hubSourceShared");
+  // `refreshable` means "the hub holds a refresh token and renews on use" — the
+  // ordinary state of a live Claude OAuth credential, not a problem.
+  const statusLabel =
+    cred?.status === "refreshable"
+      ? t("credential.card.hubStatusRefreshable")
+      : cred?.status ?? null;
+  const meta = available
+    ? [statusLabel, cred?.subscriptionType, hubExpiryLabel(cred)].filter(Boolean).join(" · ")
+    : null;
+
+  return (
+    <div className="mt-[14px] rounded-xl border border-[rgba(139,92,246,.28)] bg-[rgba(139,92,246,.07)] p-3">
+      <div className="mb-[9px] flex items-center gap-2">
+        <span className="text-[10px] font-bold tracking-[0.06em] text-[#c4b5fd]">CREDENTIAL</span>
+        <span className="ml-auto rounded-full bg-white/[0.06] px-2 py-[2px] text-[9px] font-bold text-[#c7c7d4]">
+          {t("credential.popover.hubBadge")}
+        </span>
+      </div>
+      <div className="flex items-center gap-[9px]">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[rgba(217,119,87,.16)]">
+          <ClaudeLogo size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-bold text-ink">
+            {available ? cred?.label || sourceLabel : t("credential.popover.hubUnavailableTitle")}
+          </div>
+          <div className="truncate text-[10.5px] text-ink-dim">
+            {available ? sourceLabel : t("credential.card.hubLocalFallbackNote")}
+          </div>
+        </div>
+      </div>
+      {meta && <div className="mt-[9px] text-[10.5px] text-ink-dim">{meta}</div>}
+      {/* Only when the hub answered: "runs use the account EmeHub resolved"
+          reads as a contradiction directly under "couldn't read it". */}
+      {available && (
+        <div className="mt-[9px] text-[10.5px] leading-[1.45] text-ink-dim">
+          {t("credential.card.hubManagedBody")}
+        </div>
+      )}
+      {hubWebUrl && (
+        <a
+          href={`${hubWebUrl}/app/claude`}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-[7px] inline-flex items-center gap-1 text-[11px] font-bold text-violet"
+        >
+          {t("credential.card.hubManageLink")}
+        </a>
+      )}
+      {available && !healthy && (
+        <div className="mt-1.5 text-[10.5px] font-semibold text-[#fbbf24]">
+          {t("credential.popover.hubExpiredNote")}
+        </div>
+      )}
+    </div>
   );
 }

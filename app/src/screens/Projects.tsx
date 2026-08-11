@@ -8,7 +8,13 @@ import { providerGlyph } from "@/components/ui/badges";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { SharedProjectsCatalog } from "@/components/projects/SharedProjectsCatalog";
 import { confidenceColor, knowledgeStatusStyle, providerLabel } from "@/data/projects";
-import { useKnowledgeList, useProjects, useProviders, useRefreshProjects } from "@/hooks/queries";
+import {
+  useHubDataEnabled,
+  useKnowledgeList,
+  useProjects,
+  useProviders,
+  useRefreshProjects,
+} from "@/hooks/queries";
 import type { KnowledgeStatus, ProjectKnowledgeOut, ProjectOut } from "@/types/api";
 
 /** Aggregate a project's per-repo knowledge rows into a single card summary. */
@@ -51,6 +57,13 @@ export function Projects() {
   const { data: providers } = useProviders();
   const { data: knowledgeList } = useKnowledgeList();
   const refresh = useRefreshProjects();
+  // With hub data on, projects are mirrored from EmeHub. Refresh pulls through
+  // the provider adapters, which cannot work for a mirrored hub connection —
+  // there is no PAT behind it (#514/#501) — so the control is dead here and the
+  // "connect a provider, then refresh" call to action points nowhere. Hidden
+  // until `/health` answers, so neither flashes on screen first.
+  const { enabled: hubProjects, resolved: hubResolved } = useHubDataEnabled();
+  const showRefresh = hubResolved && !hubProjects;
 
   // Group per-repo knowledge rows by their owning project and summarize each.
   const byProject = useMemo(() => {
@@ -76,6 +89,7 @@ export function Projects() {
   useEffect(() => {
     if (
       !triedRefresh.current &&
+      showRefresh &&
       !isLoading &&
       (projects?.length ?? 0) === 0 &&
       connectedCount > 0 &&
@@ -84,23 +98,25 @@ export function Projects() {
       triedRefresh.current = true;
       refresh.mutate();
     }
-  }, [isLoading, projects, connectedCount, refresh]);
+  }, [isLoading, projects, connectedCount, refresh, showRefresh]);
 
   return (
     <div className="px-1 pb-10 pt-0.5">
       <div className="mb-5 flex items-end justify-between">
         <div>
           <div className="mb-[5px] text-[13px] font-medium text-muted">
-            {t("list.subtitle", { count: connectedCount })}
+            {hubProjects ? t("list.hubSubtitle") : t("list.subtitle", { count: connectedCount })}
           </div>
           <h1 className="m-0 text-[24px] font-black tracking-tight md:text-[28px]">
             {t("list.title")}
           </h1>
         </div>
-        <Button variant="glass" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
-          {refresh.isPending ? <Spinner size={14} /> : <RefreshCw size={15} strokeWidth={2.2} />}
-          {t("list.refresh")}
-        </Button>
+        {showRefresh && (
+          <Button variant="glass" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            {refresh.isPending ? <Spinner size={14} /> : <RefreshCw size={15} strokeWidth={2.2} />}
+            {t("list.refresh")}
+          </Button>
+        )}
       </div>
 
       <SharedProjectsCatalog />
@@ -123,16 +139,25 @@ export function Projects() {
         <EmptyState
           icon={<FolderKanban size={28} className="text-muted" />}
           title={t("list.emptyTitle")}
-          body={t("list.emptyBody")}
+          // In hub mode there is nothing to connect and nothing to refresh, so
+          // the empty state explains where projects come from instead of
+          // offering two actions that can't produce any.
+          body={hubProjects ? t("list.hubEmptyBody") : t("list.emptyBody")}
           action={
-            <div className="flex gap-2.5">
-              <Button variant="primary" onClick={() => navigate("/settings")}>
-                {t("list.openSettings")}
-              </Button>
-              <Button variant="glass" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
-                <RefreshCw size={15} strokeWidth={2.2} /> {t("list.refresh")}
-              </Button>
-            </div>
+            showRefresh ? (
+              <div className="flex gap-2.5">
+                <Button variant="primary" onClick={() => navigate("/settings")}>
+                  {t("list.openSettings")}
+                </Button>
+                <Button
+                  variant="glass"
+                  onClick={() => refresh.mutate()}
+                  disabled={refresh.isPending}
+                >
+                  <RefreshCw size={15} strokeWidth={2.2} /> {t("list.refresh")}
+                </Button>
+              </div>
+            ) : undefined
           }
         />
       ) : (

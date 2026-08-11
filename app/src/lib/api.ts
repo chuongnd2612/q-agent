@@ -424,7 +424,13 @@ export const api = {
   // `/health` is the only one of these readable while anonymous (it's in the
   // backend's auth allowlist, `/capabilities` isn't) — hence `hubSsoEnabled`
   // riding along here for the login screen (#478).
-  health: () => get<{ status: string; version: string; hubSsoEnabled: boolean }>("/health"),
+  health: () =>
+    get<{
+      status: string;
+      version: string;
+      hubSsoEnabled: boolean;
+      hubDataEnabled: boolean;
+    }>("/health"),
   capabilities: () => get<{ claude: boolean; version: string }>("/capabilities"),
   aiActivity: () => get<AiActivity>("/ai/activity"),
   aiStats: (force = false) => get<ClaudeStats>(`/ai/stats${force ? "?refresh=true" : ""}`),

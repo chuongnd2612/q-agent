@@ -58,6 +58,14 @@ export function clearHubSsoAttempt(): void {
 
 export interface HubSsoConfig {
   hubSsoEnabled: boolean;
+  /** Does EmeHub own Claude credentials and projects in this deployment? (#528)
+   *
+   * When true, Q-Agent's own configuration controls for those resources don't
+   * decide anything — runs resolve the credential from the hub and projects are
+   * mirrored from it — so the surfaces that offer them hide them and show the
+   * hub's state read-only instead. The flag is the switch: no per-resource
+   * guessing, and flipping it back restores every control unchanged. */
+  hubDataEnabled: boolean;
   hubBaseUrl: string;
 }
 
@@ -75,6 +83,7 @@ export async function fetchHubSsoConfig(): Promise<HubSsoConfig> {
   const body = (await res.json()) as Partial<HubSsoConfig>;
   return {
     hubSsoEnabled: body.hubSsoEnabled === true,
+    hubDataEnabled: body.hubDataEnabled === true,
     hubBaseUrl: (body.hubBaseUrl ?? "").replace(/\/$/, ""),
   };
 }

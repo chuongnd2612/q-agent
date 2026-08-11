@@ -251,7 +251,17 @@
       "hubEffective": "Đang dùng cho các lần chạy",
       "hubSourceShared": "Tài khoản dùng chung của EmeHub",
       "hubSourceOwn": "Tài khoản EmeHub của bạn",
-      "localFallbackNote": "Chỉ dùng khi không kết nối được EmeHub lúc bắt đầu chạy."
+      "localFallbackNote": "Chỉ dùng khi không kết nối được EmeHub lúc bắt đầu chạy.",
+      "hubIntro": "EmeHub quản lý tài khoản Claude cho không gian làm việc này, nên không có gì phải thiết lập ở đây. Bên dưới là tài khoản mà EmeHub đã xác định cho bạn.",
+      "hubLocalFallbackNote": "Q‑Agent vẫn giữ một thông tin đăng nhập riêng để dự phòng khi không kết nối được EmeHub lúc bắt đầu chạy. Nó không được cấu hình từ đây.",
+      "hubUnavailableBody": "Hiện chưa đọc được tài khoản Claude của EmeHub nên không hiển thị chi tiết. Các lần chạy sẽ tạm dùng thông tin đăng nhập lưu trong Q‑Agent cho tới khi EmeHub phản hồi trở lại.",
+      "hubStatusRefreshable": "tự động gia hạn"
+    },
+    "popover": {
+      "hubBadge": "EmeHub",
+      "hubUnavailableTitle": "Chưa đọc được thông tin từ EmeHub",
+      "hubExpiredTitle": "Tài khoản Claude do EmeHub xác định đã hết hạn — hãy xử lý trong EmeHub",
+      "hubExpiredNote": "Tài khoản này có vẻ đã hết hạn ở EmeHub — hãy xử lý tại đó; không thể thay đổi từ đây."
     },
     "dropzone": {
       "parsing": "Đang phân tích .credentials.json của bạn",

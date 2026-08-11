@@ -112,6 +112,38 @@ def test_health_reports_hub_sso_flag_when_enabled(client, monkeypatch):
     assert client.get("/health").json()["hubSsoEnabled"] is True
 
 
+def test_health_reports_hub_data_flag(client):
+    """#528: the SPA hides Q-Agent's own Claude/Projects configuration on this flag.
+
+    Defaults to False so a deployment without hub data keeps every self-service
+    control exactly as it was.
+    """
+    body = client.get("/health").json()
+
+    assert body["hubDataEnabled"] is False
+
+
+def test_health_reports_hub_data_flag_when_enabled(client, monkeypatch):
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "hub_data_enabled", True)
+
+    assert client.get("/health").json()["hubDataEnabled"] is True
+
+
+def test_health_hub_data_flag_is_readable_anonymously(client, monkeypatch):
+    """Same reason as the SSO flag: `/capabilities` is behind the auth guard."""
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "auth_required", True)
+    monkeypatch.setattr(config_module.settings, "hub_data_enabled", True)
+
+    health = client.get("/health")
+
+    assert health.status_code == 200
+    assert health.json()["hubDataEnabled"] is True
+
+
 def test_health_is_readable_anonymously_with_auth_on(client, monkeypatch):
     """The reason the flag lives on `/health` and not `/capabilities` (#478).
 
