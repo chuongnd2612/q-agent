@@ -6,6 +6,8 @@
     "refresh": "Làm mới",
     "emptyTitle": "Chưa có dự án nào được kết nối",
     "emptyBody": "Kết nối Azure DevOps, Jira hoặc GitHub trong Cài đặt, rồi làm mới để tải các dự án của bạn về.",
+    "hubSubtitle": "Được đồng bộ từ EmeHub · Q‑Agent tìm hiểu từng dự án trước khi kiểm thử",
+    "hubEmptyBody": "Trong không gian làm việc này, các dự án đến từ EmeHub. Hãy thêm hoặc kết nối dự án trong EmeHub và nó sẽ xuất hiện ở đây — không có gì để kết nối hay làm mới trong Q‑Agent.",
     "openSettings": "Mở Cài đặt"
   },
   "card": {

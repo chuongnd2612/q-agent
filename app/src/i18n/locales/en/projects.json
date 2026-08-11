@@ -6,6 +6,8 @@
     "refresh": "Refresh",
     "emptyTitle": "No connected projects",
     "emptyBody": "Connect Azure DevOps, Jira or GitHub in Settings, then refresh to pull your projects in.",
+    "hubSubtitle": "Mirrored from EmeHub · Q‑Agent learns each project before it tests",
+    "hubEmptyBody": "Projects come from EmeHub in this workspace. Add or connect a project in EmeHub and it will appear here — there is nothing to connect or refresh in Q‑Agent.",
     "openSettings": "Open Settings"
   },
   "card": {

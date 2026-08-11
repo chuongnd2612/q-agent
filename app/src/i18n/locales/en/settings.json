@@ -254,7 +254,17 @@
       "hubEffective": "Used by runs",
       "hubSourceShared": "EmeHub shared account",
       "hubSourceOwn": "Your EmeHub account",
-      "localFallbackNote": "Used only if EmeHub is unavailable when a run starts."
+      "localFallbackNote": "Used only if EmeHub is unavailable when a run starts.",
+      "hubIntro": "EmeHub manages the Claude account for this workspace, so there is nothing to set up here. What EmeHub resolved for you is shown below.",
+      "hubLocalFallbackNote": "Q‑Agent still keeps a credential of its own as a fallback for when EmeHub can't be reached as a run starts. It isn't configured from here.",
+      "hubUnavailableBody": "EmeHub's Claude account can't be read right now, so its details aren't shown. Runs fall back to the credential stored in Q‑Agent until EmeHub answers again.",
+      "hubStatusRefreshable": "auto-renewing"
+    },
+    "popover": {
+      "hubBadge": "EmeHub",
+      "hubUnavailableTitle": "EmeHub credential unavailable",
+      "hubExpiredTitle": "The Claude account EmeHub resolved is expired — fix it in EmeHub",
+      "hubExpiredNote": "This account looks expired at EmeHub — fix it there; it can't be changed here."
     },
     "dropzone": {
       "parsing": "Parsing your .credentials.json",

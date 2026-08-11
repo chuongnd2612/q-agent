@@ -11,7 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { ApiError, api } from "@/lib/api";
-import { fetchHubSsoConfig, mintHubDataToken } from "@/lib/hubSso";
+import { fetchHubSsoConfig, mintHubDataToken, type HubSsoConfig } from "@/lib/hubSso";
 import { queryKeys } from "@/lib/queryKeys";
 import type {
   AnnotationShape,
@@ -442,12 +442,59 @@ export const ALL_TICKETS_PAGE_SIZE = 1000;
  * ETag or revision counter, so a data cache goes stale silently). With the flag
  * off this resolves `false` once and no hub call is ever attempted.
  */
-let hubDataProbe: Promise<boolean> | null = null;
+let hubConfigProbe: Promise<HubSsoConfig> | null = null;
+/** `GET /health`'s deployment flags, probed at most once per page load. Never
+ * rejects — an unreachable backend resolves to "no hub", which is the safe read
+ * for both the token path below and the read-only-UI switch (#528). */
+function hubConfig(): Promise<HubSsoConfig> {
+  hubConfigProbe ??= fetchHubSsoConfig().catch(
+    (): HubSsoConfig => ({ hubSsoEnabled: false, hubDataEnabled: false, hubBaseUrl: "" }),
+  );
+  return hubConfigProbe;
+}
+
 function hubTokenObtainable(): Promise<boolean> {
-  hubDataProbe ??= fetchHubSsoConfig()
-    .then((cfg) => cfg.hubSsoEnabled && !!cfg.hubBaseUrl)
-    .catch(() => false);
-  return hubDataProbe;
+  return hubConfig().then((cfg) => cfg.hubSsoEnabled && !!cfg.hubBaseUrl);
+}
+
+/**
+ * Does EmeHub own Claude credentials and projects here? (#528)
+ *
+ * `resolved` is separate from `enabled` on purpose: until `/health` answers we
+ * don't know, and rendering a self-configuration control we may be about to hide
+ * is exactly the defect this closes. Callers hide such controls until
+ * `resolved`, and gate side effects (Projects' one-shot auto-refresh) on it too.
+ *
+ * Deployment configuration, so it is cached for the whole session — unlike hub
+ * *data*, which is never cached (the hub has no webhook or revision counter).
+ */
+export function useHubDataEnabled(): { enabled: boolean; resolved: boolean } {
+  const { data } = useQuery({
+    queryKey: ["hub", "dataEnabled"] as const,
+    queryFn: () => hubConfig().then((cfg) => cfg.hubDataEnabled),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  });
+  return { enabled: data === true, resolved: data !== undefined };
+}
+
+/**
+ * EmeHub's **web** origin for deep links, or `null` when there isn't one.
+ *
+ * `hubBaseUrl` from `/health` carries the API prefix (`…/api`); the UI lives at
+ * the origin. Shares the one `/health` probe with `useHubDataEnabled`, and
+ * resolves `null` rather than throwing so a missing link is just a missing link.
+ */
+export function useHubWebUrl(): string | null {
+  const { data } = useQuery({
+    queryKey: ["hub", "webUrl"] as const,
+    queryFn: () => hubConfig().then((cfg) => cfg.hubBaseUrl.replace(/\/api\/?$/, "") || null),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  });
+  return data ?? null;
 }
 
 /**

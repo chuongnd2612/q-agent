@@ -1,5 +1,5 @@
 import { Check, File, KeyRound, Lock, ShieldCheck, Trash2, UploadCloud, Users } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import i18n from "@/i18n";
@@ -9,12 +9,13 @@ import { ClaudeLogo, Spinner } from "@/components/ui/misc";
 import {
   useClaudeCredentialsStatus,
   useHubClaudeCredential,
+  useHubDataEnabled,
+  useHubWebUrl,
   useDeleteOwnClaudeCredentials,
   useTestClaudeCredentials,
   useUploadOwnClaudeCredentials,
 } from "@/hooks/queries";
 import { cn } from "@/lib/cn";
-import { fetchHubSsoConfig } from "@/lib/hubSso";
 import { relativeTime } from "@/screens/auth/profile/sessions";
 import type { ClaudeCredentialsMeta, HubClaudeCredential } from "@/types/api";
 
@@ -43,6 +44,41 @@ export function isCredentialExpired(meta: ClaudeCredentialsMeta | null | undefin
     if (!Number.isNaN(t) && t <= Date.now()) return true;
   }
   return false;
+}
+
+/**
+ * Is the credential EmeHub resolved usable? (#512/#528)
+ *
+ * The load-bearing case is `status: "refreshable"`. A Claude OAuth **access**
+ * token expires within hours, so a perfectly healthy hub credential is past its
+ * `expiresAt` almost immediately and the hub reports `refreshable` — meaning it
+ * holds a refresh token and will renew on use. Treating that as expired (as the
+ * local `isCredentialExpired` check would, since it only looks at `expiresAt`)
+ * paints a permanent amber warning over a working deployment.
+ *
+ * So: only an explicitly dead status is unhealthy. An unknown status on an
+ * available credential reads as fine — the hub said it has one.
+ */
+export function isHubCredentialHealthy(cred: HubClaudeCredential | undefined): boolean {
+  if (!cred?.available) return false;
+  const status = (cred.status ?? "").toLowerCase();
+  return status !== "expired" && status !== "invalid" && status !== "revoked";
+}
+
+/**
+ * Expiry text for a hub credential, or `null` when quoting it would mislead.
+ *
+ * A refreshable credential's **access** token is routinely already past
+ * `expiresAt` — the hub renews it on use — so printing "Expired" beside
+ * "auto-renewing" states the opposite of the truth. A genuinely dead credential
+ * still gets its "Expired".
+ */
+export function hubExpiryLabel(cred: HubClaudeCredential | undefined): string | null {
+  if (!cred?.expiresAt) return null;
+  const at = new Date(cred.expiresAt).getTime();
+  if (Number.isNaN(at)) return null;
+  if (at <= Date.now() && isHubCredentialHealthy(cred)) return null;
+  return formatExpiry(cred.expiresAt);
 }
 
 /** Active/Expired chip driven by the credential's real status. */
@@ -447,6 +483,7 @@ export function ClaudeCredentialsCard() {
   const { t } = useTranslation("settings");
   const { data: status } = useClaudeCredentialsStatus();
   const { data: hubCred } = useHubClaudeCredential();
+  const { enabled: hubData, resolved: hubDataResolved } = useHubDataEnabled();
   const uploadOwn = useUploadOwnClaudeCredentials();
   const deleteOwn = useDeleteOwnClaudeCredentials();
 
@@ -480,6 +517,30 @@ export function ClaudeCredentialsCard() {
       setFileError(t("credential.card.readFailed"));
     }
   };
+
+  // Don't decide what to render until `/health` has answered: showing the
+  // Shared/Your-own picker for a frame and then withdrawing it is the same
+  // "control that doesn't govern anything" defect, just briefer.
+  if (!hubDataResolved) {
+    return <div className="h-[180px] animate-pulse rounded-[16px] bg-white/[0.03]" />;
+  }
+
+  // EmeHub owns Claude credentials in this deployment (#528). Show what it
+  // resolved, read-only, and hide the picker, the upload and the remove action —
+  // none of them decides which account a run uses. The local credential is not
+  // gone (it is still the server-side fallback when the hub can't be reached at
+  // run start); it is simply not the user's to configure here.
+  if (hubData) {
+    return (
+      <div>
+        <p className="mb-[18px] text-[13.5px] leading-[1.6] text-[#a6a6b6]">
+          {t("credential.card.hubIntro")}
+        </p>
+        <HubManagedCredential cred={hubCred} />
+        <p className="text-[12.5px] text-[#8b8b9e]">{t("credential.card.hubLocalFallbackNote")}</p>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -577,27 +638,16 @@ export function ClaudeCredentialsCard() {
  * a lie of a different kind. The deep link goes where the change can actually be
  * made.
  */
-function HubManagedCredential({ cred }: { cred: HubClaudeCredential }) {
+function HubManagedCredential({ cred }: { cred: HubClaudeCredential | undefined }) {
   const { t } = useTranslation("settings");
-  const [hubWebUrl, setHubWebUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchHubSsoConfig()
-      .then(({ hubBaseUrl }) => {
-        // hubBaseUrl carries the API prefix (…/api); the UI lives at the origin.
-        if (!cancelled && hubBaseUrl) setHubWebUrl(hubBaseUrl.replace(/\/api\/?$/, ""));
-      })
-      .catch(() => {
-        /* no link rather than a broken one */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const hubWebUrl = useHubWebUrl();
+  // The hub being unreadable is not an error state (#491): the card still says
+  // who owns the credential and where to manage it, it just can't quote today's
+  // values. Blanking the surface would be the worse failure.
+  const available = cred?.available === true;
 
   const sourceLabel =
-    cred.source === "own"
+    cred?.source === "own"
       ? t("credential.card.hubSourceOwn")
       : t("credential.card.hubSourceShared");
 
@@ -608,36 +658,44 @@ function HubManagedCredential({ cred }: { cred: HubClaudeCredential }) {
     >
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
         <span className="text-[14px] font-bold text-ink">{t("credential.card.hubManagedTitle")}</span>
-        <span
-          className="rounded-full px-2 py-[2px] text-[10.5px] font-bold uppercase tracking-wider"
-          style={{ background: "rgba(52,211,153,.16)", color: "#6ee7b7" }}
-        >
-          {t("credential.card.hubEffective")}
-        </span>
-      </div>
-      <p className="m-0 mb-3 text-[12.5px] leading-relaxed text-[#a6a6b6]">
-        {t("credential.card.hubManagedBody")}
-      </p>
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12.5px]">
-        <span className="font-semibold text-ink">{cred.label || sourceLabel}</span>
-        <span className="text-[#8b8b9e]">{sourceLabel}</span>
-        {cred.subscriptionType ? (
-          <span className="text-[#8b8b9e]">{cred.subscriptionType}</span>
-        ) : null}
-        {/* `refreshable` is the common live value — a Claude OAuth access token
-            expires within hours — so it must read as usable, not expired. */}
-        {cred.status ? (
-          <span className="text-[#8b8b9e]">
-            {cred.status === "refreshable" ? "auto-renewing" : cred.status}
+        {available ? (
+          <span
+            className="rounded-full px-2 py-[2px] text-[10.5px] font-bold uppercase tracking-wider"
+            style={{ background: "rgba(52,211,153,.16)", color: "#6ee7b7" }}
+          >
+            {t("credential.card.hubEffective")}
           </span>
         ) : null}
-        {cred.expiresAt ? (
-          <span className="text-[#8b8b9e]">{formatExpiry(cred.expiresAt)}</span>
-        ) : null}
       </div>
+      <p className="m-0 mb-3 text-[12.5px] leading-relaxed text-[#a6a6b6]">
+        {available
+          ? t("credential.card.hubManagedBody")
+          : t("credential.card.hubUnavailableBody")}
+      </p>
 
-      {cred.scopes?.length ? (
+      {available ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12.5px]">
+          <span className="font-semibold text-ink">{cred?.label || sourceLabel}</span>
+          <span className="text-[#8b8b9e]">{sourceLabel}</span>
+          {cred?.subscriptionType ? (
+            <span className="text-[#8b8b9e]">{cred.subscriptionType}</span>
+          ) : null}
+          {/* `refreshable` is the common live value — a Claude OAuth access token
+              expires within hours — so it must read as usable, not expired. */}
+          {cred?.status ? (
+            <span className="text-[#8b8b9e]">
+              {cred.status === "refreshable"
+                ? t("credential.card.hubStatusRefreshable")
+                : cred.status}
+            </span>
+          ) : null}
+          {hubExpiryLabel(cred) ? (
+            <span className="text-[#8b8b9e]">{hubExpiryLabel(cred)}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {available && cred?.scopes?.length ? (
         <div className="mt-2.5">
           <ScopeChips scopes={cred.scopes} />
         </div>
