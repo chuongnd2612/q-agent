@@ -1,19 +1,26 @@
 import { motion } from "framer-motion";
 import { ChevronRight } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 /**
  * A Settings section whose body collapses/expands with a height animation, keeping
  * the page's small-caps section-label style. The header (label + a rotating
- * chevron) toggles it. Default open, so deep-link anchors (`#execution`,
- * `#claude-account`) and first-visit discoverability are unchanged — collapsing is
- * opt-in to tame the long Settings page (#430). The body stays mounted while
- * collapsed, so the settings draft and in-page anchors are preserved.
+ * chevron) toggles it.
+ *
+ * **Collapsed by default**, matching EmeHub, so the long Settings page opens as a
+ * scannable index instead of a wall. The body stays mounted while collapsed, so
+ * the settings draft and in-page anchors survive.
+ *
+ * `defaultOpen` is also honoured *after* mount: when it flips to true the section
+ * opens. That is what keeps deep links working — `/settings#claude-account` (the
+ * AI popover) and `/settings#execution` (the Execution screen's target chip) would
+ * otherwise scroll to a collapsed heading and show nothing. It never force-closes,
+ * so a section the user opened by hand stays open.
  */
 export function CollapsibleSection({
   title,
   id,
-  defaultOpen = true,
+  defaultOpen = false,
   children,
 }: {
   title: string;
@@ -23,6 +30,13 @@ export function CollapsibleSection({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+
+  // Open when the caller starts asking for it — a hash arriving after mount, e.g.
+  // clicking "Manage Claude account" while already on Settings. Deliberately
+  // one-way: it must not slam shut a section the user opened.
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   // The height-collapse animation needs `overflow: hidden`, but that clips a
   // child card's hover-lift shadow/glow (#430) once a section is open. Keep it
   // hidden while collapsed/animating and switch to `visible` only after the
