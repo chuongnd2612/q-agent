@@ -5,10 +5,13 @@ hands over a hub agent token and walks away with an ordinary Q-Agent session.
 
 Three properties carry the whole design, and each has a test here:
 
-1. **The response is login-shaped.** ``{accessToken, user}`` plus the usual
-   ``qagent_refresh``/``qagent_csrf`` cookies — identical to ``/auth/login``. That
-   is what leaves ``store/auth.ts``, ``lib/api.ts`` and ``RequireAuth`` untouched
-   on the frontend.
+1. **The response is login-shaped, but carries nothing durable.** ``{accessToken,
+   user}`` exactly as ``/auth/login`` sends it — which is what leaves
+   ``store/auth.ts``, ``lib/api.ts`` and ``RequireAuth`` untouched on the frontend
+   — and, since #531, **no** ``qagent_refresh``/``qagent_csrf``. It also *clears*
+   any it was sent. A cached identity outlived the hub session that authorised it,
+   so the next visitor to that browser inherited the previous user's session.
+   Identity is derived from the hub on every renewal now, not stored here.
 2. **It is reachable anonymously.** With ``QAGENT_AUTH_REQUIRED`` on, the global
    guard in ``main.py`` 401s any path not in ``_AUTH_ALLOWLIST``. This caller has
    no local token by definition, so a missing allowlist entry breaks the feature
@@ -96,11 +99,58 @@ def test_bootstrap_returns_a_login_shaped_body(client, sso_on):
     assert body["mfaToken"] is None
 
 
-def test_bootstrap_sets_the_normal_auth_cookies(client, sso_on):
+def test_bootstrap_issues_no_refresh_cookie(client, sso_on):
+    """#531 — an SSO session must leave nothing durable behind.
+
+    It used to set the normal pair, which is what let a signed-out hub user's
+    Q-Agent session survive: the cookie outlived the hub session that authorised
+    it, and the next `/auth/refresh` restored them.
+
+    The access token in the body is the whole credential now. Renewal goes back
+    through the hub, so identity cannot drift from it.
+    """
     complete(client, mint())
 
-    assert client.cookies.get("qagent_refresh")
-    assert client.cookies.get("qagent_csrf")
+    assert not client.cookies.get("qagent_refresh")
+    # No refresh cookie means nothing to protect with a double-submit: CSRF is
+    # only verified on `/auth/refresh`.
+    assert not client.cookies.get("qagent_csrf")
+
+
+def test_bootstrap_clears_a_previous_users_refresh_cookie(client, sso_on, db_session):
+    """THE bug in #531, in one test.
+
+    Sign in locally as one user, then bootstrap as another — exactly what
+    happens when someone signs out at the hub, signs in as somebody else and
+    clicks Launch in the same browser. The first user's `qagent_refresh` is
+    still in the jar, and merely declining to set a new one leaves it there to
+    be presented on the next refresh.
+
+    Not setting is not enough. It has to be cleared.
+    """
+    previous = User(
+        email="sam.carter@emesoft.net",
+        first_name="Sam",
+        last_name="Carter",
+        role=ROLE_MEMBER,
+        password_hash=auth_service.hash_password("correct-horse"),
+        is_active=True,
+    )
+    db_session.add(previous)
+    db_session.commit()
+
+    client.post(
+        "/auth/login",
+        json={"email": "sam.carter@emesoft.net", "password": "correct-horse", "remember": True},
+    )
+    assert client.cookies.get("qagent_refresh"), "precondition: the first user holds a cookie"
+
+    complete(client, mint())
+
+    assert not client.cookies.get("qagent_refresh")
+    # And the cleared state is real, not just absent from the jar: presenting
+    # whatever is left must not resurrect anyone.
+    assert client.post("/auth/refresh").status_code == 401
 
 
 def test_bootstrap_access_token_is_a_local_qagent_token(client, sso_on, db_session):
