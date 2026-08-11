@@ -62,17 +62,51 @@ def _client_meta(request: Request) -> tuple[str, str]:
     return ua, ip
 
 
-def _issue_login(db: Session, user: User, request: Request, response: Response, remember: bool) -> LoginResponse:
-    """Create a session, set cookies, and return the access token + user."""
+def _issue_login(
+    db: Session,
+    user: User,
+    request: Request,
+    response: Response,
+    remember: bool,
+    *,
+    persist_refresh: bool = True,
+) -> LoginResponse:
+    """Create a session, set cookies, and return the access token + user.
+
+    ``persist_refresh=False`` issues the session with **no refresh cookie**: the
+    browser leaves with an access token and nothing durable. That is the hub SSO
+    path (#531). Identity there is derived from the hub on every renewal rather
+    than cached here, so signing out at the hub signs you out of Q-Agent — there
+    is nothing left behind that could outlive the hub's session, and no
+    revocation message that could be lost in transit.
+
+    The clear matters more than the omission. A browser arriving at the SSO
+    bootstrap may still be carrying the *previous* user's ``qagent_refresh``, and
+    leaving it in place is precisely the bug: the next ``/auth/refresh`` would
+    resurrect them. Setting and deleting one cookie name in a single response is
+    ambiguous, so the two branches are exclusive.
+
+    The session row is still created, so logout, the device list and
+    ``revoke_others`` all behave uniformly — but it is given the access token's
+    lifetime rather than a refresh lifetime. Without a refresh cookie the row can
+    never be renewed, so a longer expiry would only litter the device list with
+    one dead entry per renewal.
+    """
     ua, ip = _client_meta(request)
     session, refresh_token = auth_service.create_session(
         db, user, remember=remember, user_agent=ua, ip=ip
     )
+    if not persist_refresh:
+        session.expires_at = utcnow() + auth_service.ACCESS_TTL
+        db.add(session)
     user.last_active = utcnow()
     db.add(user)
     db.commit()
-    csrf = auth_service.generate_csrf_token()
-    set_auth_cookies(response, refresh_token=refresh_token, csrf_token=csrf, remember=remember)
+    if persist_refresh:
+        csrf = auth_service.generate_csrf_token()
+        set_auth_cookies(response, refresh_token=refresh_token, csrf_token=csrf, remember=remember)
+    else:
+        clear_auth_cookies(response)
     access = auth_service.create_access_token(user, session.id)
     return LoginResponse(access_token=access, user=UserOut.model_validate(user))
 
@@ -264,10 +298,23 @@ def sso_complete(
     Without that entry the global auth guard 401s the request before this handler
     ever runs and the bootstrap can never complete.
 
-    Everything after ``hub_tokens.decode`` is the *normal* login path:
-    ``create_session`` + ``set_auth_cookies``, returning a login-shaped body. So
-    the hub token's only job is to identify the user once; from here on the
-    browser holds Q-Agent's own refresh cookie and the hub is out of the loop.
+    The session it issues carries **no refresh cookie** (#531). This used to be
+    the normal login path, on the reasoning that "the hub token's only job is to
+    identify the user once; from here on the browser holds Q-Agent's own refresh
+    cookie and the hub is out of the loop." That held while Q-Agent was its own
+    front door. Once the hub became the front door, the identity behind it could
+    change — and a cached one outlived it: signing out at the hub and back in as
+    somebody else left this app happily signed in as the previous user, serving
+    their projects, tickets and runs to whoever came next.
+
+    So identity is derived here, not cached. Renewal goes back through the hub,
+    which makes Q-Agent signed in as whoever the hub currently says and signed out
+    when the hub says nobody. Q-Agent's own ``/login`` keeps its refresh cookie and
+    is unaffected.
+
+    ``silent`` distinguishes a renewal from a sign-in. Both are the same exchange,
+    but only the latter is an event worth an audit record — without the flag the
+    log would gain a "Signed in" entry every time an access token aged out.
 
     Returns 404 when ``QAGENT_HUB_SSO_ENABLED`` is off (the feature is dormant,
     not forbidden), and 401 for any token that fails verification.
@@ -287,7 +334,13 @@ def sso_complete(
         # Deactivated locally — the hub authenticates, but Q-Agent authorises.
         raise HTTPException(status_code=403, detail="This account is deactivated")
 
-    result = _issue_login(db, user, request, response, remember=True)
+    result = _issue_login(db, user, request, response, remember=True, persist_refresh=False)
+    if body.silent:
+        return SsoCompleteResponse(
+            access_token=result.access_token,
+            user=result.user,
+            next=_safe_next(body.next),
+        )
     audit_service.record(
         category="auth",
         actor_type="user",

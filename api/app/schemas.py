@@ -1127,6 +1127,11 @@ class SsoCompleteRequest(ApiModel):
 
     hub_token: str
     next: str | None = None
+    #: True when this is a *renewal* of an existing SSO session rather than a
+    #: sign-in (#531). The exchange is identical; only the audit trail differs —
+    #: an access token ageing out is not a sign-in event and must not be logged as
+    #: one, or the trail fills with entries nobody performed.
+    silent: bool = False
 
 
 class SsoCompleteResponse(LoginResponse):
