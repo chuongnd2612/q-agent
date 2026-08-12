@@ -117,6 +117,59 @@ def test_run_prompt_injects_skill_as_system(monkeypatch, shared_claude_credentia
     assert "Test Case Generator" in injected
 
 
+# ---------------------------------------------------------------------------
+# Guardrail (#542, reversing #178): the SKILL and the generation prompt must
+# describe ONE achievable spec shape. #178 was closed because the skill demanded
+# reuse the prompt forbade; this asserts they no longer disagree — in either
+# direction.
+# ---------------------------------------------------------------------------
+
+
+def _generation_prompt() -> str:
+    from types import SimpleNamespace
+
+    from app.services.spec_service import _build_prompt
+
+    return _build_prompt(
+        SimpleNamespace(
+            title="Pay an invoice", precondition=None, steps=[], test_data=[],
+            ticket_external_id="ADO-1", code="TC-01",
+        )
+    )
+
+
+def test_automation_generator_skill_and_prompt_agree_on_the_layered_shape():
+    skill = skills.load_skill(skills.AUTOMATION_GENERATOR, include_template=True)
+    prompt = _generation_prompt()
+    assert skill
+    for text in (skill, prompt):
+        assert "@q-agent/playwright-base" in text
+        # the real spec depth: tests/<TICKET>/<spec>.spec.ts -> ../../pages
+        assert "../../pages" in text
+    # The old standalone mandate is gone from both halves.
+    assert "no other imports" not in skill
+    assert "import { test, expect } from '@playwright/test';" not in skill
+
+
+def test_automation_generator_skill_forbids_inventing_page_object_imports():
+    """Page objects arrive in #544/#545. Until then the skill must permit an asset
+    import only where a reference spec proves the file exists."""
+    skill = skills.load_skill(skills.AUTOMATION_GENERATOR, include_template=True)
+    assert skill
+    assert "REFERENCE SPEC" in skill.upper()
+    assert "Never invent" in skill
+
+
+def test_live_authoring_skill_matches_the_same_contract():
+    skill = (
+        Path(skills.settings.skills_dir) / "live-authoring" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "@q-agent/playwright-base" in skill
+    assert "No inline login" in skill
+    # the discovery sidecar survives the rewrite
+    assert "discovery sidecar" in skill and '"selectors"' in skill
+
+
 def test_run_prompt_merges_skill_and_explicit_system(monkeypatch, shared_claude_credential):
     captured = {}
 

@@ -1,10 +1,10 @@
 # Example — automation-generator
 
-## Input (approved manual test cases + Project Knowledge Base)
+## Input (one approved manual test case + Project Knowledge Base)
 
-Knowledge Base (excerpt) says: Playwright 1.44 / TypeScript; locator priority `data-testid` →
-`getByRole`; existing Page Objects `LoginPage`, `InvoiceListPage`; auth via `storageState` fixture
-`test` exported from `e2e/fixtures.ts`.
+Knowledge Base (excerpt) says: Playwright / TypeScript; locator priority `data-testid` →
+`getByRole`; base URL `https://app.example.com`; route `/invoices/:id` (Invoice detail);
+auth handled by the run's saved manual-login session.
 
 **TC-2481-001 — Pay an open invoice (happy path)**
 - Preconditions: Logged in as Agent; invoice `INV-1001` is in status *Open*.
@@ -16,52 +16,56 @@ Knowledge Base (excerpt) says: Playwright 1.44 / TypeScript; locator priority `d
   - Confirmation banner is shown.
   - Invoice status becomes *Paid*.
 
-**TC-2481-002 — Pay now blocked for Viewer role (permission)**
-- Preconditions: Logged in as Viewer; invoice `INV-1001` is *Open*.
-- Steps:
-  1. Open invoice `INV-1001`.
-- Expected Results:
-  - **Pay now** action is not available.
+## Expected Output — `tests/ADO-2481/ADO-2481-TC-2481-001.spec.ts`
 
-## Expected Output — `e2e/tests/invoice-payment.spec.ts`
+No page object exists for the invoice screen yet and no reference spec imports one, so the locators
+stay inline **this once** — an invented `../../pages/InvoiceListPage` import would fail collection and
+be rejected. A later stage extracts them.
 
 ```ts
 /**
  * Source ticket : ADO-2481
- * Traceability  : TC-2481-001 → "pay an open invoice",
- *                 TC-2481-002 → "viewer cannot pay"
- * Reused assets : LoginPage, InvoiceListPage; `test` fixture (storageState)
- * New PO methods: InvoiceListPage.pay(id)  // added — payment flow not previously covered
+ * Test Case ID  : TC-2481-001
+ * Reused        : @q-agent/playwright-base (test + evidence + saved session)
  */
-import { test, expect } from '../fixtures';        // reused auth fixture (storageState)
-import { InvoiceListPage } from '../pages/InvoiceListPage';
+import { test, expect } from '@q-agent/playwright-base';
 
-test.describe('Invoice payment — ADO-2481', () => {
-  test('TC-2481-001 pay an open invoice', async ({ agentPage }) => {
-    const invoices = new InvoiceListPage(agentPage);
-    await invoices.goto();
+test('TC-2481-001 — Pay an open invoice', async ({ page }) => {
+  // Arrange — already authenticated by the run's saved session; no login here.
+  await page.goto('https://app.example.com/invoices/INV-1001');
 
-    // Act — reuse/extend Page Object rather than inlining selectors
-    await invoices.pay('INV-1001');
+  // Act
+  await page.getByTestId('pay-now').click();
+  await page.getByRole('button', { name: 'Confirm payment' }).click();
 
-    // Assert — one assertion per Expected Result
-    await expect(invoices.confirmationBanner).toBeVisible();
-    await expect(invoices.statusBadge('INV-1001')).toHaveText('Paid');
-  });
-
-  test('TC-2481-002 viewer cannot pay', async ({ viewerPage }) => {
-    const invoices = new InvoiceListPage(viewerPage);
-    await invoices.goto();
-    await invoices.open('INV-1001');
-
-    // Permission expected result — action absent
-    await expect(invoices.payButton).toBeHidden();
-  });
+  // Assert — one web-first assertion per Expected Result
+  await expect(page.getByTestId('confirmation-banner')).toBeVisible();
+  await expect(page.getByTestId('invoice-status')).toHaveText('Paid');
 });
 ```
 
-## Notes on reuse discipline
-- `data-testid`-based locators live inside `InvoiceListPage`, not the spec (KB locator priority).
-- Auth uses the existing `agentPage` / `viewerPage` fixtures — no login re-scripted per test.
-- Only one new Page Object method (`pay(id)`) was introduced, and it is flagged in the header for
-  the reviewer.
+## Expected Output when a page object DOES exist
+
+If a reference spec from this project shows `import { InvoiceListPage } from '../../pages/InvoiceListPage';`,
+that file is proven to exist — reuse it, and the spec becomes business steps only:
+
+```ts
+import { test, expect } from '@q-agent/playwright-base';
+import { InvoiceListPage } from '../../pages/InvoiceListPage';
+
+test('TC-2481-001 — Pay an open invoice', async ({ page }) => {
+  const invoices = new InvoiceListPage(page);
+  await invoices.open('INV-1001');
+
+  await invoices.pay('INV-1001');
+
+  await expect(invoices.confirmationBanner).toBeVisible();
+  await expect(invoices.statusBadge('INV-1001')).toHaveText('Paid');
+});
+```
+
+## Notes on discipline
+- One `test()` per case, plain-string title prefixed with the Test Case ID, no `test.describe`-only file.
+- `test`/`expect` come from `@q-agent/playwright-base`, never `@playwright/test`.
+- No login is re-scripted per spec — the saved manual-login session authenticates it.
+- Imports of shared project files use the real depth (`../../pages/…`) and only when proven to exist.

@@ -1,7 +1,7 @@
 ---
 name: automation-generator
-description: Generate a runnable, standalone Playwright + TypeScript spec from an approved manual test case, baking in the real base URL, credentials, routes and selectors discovered in the Project Knowledge Base. Use when the user says "automate these test cases", "generate Playwright specs", "write e2e tests for this ticket", or after test cases have been approved by test-case-reviewer.
-version: 1.1.0
+description: Generate a runnable Playwright + TypeScript spec from an approved manual test case, layered on the shared @q-agent/playwright-base framework and the project's accumulating asset library, baking in the real base URL, credentials, routes and selectors discovered in the Project Knowledge Base. Use when the user says "automate these test cases", "generate Playwright specs", "write e2e tests for this ticket", or after test cases have been approved by test-case-reviewer.
+version: 2.0.0
 author: Andrew
 ---
 
@@ -9,35 +9,87 @@ author: Andrew
 
 ## Purpose
 
-Convert **one approved** Azure DevOps-style manual test case into a single, runnable, self-contained
-Playwright + TypeScript spec file.
+Convert **one approved** Azure DevOps-style manual test case into a single runnable Playwright +
+TypeScript spec file inside the project's **persistent automation project**.
 
 This skill never invents application structure. It reads the **Project Knowledge Base**
-(`knowledge.md` / `knowledge.json`) and bakes the real base URL, real test-account credentials, real
-routes, and real selectors directly into the generated spec so it runs with no manual fixups.
+(`knowledge.md` / `knowledge.json`) and bakes the real base URL, real routes, and real selectors
+directly into the generated spec so it runs with no manual fixups. (Real test-account credentials are
+supplied too, but a spec only uses them when the case's subject *is* authentication — see below.)
 
-## The Standalone-Spec Architecture (read this before generating)
+## The Layered Architecture (read this before generating)
 
-Each case is generated **independently**, one Claude call at a time, with no access to the rest of a
-project's codebase (no page objects, no fixtures, no helper files to import — they usually don't
-exist as importable modules the generated spec can reach). The **only** inputs are:
+Generated specs are **not** standalone files any more. They live in a living automation project that
+accumulates shared assets, and they sit on top of a published base framework:
 
-- the test case (title, precondition, steps, expected results), and
-- the Project Knowledge Base's discovered facts — base URL, routes, selectors, auth flow, and the
-  **names** of any existing Page Objects / fixtures / utilities (informational only; there is no file
-  path to import them from).
+```text
+Layer 2  @q-agent/playwright-base   test, expect, auth plumbing, assertion helpers, waits, data
+Layer 3  <automation project>/      pages/ components/ fixtures/ data/ utils/ config/
+                                    tests/<TICKET-ID>/<TICKET-ID>-<CASE>.spec.ts   ← you write this
+```
 
-Because of this, every generated spec MUST be a **single, self-contained file**:
+Two facts about that layout are load-bearing:
 
-- `import { test, expect } from '@playwright/test';` — **no other imports**. Do not invent
-  `import { LoginPage } from '../pages/LoginPage'` or similar; that module does not exist in the
-  generated spec's directory and the file will fail to compile.
-- **One `test()` block per case**, inlining login, navigation, actions and assertions directly against
-  `page`. If the KB documents a `storageState`/auth flow, describe the login inline using the real
-  login URL and real test-account credentials — do not assume a reusable auth fixture is importable.
-- If the KB names existing Page Objects/fixtures/utilities that already wrap a screen, you may mention
-  them in a short comment (so a human can later wire the file into that structure) — but the spec
-  itself must still work standalone with only `@playwright/test`.
+1. **The spec is TWO levels below the project root.** A shared project file is imported as
+   `../../pages/Foo`, `../../fixtures/app.fixture`, `../../data/users` — **never** `../pages/Foo`.
+2. **The gate collects the whole project** (`playwright test --list`), so an import that does not
+   resolve is a hard rejection, and a file with only a `test.describe(...)` and no `test()` inside is
+   rejected too.
+
+So every generated spec:
+
+- imports `test`, `expect` and any assertion helper from **`@q-agent/playwright-base`** — never from
+  `@playwright/test` directly. That `test` is Playwright's `test` extended with always-on evidence
+  capture and replay of the run's saved session, so it is a drop-in replacement;
+- contains **exactly one `test()` block** for the case, its title a plain quoted string (never a
+  template literal with `${...}` in it) prefixed with the Test Case ID;
+- reads as **business steps + web-first assertions** — not a recording of browser mechanics;
+- **never inlines a login flow** (see *Auth is not your job*, below).
+
+### Page objects: import only what you can see
+
+Locators and low-level UI mechanics belong in a shared page object. But this stage does **not** create
+page objects, and most projects do not have one for your screen yet. Therefore:
+
+- **Only import a project file that appears as an import in a REFERENCE SPEC** given to you. Those
+  reference specs are real, already-passing specs from this same project, so their imports are proof
+  the file exists.
+- **Never invent** `import { LoginPage } from '../../pages/LoginPage'` on the assumption that it
+  exists. `pages/` is usually empty; importing a file that is not there fails collection and the whole
+  spec is rejected. Only the base-package import became legal — inventing an asset import is exactly
+  as wrong as it always was.
+- A page object / fixture **name** listed in the Project Knowledge Base is *metadata*, not a file in
+  this project. Never turn a KB name into an import path.
+- When no shared page object is available to you, **keep the locators inline in the spec**, chosen by
+  the project's locator priority, and keep the body a thin, readable sequence of steps. A later stage
+  extracts them into page objects — do not pre-empt it with an import that cannot resolve.
+
+### What the base framework already gives you
+
+Take these from `@q-agent/playwright-base` instead of writing your own:
+
+- `test`, `expect` — the extended test (evidence capture + saved-session replay) and Playwright's
+  `expect`.
+- Auth plumbing: `createAuthenticatedTest`, `formLoginFlow`, `performFormLogin`, `ensureLoggedIn`,
+  `hasStorageState`, `applySessionStorage`.
+- Web-first assertion helpers: `expectVisible`, `expectHidden`, `expectText`, `expectContainsText`,
+  `expectValue`, `expectChecked`, `expectEnabled`, `expectDisabled`, `expectCount`, `expectAttribute`,
+  `expectClass`, `expectUrl`, `expectTitle`, `expectRowVisible`, `expectAllVisible`,
+  `expectEventuallyGone`.
+- Waits/retry (never a hard sleep): `waitFor`, `retry`, `withTimeout`.
+- Dynamic data: `uniqueId`, `uniqueSuffix`, `randomEmail`, `randomString`, `randomInt`, `isoDate`,
+  `today`, `addDays`, `daysFromNow`, `formatDate`.
+- Files / API / logging / config: `uploadFiles`, `downloadTo`, `readJson`, `writeJson`,
+  `createApiClient`, `logger`, `env`, `resolveUrl`.
+
+### Auth is not your job
+
+The run installs its saved manual-login session (storageState + `sessionStorage` replay) via the base
+package's `test` fixture and the project's Playwright config, so **the spec starts authenticated**.
+Do not re-generate the `goto('/login')` → fill → fill → click preamble; navigate straight to the route
+the case starts on. The one exception is a case whose *subject* is authentication (login, logout,
+session expiry, permissions) — then drive the real login form with the real credentials from the
+injected context, preferably via `formLoginFlow` / `performFormLogin` from the base package.
 
 ## Position in the QA Pipeline
 
@@ -74,12 +126,13 @@ From the Knowledge Base, use directly (do not invent):
 - The application **base URL** and per-environment URLs (`environments`).
 - The real **application routes / URL patterns** discovered in the code (`routes`).
 - The real **selectors / data-testids** discovered in the code (`selectors`: screen/element → selector).
-- The **login URL and auth flow** (`auth.login_url`, `auth.login_flow`, `auth.storage_state`).
+- The **login URL and auth flow** (`auth.login_url`, `auth.login_flow`, `auth.storage_state`) — for an
+  authentication-subject case only; every other spec consumes the saved session instead.
 - The **test-account credentials supplied at generation time** (username + password from the injected
-  project context) — reference them directly in the spec.
+  project context) — reference them directly, but only in an authentication-subject spec.
 - The documented **locator strategy** (selector priority order).
 - The names of existing **Page Objects / fixtures / utilities** — informational context only (see
-  above); never import them.
+  *Page objects: import only what you can see*); never turn a name into an import.
 
 Some routes/selectors may be stamped `verified_at_runtime` — discovered live by the DOM exploration
 agent rather than inferred from source. These are marked `✓ runtime-verified` in the injected project
@@ -99,29 +152,39 @@ If any prerequisite is missing, stop and request that `project-bootstrap` (for t
    `data-testid` → `getByRole` → `getByLabel` → CSS → XPath). Never hard-code brittle selectors
    (raw CSS classes, DOM-structure-dependent combinators, `:nth-child`) when a higher-priority,
    KB-known option exists.
-4. **Inline auth** — log in using the real login URL/flow and the real test-account credentials from
-   the injected project context. Do not import a fixture module that doesn't exist in the spec file.
+4. **Consume the shared session — do not log in** — the spec starts authenticated (see *Auth is not
+   your job*). Only a case whose subject IS authentication drives the login form, and then via the
+   base package's `formLoginFlow` / `performFormLogin` with the real credentials.
 5. **Bake in real project values** — use the REAL base URL, routes, selectors, login URL and
    test-account credentials from the injected project context DIRECTLY in the spec. Do not invent
    selectors or URLs, and do not emit placeholders, when the context provides them. Emit a
    clearly-marked `// TODO` placeholder only for a value that is genuinely absent from that context.
 6. **Assert against expected results** — every "Expected Result" in the case becomes a **web-first
-   assertion** (`await expect(locator).toBeVisible()`, `.toHaveText(...)`, etc.), relying on
-   Playwright's built-in auto-waiting.
+   assertion** (`await expect(locator).toBeVisible()`, `.toHaveText(...)`, or a base-package helper
+   such as `expectVisible(...)` / `expectText(...)` / `expectUrl(...)`), relying on Playwright's
+   built-in auto-waiting.
 7. **No hard waits** — never use `page.waitForTimeout(...)` or other arbitrary sleeps. Web-first
-   assertions and auto-waiting locators are the only waiting mechanism.
-8. **Emit the spec** — one self-contained `*.spec.ts` file following `templates/playwright-spec.ts`.
+   assertions and auto-waiting locators are the only waiting mechanism; for a genuine non-UI wait use
+   the base package's `waitFor` / `retry` / `withTimeout`.
+8. **Reuse the base framework** — take `test`, `expect`, assertion helpers, waits and dynamic test-data
+   generators from `@q-agent/playwright-base` instead of reimplementing them.
+9. **Emit the spec** — one `*.spec.ts` file following `templates/playwright-spec.ts`.
 
 ## Output
 
-- One Playwright spec file (`*.spec.ts`) following `templates/playwright-spec.ts`: a single
-  self-contained `test()`, importing only `@playwright/test`, tagged with its source Test Case ID.
+- One Playwright spec file (`*.spec.ts`) following `templates/playwright-spec.ts`: a single `test()`
+  importing from `@q-agent/playwright-base` (plus any shared project file a reference spec proves
+  exists), tagged with its source Test Case ID.
 
 ## Quality Rules
 
-- **Single, standalone spec.** Only `import { test, expect } from '@playwright/test';`. Never invent
-  imports of Page Objects, fixtures, or helper modules that don't exist in the generated file's
-  directory.
+- **Layered, not standalone.** Import `test`/`expect`/helpers from `@q-agent/playwright-base`; never
+  from `@playwright/test` directly. Import a shared project file only when a reference spec proves it
+  exists, and always at the real depth (`../../pages/…`). Never invent an import.
+- **Exactly one `test()`** per spec, plain-string title, Test Case ID prefixed. A `test.describe` with
+  no `test()` inside is rejected.
+- **No inline login.** The saved manual-login session authenticates the spec; only an
+  authentication-subject case touches the login form.
 - Follow the Knowledge Base's **locator priority** — prefer `data-testid`/role/label; avoid raw
   CSS/XPath, bare class selectors, and `:nth-child`/`:nth-of-type` combinators.
 - Each assertion must map to a specific **Expected Result** in the source case, and must be a
@@ -141,7 +204,16 @@ If any prerequisite is missing, stop and request that `project-bootstrap` (for t
 
 ## Handoff / Success Criteria
 
-The generated spec runs against the project standalone, with no manual fixups. It is consumed next by
-`automation-reviewer` (static quality review) and then by `execution-analyzer` (runtime results).
-Success = the approved test case has a corresponding, traceable, runnable `test()` with web-first
-assertions and no hard waits.
+The generated spec collects cleanly inside the automation project (`playwright test --list` over the
+whole project) and runs with no manual fixups. It is consumed next by `automation-reviewer` (static
+quality review) and then by `execution-analyzer` (runtime results). Success = the approved test case
+has a corresponding, traceable, runnable `test()` that imports from `@q-agent/playwright-base`, has no
+inline login, uses web-first assertions and no hard waits.
+
+## Self-heal (when a spec you wrote comes back failing)
+
+Fix the defect, not the design. Keep the `@q-agent/playwright-base` import and every import of a
+shared project file. **Inlining a page object's locators, a fixture's setup, or a login flow back into
+the spec to route around it is a rejection** — even if the flattened spec would pass. If the real
+defect looks like it lives in an imported page object, correct how the spec uses it and note the
+suspect file in one brief comment.

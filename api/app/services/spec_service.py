@@ -23,7 +23,11 @@ from app.models.run import RunTicket
 from app.models.testcase import TestCase
 from app.models.ticket import Ticket
 from app.services import claude_cli, project_config_service
-from app.services.prompts import render_dom_snapshot, render_project_context
+from app.services.prompts import (
+    render_base_framework_api,
+    render_dom_snapshot,
+    render_project_context,
+)
 from app.services.skills import AUTOMATION_GENERATOR
 from app.services.workspace_scope import scoped_specs_dir
 
@@ -35,10 +39,79 @@ _EXAMPLE_MAX_CHARS = 6000
 
 _SYSTEM_PROMPT = (
     "You are a senior QA automation engineer. You write clean, runnable "
-    "Playwright + TypeScript test specs using @playwright/test. Respond with "
+    "Playwright + TypeScript test specs on top of the shared "
+    "@q-agent/playwright-base framework, in a layered automation project where "
+    "low-level detail lives in shared files and the spec reads as business "
+    "steps. Respond with "
     "ONLY the TypeScript source code for a single spec file, wrapped in a "
     "```typescript fenced code block. Do not include any prose before or "
     "after the code block."
+)
+
+# The layered spec contract (#542, reversing #178) — the prompt half of the pair
+# that MUST stay in step with `skills/automation-generator/SKILL.md`. Editing one
+# alone recreates the system-vs-user dissonance #178 closed for.
+#
+# Two hard constraints from the machinery, not preferences:
+#  * Specs live at `tests/<TICKET>/<TICKET>-<CASE>.spec.ts` — TWO levels below the
+#    project root — so a project file is `../../pages/Foo`, never `../pages/Foo`.
+#  * `automation_gate.list_ok_in_project` requires rc==0 AND the candidate's
+#    `test()` titles in the `--list` output, so an import that does not resolve is
+#    a hard rejection, and a `test.describe` with no `test()` inside is one too.
+#
+# Hence the deliberate asymmetry: importing `@q-agent/playwright-base` is
+# mandatory (it is genuinely installed by `automation_project_service.ensure_deps`),
+# while importing a page object is allowed ONLY when a reference spec proves that
+# file exists. #544/#545 add the planner and the page-object author; until then,
+# inline locators are still correct and an invented `../../pages/Foo` import would
+# be the #178 failure mode from the other direction.
+_SPEC_ARCHITECTURE = (
+    "Spec architecture — layered (doc §12). This spec file is written into the "
+    "project's persistent automation project at "
+    "`tests/<TICKET-ID>/<TICKET-ID>-<CASE>.spec.ts`, i.e. TWO directory levels "
+    "below the project root: a shared project file is therefore imported as "
+    "`../../pages/Foo`, `../../fixtures/app.fixture`, `../../data/users` — never "
+    "`../pages/Foo`.\n"
+    "- Import `test`, `expect` and any assertion helper from "
+    "'@q-agent/playwright-base'. Never import '@playwright/test' directly.\n"
+    "- Emit exactly ONE `test(...)` block for this case. A file containing only a "
+    "`test.describe(...)` with no `test()` inside it is rejected. Write the test "
+    "title as a plain quoted string — never a template literal with `${...}` in "
+    "it.\n"
+    "- The body reads as business steps plus web-first assertions, not as a "
+    "recording of browser mechanics.\n"
+    "- Do NOT write an inline login flow (see the authentication policy below).\n"
+    "- Locators and low-level UI mechanics belong in a shared page object (doc "
+    "§14) — BUT only import a project file you can actually SEE: one that appears "
+    "as an import in a REFERENCE SPEC above. Nothing else under `pages/`, "
+    "`fixtures/`, `components/`, `data/` or `utils/` is guaranteed to exist yet, "
+    "and importing a file that does not exist fails collection, so the spec is "
+    "rejected outright. Never invent `import { LoginPage } from "
+    "'../../pages/LoginPage'` in the hope that it exists, and never treat a page "
+    "object / fixture NAME listed in the project context as proof of a file — "
+    "those names are Knowledge-Base metadata, not files in this project.\n"
+    "- So when no shared page object is available to you, keep the locators "
+    "inline in this spec, chosen by the project's locator priority, and keep the "
+    "body a thin, readable sequence of steps. A later stage extracts them into "
+    "page objects; do not pre-empt it with an import that cannot resolve."
+)
+
+# Heal / edit guard (#542). Until the heal loop becomes project-aware (#547) it
+# rewrites ONLY `spec.code`, so a fixer told merely to "make it pass" will happily
+# flatten the layering — re-inline a page object's locators, drop the base-package
+# import, or paste the login flow back in — and the spec would still pass the
+# gate. State the rejection explicitly instead.
+_ARCHITECTURE_GUARD = (
+    "Preserve the spec's architecture — fix the defect, not the design. Keep the "
+    "imports from '@q-agent/playwright-base' (never swap them back to "
+    "'@playwright/test') and keep every import of a shared project file "
+    "(`../../pages/…`, `../../fixtures/…`, `../../data/…`). Do NOT inline a page "
+    "object's locators, a fixture's setup, or a login flow back into the spec to "
+    "route around it, and do NOT delete an import to make the file "
+    "self-contained: a fix that flattens the layering is REJECTED even if it "
+    "would pass. If the real defect is inside an imported page object, correct the "
+    "spec's use of it and note the suspected file in one brief comment rather "
+    "than re-inlining its locators."
 )
 
 # Robustness rules shared by generation and self-heal prompts (#178 promotes
@@ -51,19 +124,34 @@ _ROBUSTNESS_RULES = (
     "use page.waitForTimeout(...) or any other arbitrary hard-coded wait."
 )
 
-# Auth policy shared by generation, self-heal, and chat-edit prompts (#291).
+# Auth policy shared by generation, self-heal, and chat-edit prompts (#291, #542).
 # Authentication is handled OUTSIDE the spec — by the run's saved manual-login
-# session (storageState) and the real test-account credentials injected in the
-# project context. So the spec must never mock/bypass auth, and must never
-# narrate its auth strategy (the old "Auth note" boilerplate).
+# session (storageState + sessionStorage replay, installed by the base package's
+# `test` fixture and the project's Playwright config) and the real test-account
+# credentials injected in the project context. So the spec must never mock/bypass
+# auth, and must never narrate its auth strategy (the old "Auth note" boilerplate).
+#
+# #542 tightens "log in inline OR rely on the session" into "rely on the session,
+# with authentication cases as the one exception". Re-inlining the same login
+# preamble into every generated spec is the single largest source of generated bulk
+# and flake today (doc §17), and it is what the base package's session fixture
+# exists to delete.
 _AUTH_POLICY = (
-    "Authentication is already handled for you: the run uses the project's saved "
-    "manual-login session together with the real test-account credentials in the "
-    "project context. Test the app as a real authenticated user. Do NOT mock, "
+    "Authentication is already handled for you, OUTSIDE the spec (doc §17): the run "
+    "installs its saved manual-login session (storageState + sessionStorage replay) "
+    "through the `test` fixture from '@q-agent/playwright-base' and the project's "
+    "Playwright config, so the spec STARTS authenticated. Do NOT re-implement login: "
+    "no `goto('/login')` + fill username + fill password + click preamble at the top "
+    "of the spec. Navigate straight to the route the case starts on and test the app "
+    "as a real authenticated user. The ONE exception is a case whose subject IS "
+    "authentication (login, logout, session expiry, permissions) — then drive the "
+    "real login form with the real test-account credentials from the project "
+    "context, preferably via `formLoginFlow`/`performFormLogin` from the base "
+    "package rather than hand-rolled fills. Do NOT mock, "
     "stub, intercept, or bypass authentication — never route-mock identity/session "
     "endpoints (e.g. GET /api/sessions/me, /api/sessions/permissions), never assume "
     "environment flags such as VITE_BYPASS_AUTH, and never fabricate a storageState. "
-    "Log in inline with the real credentials, or rely on the saved session. Do NOT "
+    "Do NOT "
     "emit meta-commentary or an \"Auth note\" explaining auth strategy, mocking "
     "decisions, or environment assumptions; keep comments to brief step annotations."
 )
@@ -206,8 +294,10 @@ def _build_prompt(
         grounding = (
             f"{project_block}\n\n"
             "Use the real values above DIRECTLY in the spec: navigate to the real "
-            "base URL / routes, log in with the real credentials, and use the real "
-            "selectors and locator strategy. Only fall back to a clearly-marked "
+            "base URL / routes and use the real selectors and locator strategy. The "
+            "real credentials are there for an authentication-subject case only — the "
+            "spec does not log in (see the authentication policy below). Only fall "
+            "back to a clearly-marked "
             "// TODO placeholder for a value that is genuinely absent from the "
             "context above.\n\n"
         )
@@ -230,16 +320,18 @@ def _build_prompt(
         f"Generate a Playwright TypeScript test spec for this manual test case.\n\n"
         f"{grounding}"
         f"{reviewer_block}"
+        f"{render_base_framework_api()}\n\n"
+        f"{_SPEC_ARCHITECTURE}\n\n"
         f"{_render_examples(examples)}"
         f"Test Case ID: {case.code}\n"
         f"Title: {case.title}\n"
         f"Precondition: {case.precondition or 'None'}\n"
         f"Steps:\n{steps_lines or '  (none provided)'}\n\n"
         f"{_render_test_data(case)}"
-        f"Use `import {{ test, expect }} from '@playwright/test';` and a single "
+        f"Use `import {{ test, expect }} from '@q-agent/playwright-base';` and a single "
         f"`test('{case.code} — {case.title}', async ({{ page }}) => {{ ... }})` block, "
         f"tagged with the Test Case ID ({case.code}) so results trace back to this case, "
-        f"that encodes the precondition and each step as page actions/assertions. "
+        f"that encodes the precondition and each step as business actions/assertions. "
         f"{_ROBUSTNESS_RULES} {_AUTH_POLICY}"
     )
 
@@ -287,6 +379,7 @@ def _build_fix_prompt(
         "The following Playwright test FAILED when executed. Fix it so it passes.\n\n"
         f"{grounding}"
         f"{dom_block}"
+        f"{render_base_framework_api()}\n\n"
         f"{_render_examples(examples)}"
         f"Test case being automated:\n"
         f"Title: {case.title}\n"
@@ -304,7 +397,7 @@ def _build_fix_prompt(
         "web-first assertions (expect(locator).toBeVisible(), etc.), and explicit "
         "waits over arbitrary timeouts. Use the real grounded values above where "
         "given. Do not invent unrelated behavior or weaken the test just to pass. "
-        f"{_AUTH_POLICY}"
+        f"{_ARCHITECTURE_GUARD} {_AUTH_POLICY}"
     )
 
 
@@ -403,9 +496,10 @@ def _build_chat_edit_prompt(
     return (
         "You are editing an existing Playwright test spec based on a reviewer's instruction.\n\n"
         f"{grounding}"
+        f"{render_base_framework_api()}\n\n"
         f"{_render_references(references)}"
         f"{_render_test_data(case)}"
-        f"{_ROBUSTNESS_RULES} {_AUTH_POLICY}\n\n"
+        f"{_ROBUSTNESS_RULES} {_ARCHITECTURE_GUARD} {_AUTH_POLICY}\n\n"
         f"Reviewer instruction:\n{instruction.strip()}\n\n"
         "Current spec:\n"
         f"```typescript\n{current_code.strip()}\n```\n\n"

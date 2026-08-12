@@ -60,26 +60,42 @@ does not silently depend on data that happens to exist today. Prefer values that
 re-create idempotently (e.g. a unique suffix) where the app allows it. Never mutate or delete data
 you did not create.
 
-## Emit the spec — same contract as automation-generator
+## Emit the spec — same layered contract as automation-generator
 
-After every step and expected result has been confirmed live, **write two files into the current
-working directory** (the paths are given to you in the task prompt):
+After every step and expected result has been confirmed live, **write both files at exactly the paths
+given to you in the task prompt** — do not invent your own filenames. The spec is then placed in the
+project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>-<CASE>.spec.ts` —
+**two levels below the project root** — so write every relative import for *that* location
+(`../../pages/Foo`), not for the directory you are writing in:
 
-1. **The spec** — a single self-contained `*.spec.ts` following `templates/playwright-spec.ts`:
-   - `import { test, expect } from '@playwright/test';` — **no other imports** (no Page Objects,
-     fixtures, or helper modules; they do not exist in this file's directory).
-   - **One `test()`**, its title prefixed with the **Test Case ID** (e.g.
-     `test('TC-01 — …', async ({ page }) => { … })`) so results trace back.
-   - Inline login using the real login URL/flow + the real test-account credentials from the
-     injected context. **Never mock or bypass auth** — no route-mocking of identity/session
-     endpoints, no `VITE_BYPASS_AUTH`, no fabricated `storageState`, no "Auth note" prose.
+1. **The spec** — a `*.spec.ts` following `templates/playwright-spec.ts`:
+   - `import { test, expect } from '@q-agent/playwright-base';` — the shared base framework, which
+     also exports the web-first assertion helpers (`expectVisible`, `expectText`, `expectUrl`, …),
+     waits (`waitFor`, `retry`, `withTimeout`) and data generators (`uniqueSuffix`, `randomEmail`, …).
+     **Never import `@playwright/test` directly**, and never reimplement what the base package gives
+     you.
+   - **Do not import a Page Object or project fixture unless you can see that file** — i.e. it appears
+     as an import in a reference spec you were given. `pages/`/`fixtures/` are usually still empty, and
+     an import that does not resolve fails the project-wide `playwright test --list` gate, rejecting
+     the spec. With nothing to reuse, keep the live-verified locators inline in the spec; a later stage
+     extracts them into page objects. When you do import one, use the real depth: `../../pages/Foo`.
+   - **One `test()`**, its title a plain quoted string (no `${...}`) prefixed with the **Test Case ID**
+     (e.g. `test('TC-01 — …', async ({ page }) => { … })`) so results trace back. A file with only a
+     `test.describe(...)` and no `test()` inside is rejected.
+   - **No inline login.** The `test` you import carries the run's saved manual-login session
+     (storageState + `sessionStorage` replay), so the spec starts authenticated — navigate straight to
+     the route the case starts on. Only a case whose subject IS authentication drives the login form,
+     and then via `formLoginFlow` / `performFormLogin` with the real credentials from the injected
+     context. **Never mock or bypass auth** — no route-mocking of identity/session endpoints, no
+     `VITE_BYPASS_AUTH`, no fabricated `storageState`, no "Auth note" prose.
    - Use the **real selectors you verified live** (with the strategy priority above). Bake in the
      real base URL, routes, and any test data you created.
    - Every "Expected Result" becomes a **web-first assertion** (`await expect(locator).toBeVisible()`,
-     `.toHaveText(…)`, `.toHaveURL(…)`) — rely on auto-waiting. **No `page.waitForTimeout(...)`** or
-     any hard sleep. Deterministic and independent — no shared mutable state.
+     `.toHaveText(…)`, `.toHaveURL(…)`, or a base helper such as `expectVisible(…)`) — rely on
+     auto-waiting. **No `page.waitForTimeout(...)`** or any hard sleep. Deterministic and independent —
+     no shared mutable state.
 
-2. **The discovery sidecar** — a JSON file with exactly this shape, listing the runtime-verified
+2. **The discovery sidecar** — unchanged: a JSON file with exactly this shape, listing the runtime-verified
    routes and selectors you actually used, so they can be merged into the Knowledge Base:
 
 ```json
@@ -101,7 +117,9 @@ say so clearly in the summary and still write the discovery sidecar with whateve
 
 ## Quality rules (carry over from automation-generator)
 
-- Single, standalone spec; only `@playwright/test` imported.
+- Layered spec: import from `@q-agent/playwright-base`, never `@playwright/test`; import a shared
+  project file only when a reference spec proves it exists, at the real depth (`../../pages/…`).
+- No inline login — the imported `test` supplies the authenticated session.
 - Locator priority `data-testid` → role → label → CSS; never brittle CSS/`:nth-child`.
 - Every assertion maps to a specific Expected Result and is web-first (auto-waiting); no hard waits.
 - Never mock/bypass auth; no auth-note meta-commentary — keep comments to brief step annotations.
