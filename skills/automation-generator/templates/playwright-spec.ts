@@ -15,8 +15,9 @@
  *     AUTOMATION PLAN block lists it as importable — that list was verified
  *     against the project's real tree. Never invent such an import: the
  *     project-wide `playwright test --list` gate rejects the spec if it does not
- *     resolve. Anything the plan marks "to be created later" does not exist yet,
- *     so keep those locators inline here.
+ *     resolve.
+ *   - Locators live in those page objects; an inline locator here is the
+ *     EXCEPTION, taken only for a step whose asset the plan lists as NOT ON DISK.
  * ---------------------------------------------------------------------------
  */
 import { test, expect } from '@q-agent/playwright-base';

@@ -435,8 +435,8 @@
   },
   "plan": {
     "title": "AUTOMATION PLAN",
-    "pendingHint": "Reuse decisions are made before generation. Assets marked Create are not written yet — their steps stay inline in the spec for now.",
-    "notYetAuthored": "Not written yet",
+    "pendingHint": "Reuse decisions are made before generation, then the assets marked Create or Extend are authored into the project. Anything still shown as missing did not land, so those steps stay inline in the spec.",
+    "notYetAuthored": "Not on disk",
     "actions": {
       "reuse": "Reuse",
       "extend": "Extend",

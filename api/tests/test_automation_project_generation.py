@@ -745,6 +745,100 @@ def test_an_authorized_import_passes(db_session, project_generation, monkeypatch
     assert spec.status == "draft", spec.block_reason
 
 
+# ---------------------------------------------------------------------------
+# The plan is ACTED ON before generation (#545)
+# ---------------------------------------------------------------------------
+
+
+@requires_git
+def test_a_created_page_object_makes_the_specs_import_legal(
+    db_session, project_generation, monkeypatch
+):
+    """The headline capability of the epic, end to end.
+
+    Same plan as ``test_generation_is_rejected_for_an_import_the_plan_did_not_authorize``
+    (``pages/LoginPage.ts`` as ``create``) and the same ``CANNED_SPEC`` importing it —
+    but now the project editor runs first and actually writes the file, so the import
+    resolves, the plan's refreshed ``importable`` authorizes it, and the spec passes
+    instead of being rejected. That is the whole point of the slice.
+    """
+    import json as _json
+
+    from app.models.automation_project import AutomationProject
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(db_session)
+    monkeypatch.setattr(
+        claude_cli, "run_json",
+        lambda *a, **k: {"pages": [{"name": "LoginPage", "path": "pages/LoginPage.ts",
+                                    "action": "create", "methods": ["open()"]}]},
+    )
+
+    authored: list[Path] = []
+
+    def fake_editor(prompt, **kwargs):
+        path = Path(kwargs["workspace_dir"]) / "pages" / "LoginPage.ts"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "import type { Page } from '@playwright/test';\n"
+            "export class LoginPage {\n"
+            "  constructor(private readonly page: Page) {}\n"
+            "  async open() {\n    await this.page.goto('/login');\n  }\n}\n",
+            encoding="utf-8",
+        )
+        authored.append(path)
+        return "wrote pages/LoginPage.ts"
+
+    monkeypatch.setattr(claude_cli, "run_agentic", fake_editor)
+
+    spec = _generate(db_session, run, cases[0])
+
+    assert spec.status == "draft", spec.block_reason
+    assert len(authored) == 1
+    project = db_session.get(AutomationProject, spec.project_id)
+    root = aps.project_dir(project)
+    # The page object is a real, committed file the spec's import resolves against...
+    assert (root / "pages" / "LoginPage.ts").is_file()
+    assert (root / spec.filename).is_file()
+    # ...and the plan persisted on the row says so, so the UI shows the reuse decision
+    # together with the fact that it landed.
+    plan = _json.loads(spec.plan_report)
+    assert plan["importable"] == ["pages/LoginPage.ts"]
+    assert plan["pages"][0]["existingMethods"] == ["open()"]
+    assert plan["authoredAt"]
+    # The whole-project gate collected the tree that contains BOTH files.
+    assert "pages/LoginPage.ts" not in project_generation.calls[-1]["specs"]
+    assert project_generation.calls[-1]["dir"] == root
+
+
+@requires_git
+def test_a_reuse_only_plan_generates_without_any_agentic_call(
+    db_session, project_generation, monkeypatch
+):
+    """The cost control, asserted through the real generation path: a plan with nothing
+    to author must not spawn the (expensive) project editor."""
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(db_session)
+    project = aps.ensure_project(db_session, run.owner_id, "Surency Platform", "")
+    page = aps.project_dir(project) / "pages" / "LoginPage.ts"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "export class LoginPage {\n  async open() {\n    return 1;\n  }\n}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        claude_cli, "run_json",
+        lambda *a, **k: {"pages": [{"name": "LoginPage", "path": "pages/LoginPage.ts",
+                                    "action": "reuse", "methods": ["open()"]}]},
+    )
+    monkeypatch.setattr(
+        claude_cli, "run_agentic",
+        lambda *a, **k: pytest.fail("a reuse-only plan must not run the project editor"),
+    )
+    spec = _generate(db_session, run, cases[0])
+    assert spec.status == "draft", spec.block_reason
+
+
 @requires_git
 def test_one_plan_covers_every_case_on_the_ticket(db_session, project_generation, monkeypatch):
     """Planning is once per ticket — the slice's main cost lever."""

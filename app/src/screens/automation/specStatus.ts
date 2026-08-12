@@ -90,6 +90,11 @@ export interface AutomationPlan {
   importable?: string[];
   writable?: string[];
   cases?: string[];
+  /** Set once the project editor has run for this ticket (#545) — it runs once per
+   *  ticket, so this stamp is also what stops the second case paying for it again. */
+  authoredAt?: string;
+  /** Why an authoring pass was rolled back, when one was (#545). */
+  authoringError?: string;
 }
 
 /** The plan's asset buckets, in the order the panel renders them. */

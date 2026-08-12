@@ -543,6 +543,20 @@ def run_json(
 # fresh files, not edits to existing ones) and any web tools.
 _AUTHORING_TOOLS = ["Bash", "Read", "Write", "Glob", "Grep"]
 
+# Tools the project editor (#545) is allowed to use when it authors and extends
+# page objects, components, fixtures and test data inside the persistent
+# automation project. Deliberately a SEPARATE list from `_AUTHORING_TOOLS`:
+#
+# * `Edit` is present, because EXTEND means adding a method to a file that
+#   already exists — the whole point of the slice. `_AUTHORING_TOOLS` must stay
+#   byte-identical (no `Edit`, "fresh files, not edits") so live-authoring is
+#   unaffected.
+# * `Bash` is absent, because the project editor drives no browser and needs no
+#   shell. Every static check that follows the edit (`playwright --list`,
+#   `tsc --noEmit`, `git`) is run by the SERVER, so handing the editor a shell
+#   would only let it run — or "fix" — its own gates.
+_PROJECT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"]
+
 
 def run_agentic(
     prompt: str,

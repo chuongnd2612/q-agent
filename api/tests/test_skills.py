@@ -152,18 +152,53 @@ def test_automation_generator_skill_and_prompt_agree_on_the_layered_shape():
 
 
 def test_automation_generator_skill_forbids_inventing_page_object_imports():
-    """#544 replaces #542's "a reference spec proves it exists" rule: the AUTOMATION
-    PLAN is now the sole authorization for an asset import, and the reference-spec
-    gate (plus its inline-locator fallback wording) is gone from both halves."""
+    """#544 made the AUTOMATION PLAN the sole authorization for an asset import; #545
+    inverts the default now that the plan is actually acted on before generation.
+
+    Deliberate wording change (#545): the "to be created later / keep those locators
+    inline" guidance is removed from the skill, its template and its example, in the
+    same commit as the prompt half (#178 discipline — skill and prompt never
+    disagree). A page object is the default; an inline locator is the exception."""
     skill = skills.load_skill(skills.AUTOMATION_GENERATOR, include_template=True)
     prompt = _generation_prompt()
     assert skill
     for text in (skill, prompt):
         assert "AUTOMATION PLAN" in text
         assert "Never invent" in text or "never invent" in text
-    # The superseded rule must not linger in either half (#178 discipline).
+    # The superseded rules must not linger in either half (#178 discipline).
     assert "REFERENCE SPEC" not in skill.upper().replace("REFERENCE SPECS —", "")
     assert "appears as an import in a REFERENCE SPEC" not in prompt
+    # ...including the "a later stage authors those files" premise #545 falsified,
+    # in the SKILL.md, its template and its example alike.
+    example = (
+        Path(skills.settings.skills_dir) / "automation-generator" / "examples" / "example.md"
+    ).read_text(encoding="utf-8")
+    for text in (skill, example):
+        assert "a later stage authors" not in text.lower()
+        assert "to be created later" not in text.lower()
+    assert "an inline locator is the exception" in skill.lower()
+
+
+def test_page_object_author_skill_encodes_the_library_design_rules():
+    """The #545 editor's skill is doc §14/§15/§16/§18/§21 in prompt form, plus the
+    additive-only rule that makes editing shared code safe."""
+    skill = skills.load_skill(skills.PAGE_OBJECT_AUTHOR)
+    assert skill
+    # §14 — what a page object may and may not hold.
+    assert "Entire business test cases" in skill or "entire business test case" in skill
+    assert "fillUser(user)" in skill
+    # §15 components, §16 fixtures, §18 data factories.
+    assert "components/" in skill and "ConfirmationModal" in skill
+    assert "base.extend<AppFixtures>" in skill
+    assert "createUserData" in skill
+    # §21 duplicate detection, by its own example.
+    assert "CreateUserPage.ts" in skill and "waitForDownload" in skill
+    # The rule the three defences enforce.
+    assert "ADDITIVE ONLY" in skill.upper()
+    assert "never write a `.spec.ts`" in skill
+    assert "NEVER touch" in skill  # tests/ belongs to the generator
+    # It never re-authors what the base package owns.
+    assert "@q-agent/playwright-base" in skill
 
 
 def test_planner_skill_encodes_the_decision_hierarchy_and_duplicate_detection():

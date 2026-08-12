@@ -355,7 +355,13 @@ def test_reuse_plan_forbids_producing_a_new_file():
 # ---------------------------------------------------------------------------
 
 
-def test_render_plan_separates_importable_from_not_yet_authored():
+def test_render_plan_separates_what_is_on_disk_from_what_is_not():
+    """#545 rewords this block deliberately: the "TO BE CREATED LATER / PLANNED
+    EXTENSIONS — a later stage authors these" framing was true only while nothing
+    authored page objects. The editor now runs BEFORE generation, so the split is
+    simply on-disk vs not, and an inline locator is the exception rather than the
+    instruction. (Same sentence family as the `_SPEC_ARCHITECTURE` bullet and the
+    automation-generator skill — all of them move in one commit, #178.)"""
     plan = planner.normalize(
         {
             "pages": [
@@ -368,14 +374,13 @@ def test_render_plan_separates_importable_from_not_yet_authored():
           "methods": ["fillUser(user)"]}],
     )
     block = planner.render_plan(plan)
-    assert "IMPORTABLE NOW" in block
+    assert "IMPORTABLE" in block
     assert "pages/UserFormPage.ts" in block and "fillUser(user)" in block
-    # The planned extension is explicitly NOT callable yet.
-    assert "PLANNED EXTENSIONS" in block
-    assert "expectDuplicateEmailError()" in block
-    # A `create` target is named but explicitly not importable.
-    assert "TO BE CREATED LATER" in block and "pages/AuditPage.ts" in block
+    # A path that is not on disk is named, and is explicitly not importable.
+    assert "NOT ON DISK" in block and "pages/AuditPage.ts" in block
     assert "Import NOTHING else" in block
+    # The superseded "a later stage authors this" premise is gone.
+    assert "TO BE CREATED LATER" not in block and "PLANNED EXTENSIONS" not in block
 
 
 def test_render_plan_is_empty_without_an_actionable_plan():

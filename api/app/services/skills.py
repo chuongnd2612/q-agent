@@ -22,6 +22,7 @@ REQUIREMENT_ANALYST = "requirement-analyst"
 TEST_CASE_GENERATOR = "test-case-generator"
 TEST_CASE_REVIEWER = "test-case-reviewer"
 AUTOMATION_PLANNER = "automation-planner"
+PAGE_OBJECT_AUTHOR = "page-object-author"
 AUTOMATION_GENERATOR = "automation-generator"
 AUTOMATION_REVIEWER = "automation-reviewer"
 EXECUTION_ANALYZER = "execution-analyzer"
@@ -35,6 +36,7 @@ SKILLS = {
     TEST_CASE_GENERATOR,
     TEST_CASE_REVIEWER,
     AUTOMATION_PLANNER,
+    PAGE_OBJECT_AUTHOR,
     AUTOMATION_GENERATOR,
     AUTOMATION_REVIEWER,
     EXECUTION_ANALYZER,

@@ -67,6 +67,7 @@ __all__ = [
     "git_commit",
     "git_stash",
     "git_reset_hard",
+    "git_changed_paths",
     "head_commit",
     "write_spec",
     "spec_dir",
@@ -561,6 +562,41 @@ def git_reset_hard(project: AutomationProject, ref: str = "HEAD") -> bool:
     root = project_dir(project)
     ok = _run_git(["-C", str(root), "reset", "-q", "--hard", ref])
     return _run_git(["-C", str(root), "clean", "-qfd"]) and ok
+
+
+def git_changed_paths(project: AutomationProject) -> list[str]:
+    """Project-relative paths the working tree changed since HEAD (#545).
+
+    ``git status --porcelain`` covers added, modified, deleted and untracked
+    files, which is exactly "what did the agentic project editor touch?" — the
+    set an audit entry is recorded for, and the set checked against the plan's
+    ``writable`` list. Renames (``R  old -> new``) contribute the destination.
+
+    Never raises: an unavailable/failing git returns ``[]``, and the caller's
+    other defences (``--list``, ``tsc``, :func:`diff_is_additive`) still stand.
+    """
+    root = project_dir(project)
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            encoding="utf-8",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        entry = line[3:].strip() if len(line) > 3 else ""
+        if " -> " in entry:  # a rename: the destination is what exists now
+            entry = entry.split(" -> ", 1)[1]
+        entry = entry.strip('"').replace("\\", "/")
+        if entry and entry not in paths:
+            paths.append(entry)
+    return sorted(paths)
 
 
 def head_commit(project: AutomationProject) -> str | None:

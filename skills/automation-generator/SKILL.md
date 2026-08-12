@@ -48,27 +48,25 @@ So every generated spec:
 
 ### Page objects: the AUTOMATION PLAN decides what you may import
 
-Locators and low-level UI mechanics belong in a shared page object. Which ones you may actually use is
-not your judgement call — it is decided before you run, by `automation-planner`, and handed to you as
-the **AUTOMATION PLAN** block in the prompt. That block was verified against the project's real tree,
-so it is the whole truth about what exists.
+Locators and low-level UI mechanics belong in a shared page object — that is the **default**, not an
+aspiration. Which page objects you may use is not your judgement call: it is decided before you run, by
+`automation-planner`, the assets are then authored or extended by `page-object-author`, and the result
+is handed to you as the **AUTOMATION PLAN** block in the prompt. That block was verified against the
+project's real tree, so it is the whole truth about what exists.
 
-- **Import exactly what the plan lists under "IMPORTABLE NOW", and nothing else** from `../../pages/`,
+- **Import exactly what the plan lists under "IMPORTABLE", and nothing else** from `../../pages/`,
   `../../components/`, `../../fixtures/`, `../../data/` or `../../utils/`. Call only the signatures the
-  plan shows for each of those files.
-- **Anything the plan marks "TO BE CREATED LATER" does not exist yet.** A later stage authors those
-  files. Importing one fails collection and the whole spec is rejected. Use the planned name as
-  *vocabulary* and **keep that step's locators inline in the spec**, chosen by the project's locator
-  priority.
-- Same for a **planned extension** — a method the plan says will be *added* to an existing page object
-  is not written yet, so do not call it; keep that step inline too.
+  plan shows for each of those files, and drive the UI **through** them instead of repeating their
+  locators in the spec.
+- **An inline locator is the exception.** Take it only for a step whose asset the plan names but does
+  **not** list as importable — the plan puts those under "NOT ON DISK", and importing one fails
+  collection and rejects the whole spec. Choose such a locator by the project's locator priority.
 - **Never invent** `import { LoginPage } from '../../pages/LoginPage'` on the assumption that it
   exists. If the plan doesn't list it, it isn't there.
 - A page object / fixture **name** listed in the Project Knowledge Base is *metadata about the product
   repo*, not a file in this automation project. Never turn a KB name into an import path.
 - **When there is no plan block at all**, the base-package import is the only legal one: keep every
-  locator inline. A thin, readable sequence of steps is the right output — do not pre-empt a later
-  stage with an import that cannot resolve.
+  locator inline, as a thin readable sequence of steps.
 
 ### What the base framework already gives you
 

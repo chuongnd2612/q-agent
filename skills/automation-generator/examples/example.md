@@ -18,29 +18,34 @@ auth handled by the run's saved manual-login session.
 
 ## Expected Output — `tests/ADO-2481/ADO-2481-TC-2481-001.spec.ts`
 
-The AUTOMATION PLAN lists no importable page object for the invoice screen (it plans
-`pages/InvoiceListPage.ts` as **create**, which a later stage authors), so the locators stay inline
-**this once** — an invented `../../pages/InvoiceListPage` import would fail collection and be rejected.
+The AUTOMATION PLAN lists `pages/InvoicePage.ts` as **IMPORTABLE** — `page-object-author` extended it
+for this feature with `payNow()` / `confirmPayment()` / `expectPaid()` before generation ran. So the
+locators live there and the spec drives the UI through it; an inline locator would be the exception,
+allowed only for an asset the plan lists as NOT ON DISK.
 
 ```ts
 /**
  * Source ticket : ADO-2481
  * Test Case ID  : TC-2481-001
  * Reused        : @q-agent/playwright-base (test + evidence + saved session)
+ *                 ../../pages/InvoicePage (open/payNow/confirmPayment/expectPaid)
  */
 import { test, expect } from '@q-agent/playwright-base';
+import { InvoicePage } from '../../pages/InvoicePage';
 
 test('TC-2481-001 — Pay an open invoice', async ({ page }) => {
+  const invoicePage = new InvoicePage(page);
+
   // Arrange — already authenticated by the run's saved session; no login here.
-  await page.goto('https://app.example.com/invoices/INV-1001');
+  await invoicePage.open('INV-1001');
 
   // Act
-  await page.getByTestId('pay-now').click();
-  await page.getByRole('button', { name: 'Confirm payment' }).click();
+  await invoicePage.payNow();
+  await invoicePage.confirmPayment();
 
   // Assert — one web-first assertion per Expected Result
   await expect(page.getByTestId('confirmation-banner')).toBeVisible();
-  await expect(page.getByTestId('invoice-status')).toHaveText('Paid');
+  await invoicePage.expectPaid();
 });
 ```
 
