@@ -13,9 +13,35 @@ workstreams: ``client``, ``db_session``, ``seed_ticket``, ``app``, ``app_env``,
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 
 import pytest
+
+# --- Execution-target default for the suite (#573) --------------------------
+#
+# ``settings_store.DEFAULTS`` ships ``executionTarget="local-agent"`` — a
+# deliberate product decision (#161/d35fe09: a fresh install runs on the user's
+# own machine). That default silently made 13 execution/heal tests **vacuous**:
+# a test's temp workspace has no ``settings.json``, so ``load_settings()``
+# returned ``local-agent``, the endpoints took the agent-dispatch branch, and
+# 409'd with "No local agent paired" — never entering the in-process code the
+# tests claim to cover.
+#
+# #469/#573 filed this as an *order-dependent leak* from a test that writes the
+# setting without restoring it. It is not: no test writes it (the few that need
+# ``local-agent`` monkeypatch ``load_settings``), and every one of the 13
+# failures reproduces when its file is run alone. The cause is the default
+# itself, and it is fully deterministic.
+#
+# A leak is in fact structurally impossible here: ``_settings_path()`` derives
+# from ``settings.workspace_dir``, which ``workspace_dir`` below repoints at a
+# fresh ``tmp_path`` for every test, so the store cannot outlive one test.
+#
+# The suite pins its *test* default to the in-process runner. Tests that mean to
+# exercise agent dispatch opt in via ``local_agent_target`` / ``settings_override``,
+# both of which guarantee restore.
+TEST_SETTINGS_DEFAULTS: dict = {"executionTarget": "server"}
 
 
 class FakePopen:
@@ -79,7 +105,53 @@ def workspace_dir(tmp_path, monkeypatch) -> Iterator:
     monkeypatch.setattr(db_module, "SessionLocal", new_session_local)
 
     db_module.init_db()
+
+    # Pin the persisted settings store to the suite's test defaults (#573) so
+    # endpoints resolve the in-process execution path rather than silently
+    # dispatching to a (nonexistent) paired local agent. Written after
+    # ensure_dirs so the workspace exists.
+    from app.services import settings_store
+
+    settings_store.save_settings(dict(TEST_SETTINGS_DEFAULTS))
+
     yield ws
+
+
+@contextlib.contextmanager
+def settings_override(**values):
+    """Temporarily change persisted workspace settings, restoring on exit (#573).
+
+    The only sanctioned way for a test to mutate the settings store. A bare
+    ``settings_store.save_settings(...)`` is forbidden in tests: it leaves the
+    store changed for the rest of the test, so whatever runs next silently takes
+    a different code path (exactly the failure mode that made 13 tests vacuous).
+
+    Restores the *complete* prior file (including its absence), not just the keys
+    passed in.
+    """
+    from app.services import settings_store
+
+    path = settings_store._settings_path()
+    before = path.read_text(encoding="utf-8") if path.exists() else None
+    try:
+        settings_store.save_settings(dict(values))
+        yield
+    finally:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(before, encoding="utf-8")
+
+
+@pytest.fixture
+def local_agent_target(workspace_dir):
+    """Persist ``executionTarget="local-agent"`` for one test, restored after.
+
+    For tests that genuinely mean to exercise the agent-dispatch branch. Pair it
+    with a paired ``AgentDevice`` row, or the endpoint 409s.
+    """
+    with settings_override(executionTarget="local-agent"):
+        yield
 
 
 # Alias kept for the workstream that named the base fixture `app_env`.

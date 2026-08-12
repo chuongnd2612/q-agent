@@ -415,8 +415,10 @@ def test_run_single_spec_runs_only_that_spec(client, db_session, monkeypatch):
     current = client.get(f"/executions/{execution_id}").json()
     assert current["status"] == "done"
     assert current["passed"] == 1 and current["total"] == 1
-    # Only the one case's spec file was targeted, not the whole suite.
-    assert captured["spec_file"] == "1428-TC-01.spec.ts"
+    # Only the one case's spec file was targeted, not the whole suite. The
+    # filename carries the full ticket id since #540 (spec_service.spec_filename);
+    # this assertion had gone stale unnoticed because the test never got this far.
+    assert captured["spec_file"] == "SUR-1428-TC-01.spec.ts"
 
 
 def test_run_single_spec_rejects_non_automatable(client, db_session):
