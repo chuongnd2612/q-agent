@@ -152,12 +152,33 @@ def test_automation_generator_skill_and_prompt_agree_on_the_layered_shape():
 
 
 def test_automation_generator_skill_forbids_inventing_page_object_imports():
-    """Page objects arrive in #544/#545. Until then the skill must permit an asset
-    import only where a reference spec proves the file exists."""
+    """#544 replaces #542's "a reference spec proves it exists" rule: the AUTOMATION
+    PLAN is now the sole authorization for an asset import, and the reference-spec
+    gate (plus its inline-locator fallback wording) is gone from both halves."""
     skill = skills.load_skill(skills.AUTOMATION_GENERATOR, include_template=True)
+    prompt = _generation_prompt()
     assert skill
-    assert "REFERENCE SPEC" in skill.upper()
-    assert "Never invent" in skill
+    for text in (skill, prompt):
+        assert "AUTOMATION PLAN" in text
+        assert "Never invent" in text or "never invent" in text
+    # The superseded rule must not linger in either half (#178 discipline).
+    assert "REFERENCE SPEC" not in skill.upper().replace("REFERENCE SPECS —", "")
+    assert "appears as an import in a REFERENCE SPEC" not in prompt
+
+
+def test_planner_skill_encodes_the_decision_hierarchy_and_duplicate_detection():
+    """The planner skill is the doc's §8/§21/§22 in prompt form."""
+    skill = skills.load_skill(skills.AUTOMATION_PLANNER)
+    assert skill
+    for token in ("reuse", "extend", "create", "reuse-base"):
+        assert token in skill
+    # §21 duplicate detection, by its own example.
+    assert "UserPage.ts" in skill and "CreateUserPage.ts" in skill
+    assert "waitForDownload" in skill
+    # Plan once per feature — the slice's cost lever.
+    assert "not once per test case" in skill
+    # It emits a plan, never code.
+    assert "never code" in skill.lower()
 
 
 def test_live_authoring_skill_matches_the_same_contract():

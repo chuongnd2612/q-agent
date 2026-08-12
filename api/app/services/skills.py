@@ -21,6 +21,7 @@ from app.logging import logger
 REQUIREMENT_ANALYST = "requirement-analyst"
 TEST_CASE_GENERATOR = "test-case-generator"
 TEST_CASE_REVIEWER = "test-case-reviewer"
+AUTOMATION_PLANNER = "automation-planner"
 AUTOMATION_GENERATOR = "automation-generator"
 AUTOMATION_REVIEWER = "automation-reviewer"
 EXECUTION_ANALYZER = "execution-analyzer"
@@ -33,6 +34,7 @@ SKILLS = {
     REQUIREMENT_ANALYST,
     TEST_CASE_GENERATOR,
     TEST_CASE_REVIEWER,
+    AUTOMATION_PLANNER,
     AUTOMATION_GENERATOR,
     AUTOMATION_REVIEWER,
     EXECUTION_ANALYZER,

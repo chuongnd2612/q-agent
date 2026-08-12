@@ -692,6 +692,10 @@ export interface AutomationSpecOut {
   status: string;
   blockReason: string;
   gateReport: string;
+  /** The ticket's REUSE/EXTEND/CREATE automation plan as a JSON string (#544),
+   * mirroring `gateReport`. `null` when the case was never planned (a legacy spec,
+   * or a project whose planning failed) — the plan panel then renders nothing. */
+  planReport?: string | null;
   /** The automation project's files, when this spec lives in one (#537). Absent
    * for legacy specs (`project_id IS NULL`) — the screen then renders exactly as
    * before, with no file list. */

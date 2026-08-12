@@ -204,15 +204,33 @@ def test_build_prompt_asks_for_the_layered_shape():
 
 
 def test_build_prompt_forbids_inventing_page_object_imports():
-    """Page objects don't exist yet (#544/#545): the prompt must allow imports only
-    where a reference spec proves the file exists, or the gate rejects every spec."""
+    """#544 replaces #542's reference-spec proof with the AUTOMATION PLAN as the sole
+    import authorization. With no plan (legacy path) nothing under `pages/` is legal,
+    so the locators must stay inline or the gate rejects every spec."""
     from app.services.spec_service import _build_prompt
 
     prompt = _build_prompt(_auth_policy_case())
-    assert "only import a project file you can actually SEE" in prompt
-    assert "REFERENCE SPEC" in prompt
-    assert "Knowledge-Base metadata, not files in this project" in prompt
+    assert "the AUTOMATION PLAN block above is the exhaustive list" in prompt
+    assert "Import nothing else from `../../pages/`" in prompt
+    assert "those names describe the product repo, not this" in prompt
     assert "keep the locators inline" in prompt
+    # The superseded rule is gone (#178 discipline: skill and prompt move together).
+    assert "REFERENCE SPEC" not in prompt
+
+
+def test_build_prompt_injects_the_plan_when_one_exists():
+    """A plan's importable list is what makes an asset import legal (#544)."""
+    from app.services import automation_planner_service as planner
+    from app.services.spec_service import _build_prompt
+
+    plan = planner.normalize(
+        {"pages": [{"name": "UserPage", "path": "pages/UserPage.ts", "action": "reuse"}]},
+        [{"path": "pages/UserPage.ts", "kind": "page", "exports": ["UserPage"],
+          "methods": ["openCreateUser()"]}],
+    )
+    prompt = _build_prompt(_auth_policy_case(), plan=plan)
+    assert "IMPORTABLE NOW" in prompt
+    assert "pages/UserPage.ts" in prompt and "openCreateUser()" in prompt
 
 
 def test_build_fix_prompt_forbids_flattening_the_architecture():

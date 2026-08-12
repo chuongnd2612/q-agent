@@ -48,9 +48,10 @@ _SYSTEM_PROMPT = (
     "after the code block."
 )
 
-# The layered spec contract (#542, reversing #178) — the prompt half of the pair
-# that MUST stay in step with `skills/automation-generator/SKILL.md`. Editing one
-# alone recreates the system-vs-user dissonance #178 closed for.
+# The layered spec contract (#542, reversing #178; import rule superseded by #544)
+# — the prompt half of the pair that MUST stay in step with
+# `skills/automation-generator/SKILL.md`. Editing one alone recreates the
+# system-vs-user dissonance #178 closed for.
 #
 # Two hard constraints from the machinery, not preferences:
 #  * Specs live at `tests/<TICKET>/<TICKET>-<CASE>.spec.ts` — TWO levels below the
@@ -59,12 +60,14 @@ _SYSTEM_PROMPT = (
 #    `test()` titles in the `--list` output, so an import that does not resolve is
 #    a hard rejection, and a `test.describe` with no `test()` inside is one too.
 #
-# Hence the deliberate asymmetry: importing `@q-agent/playwright-base` is
-# mandatory (it is genuinely installed by `automation_project_service.ensure_deps`),
-# while importing a page object is allowed ONLY when a reference spec proves that
-# file exists. #544/#545 add the planner and the page-object author; until then,
-# inline locators are still correct and an invented `../../pages/Foo` import would
-# be the #178 failure mode from the other direction.
+# #542 gated asset imports on *observable evidence*: a file was importable only if
+# a REFERENCE SPEC already imported it. #544 replaces that with the AUTOMATION PLAN
+# block, which enumerates the exact importable paths — computed server-side from
+# `automation_project_service.inventory()`, i.e. from the real tree, never from the
+# model's claim. The plan block is injected by `automation_planner_service.render_plan`
+# and is the ONLY authorization; with no plan (legacy path, planning failed) the
+# block is absent and the rule below reduces to "import nothing but the base
+# package", which is the safe pre-#544 behaviour.
 _SPEC_ARCHITECTURE = (
     "Spec architecture — layered (doc §12). This spec file is written into the "
     "project's persistent automation project at "
@@ -82,18 +85,20 @@ _SPEC_ARCHITECTURE = (
     "recording of browser mechanics.\n"
     "- Do NOT write an inline login flow (see the authentication policy below).\n"
     "- Locators and low-level UI mechanics belong in a shared page object (doc "
-    "§14) — BUT only import a project file you can actually SEE: one that appears "
-    "as an import in a REFERENCE SPEC above. Nothing else under `pages/`, "
-    "`fixtures/`, `components/`, `data/` or `utils/` is guaranteed to exist yet, "
-    "and importing a file that does not exist fails collection, so the spec is "
-    "rejected outright. Never invent `import { LoginPage } from "
-    "'../../pages/LoginPage'` in the hope that it exists, and never treat a page "
-    "object / fixture NAME listed in the project context as proof of a file — "
-    "those names are Knowledge-Base metadata, not files in this project.\n"
-    "- So when no shared page object is available to you, keep the locators "
-    "inline in this spec, chosen by the project's locator priority, and keep the "
-    "body a thin, readable sequence of steps. A later stage extracts them into "
-    "page objects; do not pre-empt it with an import that cannot resolve."
+    "§14), and the AUTOMATION PLAN block above is the exhaustive list of the ones "
+    "you may import — those paths were verified against this project's real tree. "
+    "Import nothing else from `../../pages/`, `../../components/`, "
+    "`../../fixtures/`, `../../data/` or `../../utils/`: an import that does not "
+    "resolve fails collection and the spec is rejected outright. Never invent "
+    "`import { LoginPage } from '../../pages/LoginPage'` in the hope that it "
+    "exists, and never treat a page object / fixture NAME listed in the Knowledge "
+    "Base as proof of a file — those names describe the product repo, not this "
+    "automation project.\n"
+    "- For any capability the plan marks as still to be created (or as a planned "
+    "extension that is not written yet), keep the locators inline in this spec, "
+    "chosen by the project's locator priority, and keep the body a thin, readable "
+    "sequence of steps. A later stage authors those files; do not pre-empt it with "
+    "an import that cannot resolve."
 )
 
 # Heal / edit guard (#542). Until the heal loop becomes project-aware (#547) it
@@ -262,6 +267,7 @@ def _build_prompt(
     context: dict[str, Any] | None = None,
     examples: list[dict] | None = None,
     reviewer_comment: str | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> str:
     """Render the Claude prompt for a single test case.
 
@@ -276,6 +282,11 @@ def _build_prompt(
             guidance block right after the grounding — the caller's gate still
             enforces quality, so the note cannot license placeholders or weaker
             assertions.
+        plan: The ticket's normalized Automation Plan (#544). Rendered as the
+            AUTOMATION PLAN block, which is the **only** authorization for an asset
+            import — see :data:`_SPEC_ARCHITECTURE`. ``None`` (legacy path, or
+            planning failed) omits the block, leaving the base-package import as
+            the only legal one.
 
     Returns:
         A prompt string describing the case's title, precondition, and steps,
@@ -316,12 +327,18 @@ def _build_prompt(
         if reviewer_comment
         else ""
     )
+    # Local import: `automation_planner_service` imports `prompts`, and importing it
+    # at module scope would make spec_service <-> planner a cycle.
+    from app.services.automation_planner_service import render_plan
+
+    plan_block = render_plan(plan)
     return (
         f"Generate a Playwright TypeScript test spec for this manual test case.\n\n"
         f"{grounding}"
         f"{reviewer_block}"
         f"{render_base_framework_api()}\n\n"
-        f"{_SPEC_ARCHITECTURE}\n\n"
+        + (f"{plan_block}\n\n" if plan_block else "")
+        + f"{_SPEC_ARCHITECTURE}\n\n"
         f"{_render_examples(examples)}"
         f"Test Case ID: {case.code}\n"
         f"Title: {case.title}\n"
@@ -560,6 +577,7 @@ def generate_spec_code(
     context: dict[str, Any] | None = None,
     examples: list[dict] | None = None,
     reviewer_comment: str | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> str:
     """Ask Claude to generate Playwright TypeScript source for a test case.
 
@@ -571,6 +589,10 @@ def generate_spec_code(
             so the generated spec matches this project's conventions.
         reviewer_comment: Optional free-text reviewer note steering a per-case
             regeneration; forwarded into the prompt as guidance (gate unchanged).
+        plan: The ticket's Automation Plan (#544) — the reuse/extend/create
+            decisions, and the only authorization for an asset import. Produced once
+            per ticket by ``automation_planner_service.plan_for_ticket`` and passed
+            in by ``routers/automation._generate_one``; ``None`` on the legacy path.
 
     Returns:
         The generated TypeScript spec source code.
@@ -579,7 +601,7 @@ def generate_spec_code(
         claude_cli.ClaudeError: if the CLI is unavailable or errors.
     """
     raw = claude_cli.run_prompt(
-        _build_prompt(case, context, examples, reviewer_comment),
+        _build_prompt(case, context, examples, reviewer_comment, plan),
         system=_SYSTEM_PROMPT,
         skill=AUTOMATION_GENERATOR,
         include_template=True,

@@ -227,13 +227,19 @@ def render_project_context(
     # customer's own repo, not from the automation project this spec is generated
     # into. #178 died because they read like importable modules — a spec that turns
     # one of these names into `import … from '../../pages/X'` fails collection.
+    #
+    # #544 supersedes the *importability* question entirely: the AUTOMATION PLAN
+    # block (built from `automation_project_service.inventory()`) is now the single
+    # source of truth for what can be imported, so the label points there rather
+    # than leaving the reader to infer it.
     for label, key in (("Page objects", "pageObjectNames"), ("Fixtures", "fixtureNames"),
                        ("Utilities", "utilities")):
         vals = context.get(key) or []
         if vals:
             lines.append(
                 f"- {label} that exist in the product repo (names only — reuse the "
-                f"naming/vocabulary; these are NOT importable modules): {', '.join(vals)}"
+                f"naming/vocabulary; these are NOT importable modules, and only the "
+                f"AUTOMATION PLAN block says what is): {', '.join(vals)}"
             )
 
     accounts = context.get("testAccounts") or []

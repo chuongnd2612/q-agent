@@ -433,6 +433,24 @@
       "pending": "Đang chờ…"
     }
   },
+  "plan": {
+    "title": "KẾ HOẠCH TỰ ĐỘNG HÓA",
+    "pendingHint": "Quyết định tái sử dụng được đưa ra trước khi sinh mã. Các tài sản được đánh dấu Tạo mới chưa được viết — các bước của chúng tạm thời vẫn nằm trực tiếp trong tệp kiểm thử.",
+    "notYetAuthored": "Chưa được viết",
+    "actions": {
+      "reuse": "Tái sử dụng",
+      "extend": "Mở rộng",
+      "create": "Tạo mới",
+      "reuseBase": "Khung nền"
+    },
+    "groups": {
+      "pages": "Đối tượng trang",
+      "components": "Thành phần",
+      "fixtures": "Fixture",
+      "data": "Dữ liệu kiểm thử",
+      "utils": "Tiện ích"
+    }
+  },
   "projectFiles": {
     "title": "TỆP DỰ ÁN",
     "readOnlyHint": "Tệp hỗ trợ chỉ đọc",

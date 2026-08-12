@@ -32,7 +32,8 @@ import { queryKeys } from "@/lib/queryKeys";
 import { useRunEvents } from "@/hooks/useRunEvents";
 import type { AutomationSpecOut, ChatReplyPayload, HealReport } from "@/types/api";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
-import { normalizeSpecStatus, parseGateReport } from "./automation/specStatus";
+import { normalizeSpecStatus, parseGateReport, parsePlanReport } from "./automation/specStatus";
+import { PlanReport } from "./automation/PlanReport";
 import { useAutomationEvents } from "./automation/useAutomationEvents";
 import { useThinkingSteps } from "./automation/useThinkingSteps";
 import { useCodeFolding } from "./automation/useCodeFolding";
@@ -467,6 +468,9 @@ export function Automation() {
   // note when the most recent regeneration was rejected (previous good spec kept).
   const gateReport = useMemo(() => parseGateReport(selectedSpec?.gateReport), [selectedSpec?.gateReport]);
   const gateRejected = gateReport?.outcome === "rejected";
+  // The ticket's REUSE/EXTEND/CREATE plan (#544), persisted on the spec row exactly
+  // like the gate report — so it renders beside it with no extra request.
+  const planReport = useMemo(() => parsePlanReport(selectedSpec?.planReport), [selectedSpec?.planReport]);
 
   // ---- DOM exploration (ADR 0010): "Explore to unblock" a blocked case. -------
   // The selected case's target repo — the per-work-item repo (else the project
@@ -862,6 +866,7 @@ export function Automation() {
             onOpenChat={openChat}
             codeOverride={editorCodeOverride}
           />
+          <PlanReport plan={planReport} />
           {healReport && <HealTimeline report={healReport} />}
           </div>
           )}

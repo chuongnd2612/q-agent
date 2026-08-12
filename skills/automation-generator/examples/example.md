@@ -18,9 +18,9 @@ auth handled by the run's saved manual-login session.
 
 ## Expected Output — `tests/ADO-2481/ADO-2481-TC-2481-001.spec.ts`
 
-No page object exists for the invoice screen yet and no reference spec imports one, so the locators
-stay inline **this once** — an invented `../../pages/InvoiceListPage` import would fail collection and
-be rejected. A later stage extracts them.
+The AUTOMATION PLAN lists no importable page object for the invoice screen (it plans
+`pages/InvoiceListPage.ts` as **create**, which a later stage authors), so the locators stay inline
+**this once** — an invented `../../pages/InvoiceListPage` import would fail collection and be rejected.
 
 ```ts
 /**
@@ -46,8 +46,9 @@ test('TC-2481-001 — Pay an open invoice', async ({ page }) => {
 
 ## Expected Output when a page object DOES exist
 
-If a reference spec from this project shows `import { InvoiceListPage } from '../../pages/InvoiceListPage';`,
-that file is proven to exist — reuse it, and the spec becomes business steps only:
+When the AUTOMATION PLAN lists `pages/InvoiceListPage.ts` under **IMPORTABLE NOW** with
+`openInvoice(id)` / `payNow()` / `confirmPayment()`, that file exists and those signatures are real —
+reuse it, and the spec becomes business steps only:
 
 ```ts
 import { test, expect } from '@q-agent/playwright-base';

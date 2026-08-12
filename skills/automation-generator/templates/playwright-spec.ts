@@ -11,10 +11,12 @@
  *   - Always import test/expect/helpers from '@q-agent/playwright-base'
  *     (never '@playwright/test'). That `test` carries evidence capture and the
  *     run's saved session, so the spec starts AUTHENTICATED — no inline login.
- *   - A shared project file is imported as '../../pages/Foo', but ONLY when a
- *     reference spec proves that file exists. Never invent such an import: the
+ *   - A shared project file is imported as '../../pages/Foo', but ONLY when the
+ *     AUTOMATION PLAN block lists it as importable — that list was verified
+ *     against the project's real tree. Never invent such an import: the
  *     project-wide `playwright test --list` gate rejects the spec if it does not
- *     resolve. With no page object available, keep the locators inline here.
+ *     resolve. Anything the plan marks "to be created later" does not exist yet,
+ *     so keep those locators inline here.
  * ---------------------------------------------------------------------------
  */
 import { test, expect } from '@q-agent/playwright-base';
