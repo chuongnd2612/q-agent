@@ -1,0 +1,56 @@
+{
+  "$schema": "none — read by api/tests/test_fixture_rewrite_parity.py and agent/test/fixtureRewriteParity.test.ts",
+  "issue": 557,
+  "why": [
+    "The server (api/app/services/playwright_runner.py: _skip_fixture_rewrite /",
+    "fixture_targets) and the Local Agent (agent/src/playwrightConfig.ts:",
+    "FIXTURE_SKIP_* / fixtureTargets) each rewrite every staged .ts file's",
+    "'@playwright/test' import to the depth-correct generated fixtures module.",
+    "The two implementations are separate ports in separate languages, and in #557",
+    "they had already drifted (*.config.ts at depth was skipped on the server and",
+    "rewritten on the device), which makes the SAME project pass on server-target",
+    "and fail collection on local-agent target.",
+    "This file is the single declared tree both test suites build and assert",
+    "against, so any future divergence fails a gate instead of a production run."
+  ],
+  "rule": [
+    "Skip a .ts file when ANY of:",
+    "  1. any directory segment of its path is node_modules, test-results,",
+    "     playwright-report, blob-report or .git;",
+    "  2. its name ends with .d.ts (declarations have nothing to rewrite);",
+    "  3. its name ends with .config.ts, AT ANY DEPTH (defineConfig lives only in",
+    "     the real package, and config/*.config.ts is scaffolded into every project);",
+    "  4. it is the ROOT fixtures.ts (the generated re-export site itself).",
+    "Root-only in (4) is load-bearing: a NESTED fixtures/authenticated.ts is a",
+    "genuine library file and MUST be rewritten.",
+    "Otherwise rewrite it, with the specifier '../' * depth + 'fixtures'."
+  ],
+  "files": [
+    "fixtures.ts",
+    "playwright.config.ts",
+    "vitest.config.ts",
+    "types.d.ts",
+    "1428-TC-01.spec.ts",
+    "pages/LoginPage.ts",
+    "pages/global.d.ts",
+    "pages/node_modules/vendored.ts",
+    "components/nav/TopNav.ts",
+    "fixtures/authenticated.ts",
+    "config/environments.config.ts",
+    "utils/wait.ts",
+    "tests/SUR-1428/SUR-1428-TC-01.spec.ts",
+    "node_modules/@q-agent/playwright-base/dist/index.ts",
+    ".git/hooks/pre-commit.ts",
+    "test-results/leftover.ts",
+    "playwright-report/data/embed.ts",
+    "blob-report/report.ts"
+  ],
+  "rewritten": {
+    "1428-TC-01.spec.ts": "./fixtures",
+    "components/nav/TopNav.ts": "../../fixtures",
+    "fixtures/authenticated.ts": "../fixtures",
+    "pages/LoginPage.ts": "../fixtures",
+    "tests/SUR-1428/SUR-1428-TC-01.spec.ts": "../../fixtures",
+    "utils/wait.ts": "../fixtures"
+  }
+}

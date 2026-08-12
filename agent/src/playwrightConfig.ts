@@ -209,18 +209,33 @@ export function fixturesTs(sessionFile: string, replaySession: boolean, captureR
 }
 
 /** Directories never walked when rewriting imports: installed packages (huge,
- * and not ours to rewrite) and Playwright's own output. */
+ * and not ours to rewrite) and Playwright's own output. Matched at ANY depth.
+ *
+ * **Shared rule** with the server's `FIXTURE_SKIP_DIRS`
+ * (`api/app/services/playwright_runner.py`) — see `contracts/fixture-rewrite-tree.json`. */
 const FIXTURE_SKIP_DIRS = new Set(["node_modules", "test-results", "playwright-report", "blob-report", ".git"]);
 
-/** Files at the workdir root that must keep importing the real `@playwright/test`:
- * the config (needs `defineConfig`) and the injected shim itself (which re-exports
- * Playwright's `test`, so rewriting it to point at itself is a cycle). */
-const FIXTURE_SKIP_ROOT_FILES = new Set(["fixtures.ts", "playwright.config.ts"]);
+/** Files at the workdir **root** that must keep importing the real `@playwright/test`:
+ * only the injected shim itself, which re-exports Playwright's `test`, so rewriting
+ * it to point at itself is a cycle.
+ *
+ * Root-only is load-bearing: a *nested* `fixtures/authenticated.ts` is a genuine
+ * library file and MUST be rewritten. Configs are handled separately, at any depth. */
+const FIXTURE_SKIP_ROOT_FILES = new Set(["fixtures.ts"]);
 
 /**
  * Every `.ts` file under `specDir` that should have its Playwright import
  * rewritten, as workdir-relative POSIX paths. Mirrors the server's
- * `**​/*.ts` glob (`_apply_fixtures`), minus the injected `fixtures.ts`.
+ * `**​/*.ts` glob (`fixture_targets` / `_skip_fixture_rewrite`).
+ *
+ * Skipped, identically to the server (#557):
+ * - anything under `FIXTURE_SKIP_DIRS`, at any depth;
+ * - `*.d.ts` — nothing to rewrite;
+ * - **any** `*.config.ts`, at any depth. `defineConfig` lives only in the real
+ *   package, and `config/` is one of the project's scaffolded library dirs, so
+ *   `config/environments.config.ts` ships in every bundle and must be spared —
+ *   this is exactly where the two ports had drifted;
+ * - the ROOT `fixtures.ts`.
  */
 export function fixtureTargets(specDir: string, relative = ""): string[] {
   const absolute = relative ? path.join(specDir, relative) : specDir;
@@ -237,6 +252,9 @@ export function fixtureTargets(specDir: string, relative = ""): string[] {
       if (FIXTURE_SKIP_DIRS.has(entry.name)) continue;
       out.push(...fixtureTargets(specDir, child));
     } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+      // Any depth — `config/environments.config.ts` is as load-bearing as the
+      // root `playwright.config.ts` (server parity, #557).
+      if (entry.name.endsWith(".config.ts")) continue;
       if (!relative && FIXTURE_SKIP_ROOT_FILES.has(entry.name)) continue;
       out.push(child);
     }
@@ -274,9 +292,11 @@ export function fixturesSpecifier(relative: string): string {
  * Depth-aware since #541: the workdir is no longer flat. It holds a whole
  * automation project (`pages/`, `components/`, `tests/<TICKET>/…`), so the tree
  * is walked rather than a caller-supplied filename list being trusted — that list
- * cannot describe the library files, which sit at their own depths. `fixtures.ts`
- * and `playwright.config.ts` at the root are left alone (the config genuinely
- * needs `defineConfig` from the real package); `node_modules/` is never walked.
+ * cannot describe the library files, which sit at their own depths. The root
+ * `fixtures.ts` and every `*.config.ts` at any depth are left alone (a config
+ * genuinely needs `defineConfig` from the real package); `node_modules/` and
+ * Playwright's output dirs are never walked. See `fixtureTargets` for the full
+ * rule, which is shared with the server.
  *
  * @param specDir The job's local workdir containing the staged project.
  * @param sessionFile Absolute path to the `sessionStorage.json` snapshot embedded

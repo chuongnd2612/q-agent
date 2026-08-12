@@ -437,20 +437,62 @@ def fixtures_specifier(relative: Path) -> str:
     return "./fixtures" if depth == 0 else "../" * depth + "fixtures"
 
 
-# Files under the staged run dir that must NEVER have their '@playwright/test'
-# import rewritten:
-#   * the generated fixtures.ts itself — it IS the re-export site;
-#   * playwright.config.ts (and any *.config.ts) — `defineConfig` lives only in
-#     the real package, and pointing the config at fixtures.ts would make the
-#     config import the fixtures it configures;
-#   * *.d.ts declaration files.
+# Directories that are never walked when rewriting imports: installed packages
+# (huge, and not ours to rewrite) and Playwright's own output dirs, which can be
+# left behind in a staged tree. Matched at ANY depth, not just the top level.
+#
+# **Shared rule.** The Local Agent re-implements this in
+# ``agent/src/playwrightConfig.ts`` (``FIXTURE_SKIP_DIRS``). The two MUST stay
+# identical or the same project passes on server-target and fails collection on
+# local-agent target — see ``contracts/fixture-rewrite-tree.json``, the declared
+# tree both test suites assert against (#557).
+FIXTURE_SKIP_DIRS = frozenset(
+    {"node_modules", "test-results", "playwright-report", "blob-report", ".git"}
+)
+
+
 def _skip_fixture_rewrite(relative: Path) -> bool:
+    """True when the staged file at ``relative`` must keep importing the real package.
+
+    Skipped:
+
+    * anything under :data:`FIXTURE_SKIP_DIRS`, at any depth;
+    * ``*.d.ts`` declaration files — there is nothing to rewrite;
+    * **any** ``*.config.ts``, at any depth. ``defineConfig`` lives only in the
+      real package, pointing a config at ``fixtures.ts`` would make the config
+      import the fixtures it configures, and ``config/`` is one of
+      ``automation_project_service.LIBRARY_DIRS`` — so ``config/foo.config.ts``
+      is scaffolded into every project and must be spared too;
+    * the **root** ``fixtures.ts`` — it IS the generated re-export site.
+
+    The root-only scope of that last rule is load-bearing: a *nested*
+    ``fixtures/authenticated.ts`` is a genuine library file and **must** be
+    rewritten. Do not collapse the two cases.
+    """
     name = relative.name
-    if relative.parts[0] in ("node_modules", ".git"):
+    if any(part in FIXTURE_SKIP_DIRS for part in relative.parts[:-1]):
         return True
-    if len(relative.parts) == 1 and name == "fixtures.ts":
+    if name.endswith(".d.ts") or name.endswith(".config.ts"):
         return True
-    return name.endswith(".config.ts") or name.endswith(".d.ts")
+    return len(relative.parts) == 1 and name == "fixtures.ts"
+
+
+def fixture_targets(spec_dir: Path) -> list[str]:
+    """Every ``.ts`` file under ``spec_dir`` whose Playwright import gets rewritten.
+
+    POSIX paths relative to ``spec_dir``, sorted. Public and split out from
+    :func:`_apply_fixtures` so the parity test can compare this exact set against
+    the agent's ``fixtureTargets`` for the shared declared tree (#557).
+    """
+    targets: list[str] = []
+    for path in sorted(spec_dir.rglob("*.ts")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(spec_dir)
+        if _skip_fixture_rewrite(relative):
+            continue
+        targets.append(relative.as_posix())
+    return sorted(targets)
 
 
 def _apply_fixtures(
@@ -483,12 +525,9 @@ def _apply_fixtures(
         capture_raw: Whether to also capture the raw-HTML DOM attachment (off for
             intermediate heal attempts — #398).
     """
-    for path in sorted(spec_dir.rglob("*.ts")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(spec_dir)
-        if _skip_fixture_rewrite(relative):
-            continue
+    for target in fixture_targets(spec_dir):
+        relative = Path(target)
+        path = spec_dir / relative
         specifier = fixtures_specifier(relative)
         text = path.read_text(encoding="utf-8")
         new_text = text.replace("'@playwright/test'", f"'{specifier}'").replace(
