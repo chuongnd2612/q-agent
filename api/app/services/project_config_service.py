@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app import crypto
 from app.models.knowledge import ProjectKnowledge, compose_key
 from app.models.project_config import ProjectConfig
+from app.models.user import User
 from app.models.provider_connection import ProviderConnection
 from app.models.ticket import Ticket
 from app.services import connection_service
@@ -75,6 +76,38 @@ def get_config_for_owner(db: Session, key: str, owner_id: int | None) -> Project
     row never match a different owner's same-keyed row.
     """
     return db.query(ProjectConfig).filter(ProjectConfig.key == key, ProjectConfig.owner_id == owner_id).first()
+
+
+def get_config_visible_to(db: Session, key: str, user: "User | None") -> ProjectConfig | None:
+    """The config row for ``key`` that ``user`` may actually see (#583).
+
+    Resolution order — the caller's **own** row, then the unowned/shared one, and
+    **never** a row belonging to somebody else:
+
+    1. ``owner_id == user.id`` — their own.
+    2. ``owner_id IS NULL`` — shared/legacy, which :func:`ownership._ownership_mismatch`
+       deliberately treats as everyone's.
+    3. ``None`` — nothing yet, so callers fall through to a default config.
+
+    :func:`get_config` matches the first row for ``key`` *regardless of owner*,
+    which is fine where the caller then applies ``check_owned_or_404`` to reject
+    it — but that combination means a second user with a same-named project sees a
+    permanent 404 rather than their own row, and can never create one. Project
+    configs are keyed by project **name**, so the collision is ordinary, not
+    exotic: two people with a "Surency" project is the normal case.
+    """
+    if user is None:
+        # BRIDGE (#91): no identity in play, so preserve the pre-ownership
+        # behaviour of matching whatever row exists for the key.
+        return get_config(db, key)
+    own = db.query(ProjectConfig).filter(
+        ProjectConfig.key == key, ProjectConfig.owner_id == user.id
+    ).first()
+    if own is not None:
+        return own
+    return db.query(ProjectConfig).filter(
+        ProjectConfig.key == key, ProjectConfig.owner_id.is_(None)
+    ).first()
 
 
 def upsert_config_for_owner(

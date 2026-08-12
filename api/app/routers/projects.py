@@ -216,7 +216,7 @@ def get_project_config(
 
     Scoped to ``user`` (#93 — private per-user data): another user's config 404s.
     """
-    row = project_config_service.get_config(db, key)
+    row = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(row, user, not_found=f"Project config '{key}' not found")
     return project_config_service.public_config(row, key)
 
@@ -233,12 +233,18 @@ def save_project_config(
     Scoped to ``user`` (#93): updating another user's config 404s; a newly
     created config is stamped with the current user's ownership.
     """
-    existing = project_config_service.get_config(db, key)
+    existing = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(existing, user, not_found=f"Project config '{key}' not found")
     patch = body.model_dump(exclude_none=True)
-    row = project_config_service.upsert_config(db, key, patch)
-    if existing is None:
-        stamp_owner(row, user)
+    # Owner-scoped upsert, not the plain one. `upsert_config` re-looks-up with the
+    # UNSCOPED `get_config`, so now that the read no longer 404s on a same-keyed
+    # row owned by someone else, the plain version would happily write into THEIR
+    # row — turning a visibility bug into cross-user corruption (#583).
+    #
+    # Target whatever was visible: the caller's own row, or the shared row when
+    # that is what they were editing (owner_id None stays shared, as today).
+    owner_id = existing.owner_id if existing is not None else (user.id if user else None)
+    row = project_config_service.upsert_config_for_owner(db, key, patch, owner_id)
     db.commit()
     db.refresh(row)
     return project_config_service.public_config(row, key)
@@ -253,9 +259,13 @@ def get_project_auth(
 
     Scoped to ``user`` (#93) via the underlying project config's ownership.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
-    owner_id = config.owner_id if config else None
+    # No config yet -> the CALLER's namespace, not the shared one. Before #583 a
+    # user with no config for this key got a 404 here; now they get their own
+    # empty state, and `None` would have pointed their capture at the shared
+    # (admin) auth namespace — turning a 404 into a cross-namespace write.
+    owner_id = config.owner_id if config is not None else (user.id if user else None)
     return _auth_response(key, owner_id, config)
 
 
@@ -286,9 +296,13 @@ def capture_project_auth(
     this project, returns the current state without opening a second browser.
     Scoped to ``user`` (#93) via the underlying project config's ownership.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
-    owner_id = config.owner_id if config else None
+    # No config yet -> the CALLER's namespace, not the shared one. Before #583 a
+    # user with no config for this key got a 404 here; now they get their own
+    # empty state, and `None` would have pointed their capture at the shared
+    # (admin) auth namespace — turning a 404 into a cross-namespace write.
+    owner_id = config.owner_id if config is not None else (user.id if user else None)
     base_url = (config.base_url if config else "") or ""
     if not base_url:
         raise HTTPException(status_code=400, detail="Set a base URL for the project first.")
@@ -322,9 +336,13 @@ def clear_project_auth(
 
     Scoped to ``user`` (#93) via the underlying project config's ownership.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
-    owner_id = config.owner_id if config else None
+    # No config yet -> the CALLER's namespace, not the shared one. Before #583 a
+    # user with no config for this key got a 404 here; now they get their own
+    # empty state, and `None` would have pointed their capture at the shared
+    # (admin) auth namespace — turning a 404 into a cross-namespace write.
+    owner_id = config.owner_id if config is not None else (user.id if user else None)
     result = project_config_service.clear_auth(key, owner_id)
     # Also drop the Local-Agent "captured" marker so the UI reflects the clear.
     # (The session itself lives on the agent's machine and is overwritten on the
@@ -363,7 +381,7 @@ def list_available_repos(
     repository connection is resolved from the current user's own connections.
     """
     check_owned_or_404(
-        project_config_service.get_config(db, key), user, not_found=f"Project config '{key}' not found"
+        project_config_service.get_config_visible_to(db, key, user), user, not_found=f"Project config '{key}' not found"
     )
     connection = _repository_connection_for_project(db, key, owner_id=user.id if user else None)
     if not connection:
@@ -387,7 +405,7 @@ def list_project_repos(
 
     Scoped to ``user`` (#93): another user's project config 404s.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
     repos = project_config_service.get_repos(config)
     out: list[dict] = []
@@ -446,7 +464,7 @@ def build_repo_knowledge(
     per-repo knowledge base 404s; a new row is stamped with the current user's
     ownership.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
     repos = project_config_service.get_repos(config)
     repo_entry = next((r for r in repos if r["name"] == repo), None)
@@ -504,7 +522,7 @@ def _resolve_repo_or_404(db: Session, key: str, repo: str, user: User | None) ->
     404s (ownership), and an unconfigured repo name 404s. Raises ``HTTPException``;
     returns nothing on success.
     """
-    config = project_config_service.get_config(db, key)
+    config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
     repos = project_config_service.get_repos(config)
     if next((r for r in repos if r["name"] == repo), None) is None:

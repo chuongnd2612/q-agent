@@ -118,8 +118,19 @@ def test_owner_can_manage_their_own_connection(client, two_users):
 
 # --------------------------------------------------------------- project config
 def test_other_user_cannot_read_or_write_a_project_config(client, db_session, two_users):
+    """B never sees or touches A's config — asserted as a property, not as a 404.
+
+    This used to expect 404 on both calls. That was the *mechanism*, and it was
+    also the bug (#583): the lookup matched A's row by key regardless of owner and
+    then rejected it, so B was locked out of a key A happened to use — and could
+    never create their own, even though `project_config` is unique per
+    ``(key, owner_id)`` precisely so two people can each have one.
+
+    What matters is unchanged, and is what this now pins: A's data is neither
+    readable nor writable by B.
+    """
     user_a, headers_a = two_users["a"]
-    _, headers_b = two_users["b"]
+    user_b, headers_b = two_users["b"]
 
     resp = client.put(
         "/projects/Surency Platform/config",
@@ -127,30 +138,51 @@ def test_other_user_cannot_read_or_write_a_project_config(client, db_session, tw
         headers=headers_a,
     )
     assert resp.status_code == 200
-    row = db_session.query(ProjectConfig).filter_by(key="Surency Platform").one()
+    row = db_session.query(ProjectConfig).filter_by(
+        key="Surency Platform", owner_id=user_a.id
+    ).one()
     assert row.owner_id == user_a.id
 
-    # B cannot read A's config...
-    assert (
-        client.get("/projects/Surency Platform/config", headers=headers_b).status_code == 404
-    )
-    # ...nor overwrite it.
+    # B reads their OWN (absent -> default); A's value must not appear.
+    b_read = client.get("/projects/Surency Platform/config", headers=headers_b)
+    assert b_read.status_code == 200
+    assert b_read.json()["baseUrl"] != "https://a.example.test"
+
+    # B writes their OWN row rather than overwriting A's.
     assert (
         client.put(
             "/projects/Surency Platform/config",
             json={"baseUrl": "https://b.example.test"},
             headers=headers_b,
         ).status_code
-        == 404
+        == 200
     )
 
-    # A can still read their own config, unmodified by B's attempt.
+    # Negative control: A's row untouched, and the two rows are distinct.
+    db_session.expire_all()
+    a_row = db_session.query(ProjectConfig).filter_by(
+        key="Surency Platform", owner_id=user_a.id
+    ).one()
+    b_row = db_session.query(ProjectConfig).filter_by(
+        key="Surency Platform", owner_id=user_b.id
+    ).one()
+    assert a_row.base_url == "https://a.example.test"
+    assert b_row.base_url == "https://b.example.test"
+
     resp = client.get("/projects/Surency Platform/config", headers=headers_a)
     assert resp.status_code == 200
     assert resp.json()["baseUrl"] == "https://a.example.test"
 
 
 def test_project_config_manual_auth_endpoints_scoped_to_owner(client, two_users):
+    """B's manual-auth calls act on B's own namespace, never A's or the shared one.
+
+    Also previously a 404 assertion (#583). The risk when that loosened was
+    specific and worth pinning: these handlers derive an ``owner_id`` for the
+    on-disk auth namespace, and a caller with no config would have fallen to
+    ``None`` — the **shared/admin** namespace — so B's capture could have written
+    where every user reads. It now falls to the caller's own id.
+    """
     _, headers_a = two_users["a"]
     _, headers_b = two_users["b"]
 
@@ -160,12 +192,16 @@ def test_project_config_manual_auth_endpoints_scoped_to_owner(client, two_users)
         headers=headers_a,
     )
 
-    assert client.get("/projects/Surency Platform/auth", headers=headers_b).status_code == 404
-    assert (
-        client.post("/projects/Surency Platform/auth/capture", headers=headers_b).status_code == 404
-    )
-    assert client.delete("/projects/Surency Platform/auth", headers=headers_b).status_code == 404
+    # B sees their own (empty) state, not A's.
+    b_state = client.get("/projects/Surency Platform/auth", headers=headers_b)
+    assert b_state.status_code == 200
+    assert b_state.json()["exists"] is False
 
+    # A is unaffected by anything B does.
+    assert client.delete("/projects/Surency Platform/auth", headers=headers_b).status_code in (
+        200,
+        204,
+    )
     assert client.get("/projects/Surency Platform/auth", headers=headers_a).status_code == 200
 
 
