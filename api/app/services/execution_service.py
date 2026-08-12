@@ -22,15 +22,35 @@ from app.ws import hub
 def match_result(results: list[ExecutionResult], filename: str) -> ExecutionResult | None:
     """Find the ExecutionResult whose spec filename convention matches ``filename``.
 
-    Filename convention: ``{shortTicket}-{caseCode}.spec.ts`` (see
-    ``spec_service.spec_filename``). Shared by the server runner (matching a
-    Playwright JSON report entry) and the Local Agent's job-results endpoint
-    (matching a pushed result payload).
+    Two conventions are accepted, **in this order**:
+
+    1. ``{ticketExternalId}-{caseCode}.spec.ts`` — the #540 form
+       (``spec_service.spec_filename``), e.g. ``"SUR-1428-TC-01.spec.ts"``.
+    2. ``{shortTicket}-{caseCode}.spec.ts`` — the pre-#540 form
+       (``spec_service.legacy_spec_filename``), e.g. ``"1428-TC-01.spec.ts"``.
+
+    The order matters and is the whole point of the fallback being a *second
+    pass* rather than an ``or``: a run can legitimately span ``SUR-1428`` and
+    ``OPS-1428`` (``RunTicket`` is many-per-run, each with its own repo — see
+    ``app/models/run.py:84``), and both collapse to the same legacy short form.
+    Matching every row's full form first guarantees the correct attribution, and
+    only a filename that matches no full form at all can fall through to the
+    ambiguous legacy comparison — which is exactly the in-flight-legacy-run case
+    the fallback exists for.
+
+    ``filename`` is basenamed, so the project-relative
+    ``tests/SUR-1428/SUR-1428-TC-01.spec.ts`` that Playwright now reports matches
+    without any change here. Shared by the server runner (matching a Playwright
+    JSON report entry) and the Local Agent's job-results endpoint (matching a
+    pushed result payload), so both paths are fixed at once.
     """
     name = Path(filename).name
     for result in results:
-        expected = f"{result.ticket_external_id.rsplit('-', 1)[-1]}-{result.case_code}.spec.ts"
-        if expected == name:
+        if f"{result.ticket_external_id}-{result.case_code}.spec.ts" == name:
+            return result
+    for result in results:
+        legacy = f"{(result.ticket_external_id or '').rsplit('-', 1)[-1]}-{result.case_code}.spec.ts"
+        if legacy == name:
             return result
     return None
 

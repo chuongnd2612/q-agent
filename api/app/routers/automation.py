@@ -18,7 +18,8 @@ import threading
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, object_session
 
 from app import db as db_module
 from app.config import settings
@@ -26,6 +27,7 @@ from app.db import get_db
 from app.deps_auth import current_user
 from app.logging import logger
 from app.models.agent_device import AgentDevice
+from app.models.automation_project import AutomationFile, AutomationProject
 from app.models.execution import Execution, ExecutionResult
 from app.models.run import Run, RunTicket
 from app.models.testcase import AutomationSpec, TestCase
@@ -34,6 +36,8 @@ from app.models.user import User
 from app.schemas import AutomationSpecRegenerate, AutomationSpecUpdate, SpecChatRequest
 from app.services import (
     audit_service,
+    automation_gate,
+    automation_project_service,
     live_authoring_service,
     placeholder_gate,
     playwright_runner,
@@ -167,7 +171,13 @@ def _review_critical_findings(review: dict) -> list[str]:
 
 
 def _gate_spec_or_bypass(
-    code: str, known: dict, owner_id: int, *, noun: str, fix_verb: str
+    code: str,
+    known: dict,
+    owner_id: int,
+    *,
+    noun: str,
+    fix_verb: str,
+    project: AutomationProject | None = None,
 ) -> tuple[dict, str]:
     """Run the spec quality gate, or bypass it when the global toggle is off.
 
@@ -177,7 +187,7 @@ def _gate_spec_or_bypass(
     gate AND the ``playwright --list`` parse check — and the spec is accepted as
     runnable via :func:`placeholder_gate.bypassed_result`. (The AI automation-reviewer
     is skipped by the caller on a bypassed result.) Otherwise runs the deterministic
-    gate followed by the parse check, exactly as before.
+    gate followed by the parse check.
 
     Args:
         code: The spec source to gate.
@@ -185,6 +195,15 @@ def _gate_spec_or_bypass(
         owner_id: Run owner id, for the per-user ``playwright --list`` invocation.
         noun: "generated spec" / "edited spec" — used in the parse-failure reason.
         fix_verb: "Regenerate" / "Fix" — used in the parse-failure unblock action.
+        project: When given, the parse check becomes
+            ``automation_gate.list_ok_in_project`` over the **whole** project
+            (#540) instead of the legacy single-spec-in-an-empty-temp-dir check.
+            ``code`` must already have been written into the project tree — the
+            project gate collects what is on disk, which is the entire point:
+            imports resolve because the files genuinely exist, and a page-object
+            edit that breaks *another* case's spec fails collection here.
+            ``None`` keeps the legacy path byte-for-byte for
+            ``project_id IS NULL`` specs.
 
     Returns:
         ``(gate_report, outcome)`` where outcome is ``passed`` | ``blocked`` | ``rejected``.
@@ -195,15 +214,221 @@ def _gate_spec_or_bypass(
     outcome = gate["outcome"]
     # A spec Playwright cannot even parse/collect is treated like a rejection
     # (best-effort: an unavailable CLI/timeout skips the check, never blocks).
-    if outcome == "passed" and not spec_service.playwright_list_ok(code, owner_id):
-        outcome = "rejected"
-        gate = {
-            "outcome": "rejected",
-            "findings": ["playwright --list parse failure"],
-            "reason": f"Playwright could not parse/collect the {noun}.",
-            "unblock_action": f"{fix_verb} the spec so it parses cleanly under Playwright.",
-        }
+    if outcome == "passed":
+        if project is not None:
+            list_ok, detail = automation_gate.list_ok_in_project(
+                automation_project_service.project_dir(project),
+                automation_gate.test_titles(code),
+            )
+        else:
+            list_ok = spec_service.playwright_list_ok(code, owner_id)
+            detail = "playwright --list parse failure"
+        if not list_ok:
+            outcome = "rejected"
+            gate = {
+                "outcome": "rejected",
+                "findings": [detail],
+                "reason": f"Playwright could not parse/collect the {noun}.",
+                "unblock_action": f"{fix_verb} the spec so it parses cleanly under Playwright.",
+            }
     return gate, outcome
+
+
+def _resolve_automation_project(
+    db: Session, run: Run, context: dict, existing: AutomationSpec | None
+) -> AutomationProject | None:
+    """The persistent automation project this case's spec belongs in, or None (#540).
+
+    ``None`` means "take the legacy path" — write to the per-run throwaway dir and
+    gate the spec alone in an empty temp dir, exactly as before #540. Three ways
+    that happens, in priority order:
+
+    1. **An existing spec with ``project_id IS NULL`` and code stays legacy.**
+       Every spec that predates #540 looks like this, and the epic's contract is
+       that those keep generating, gating and executing unchanged for the lifetime
+       of their runs. A row that exists but is still empty (e.g. a queued
+       live-authoring placeholder) is treated as new.
+    2. **No project key resolves** (no ticket / no provider / no project config),
+       which is the case for most of the existing test suite. There is nothing to
+       key a project off, so there is no project.
+    3. Otherwise the project is get-or-created for
+       ``(run.owner_id, projectKey, repo)``, and a spec already bound to a project
+       keeps that binding.
+
+    ``ensure_deps`` is best-effort by contract: ``"unavailable"`` (npm missing,
+    registry down, no vendored tarball) is logged and generation continues. The
+    project-aware gate is fail-open, so a project with no ``node_modules`` degrades
+    to "gate skipped", never to "generation hard-fails".
+    """
+    if existing is not None and existing.project_id is None and (existing.code or "").strip():
+        return None
+    if existing is not None and existing.project_id is not None:
+        return db.get(AutomationProject, existing.project_id)
+    project_key = (context.get("projectKey") or "").strip()
+    if not project_key:
+        return None
+    project = automation_project_service.ensure_project(
+        db, run.owner_id, project_key, (context.get("repo") or "").strip()
+    )
+    deps = automation_project_service.ensure_deps(project)
+    if deps == "unavailable":
+        logger.warning(
+            "Automation project {} has no installed deps — the project gate will skip "
+            "(generation continues)",
+            project.id,
+        )
+    return project
+
+
+def _gate_into_project(
+    db: Session,
+    project: AutomationProject,
+    case: TestCase,
+    code: str,
+    known: dict,
+    owner_id: int,
+    *,
+    noun: str,
+    fix_verb: str,
+    review=None,
+) -> tuple[dict, str, str]:
+    """Write ``code`` into the project, gate it there, commit on pass / reset on fail.
+
+    This is the project-backed replacement for "gate the code, then maybe write the
+    file". The order has to invert: the project gate collects what is **on disk**,
+    so the candidate must be written before it can be listed. Git is what makes
+    that safe — it turns "don't write a bad spec" into "write it, then roll the
+    whole tree back", which also extends the pre-#540 ``has_previous_good``
+    contract from one spec's code to every file in the project.
+
+    The whole write → gate → review → commit/reset section runs under
+    ``project_lock``. That deliberately serializes two runs generating into the
+    *same* project (including across the automation-reviewer's Claude call, which
+    is slow): the gate lists the entire tree, so a concurrent write would both
+    corrupt the listing and make the rollback point meaningless.
+
+    Args:
+        review: Optional ``callable(gate) -> (gate, outcome)`` applied only when the
+            deterministic + list gate passed — the ``automation-reviewer`` stage,
+            which can still flip the outcome to ``rejected``.
+
+    Returns:
+        ``(gate_report, outcome, path)`` where ``path`` is the absolute written
+        path on ``passed`` and ``""`` otherwise (the tree was rolled back).
+    """
+    with automation_project_service.project_lock(project):
+        # Commit whatever is currently in the tree so the rollback point includes
+        # any legitimate prior state, then remember it.
+        automation_project_service.git_commit(
+            project, f"chore: pre-generation state for {case.ticket_external_id} {case.code}"
+        )
+        pre_state = automation_project_service.head_commit(project) or "HEAD"
+        path = automation_project_service.write_spec(
+            project, case.ticket_external_id, case.code, code
+        )
+        gate, outcome = _gate_spec_or_bypass(
+            code, known, owner_id, noun=noun, fix_verb=fix_verb, project=project
+        )
+        if outcome == "passed" and review is not None:
+            gate, outcome = review(gate)
+        if outcome == "passed":
+            automation_project_service.git_commit(
+                project, f"feat({case.ticket_external_id}): spec for {case.code}"
+            )
+            automation_project_service.sync_files_to_db(db, project)
+            return gate, outcome, str(path)
+        # blocked/rejected: roll the WHOLE tree back, so a bad candidate cannot
+        # leave debris and previously-good specs are untouched. `git_reset_hard`
+        # also runs `git clean -qfd`, which removes the just-written file even
+        # though it was never tracked.
+        automation_project_service.git_reset_hard(project, pre_state)
+        automation_project_service.sync_files_to_db(db, project)
+        return gate, outcome, ""
+
+
+def _project_spec_relpath(project: AutomationProject, case: TestCase) -> str:
+    """A case's spec path relative to its project root, e.g.
+    ``"tests/SUR-1428/SUR-1428-TC-01.spec.ts"``.
+
+    Derived from ``automation_project_service.spec_dir`` rather than rebuilt, so the
+    ``tests/<TICKET>/`` convention lives in exactly one place. This is what lands in
+    ``AutomationSpec.filename`` for a project-backed spec — including a blocked one,
+    whose code deliberately never reaches the project tree but which execution
+    staging can still materialize from the row on an explicit "run anyway".
+    """
+    root = automation_project_service.project_dir(project)
+    directory = automation_project_service.spec_dir(project, case.ticket_external_id)
+    filename = spec_service.spec_filename(case.ticket_external_id, case.code)
+    return (directory.relative_to(root) / filename).as_posix()
+
+
+def _gate_edit(
+    db: Session,
+    run: Run,
+    case: TestCase,
+    spec: AutomationSpec,
+    code: str,
+    known: dict,
+    *,
+    noun: str,
+    fix_verb: str,
+) -> tuple[dict, str, str]:
+    """Gate a hand/chat-edited spec in whichever home it already lives in.
+
+    A project-backed spec **must** be re-gated against its project: gating an edit
+    of a layered spec with the legacy single-file gate would reject the very
+    imports the project makes legal, so an edit that changed nothing meaningful
+    would blow the spec up. Legacy specs keep the legacy gate.
+
+    Returns:
+        ``(gate_report, outcome, project_path)`` — ``project_path`` is ``""`` for a
+        legacy spec (the caller writes the per-run file itself) or when the edit
+        did not pass.
+    """
+    project = db.get(AutomationProject, spec.project_id) if spec.project_id else None
+    if project is None:
+        gate, outcome = _gate_spec_or_bypass(
+            code, known, run.owner_id, noun=noun, fix_verb=fix_verb
+        )
+        return gate, outcome, ""
+    return _gate_into_project(
+        db, project, case, code, known, run.owner_id, noun=noun, fix_verb=fix_verb
+    )
+
+
+def _apply_automation_review(
+    gate: dict, code: str, case: TestCase, context: dict
+) -> tuple[dict, str]:
+    """The ``automation-reviewer`` stage (#181), applied to a gate-passed spec.
+
+    Additive and best-effort: a Critical finding (or a ``reject`` verdict) is
+    treated like a gate rejection; the verdict/findings are persisted in
+    ``gate_report`` either way so they surface on the automation screen. A
+    failed/unparseable review never blocks a spec the deterministic gate already
+    passed, and the whole stage is skipped when gating is bypassed (the toggle
+    turns off the review too).
+
+    Returns:
+        ``(gate_report, outcome)`` — ``("passed")`` unchanged, or a rejection.
+    """
+    if gate.get("bypassed"):
+        return gate, "passed"
+    review = _run_automation_review(code, case, context)
+    if review is None:
+        return gate, "passed"
+    gate = dict(gate)
+    gate["review"] = review
+    critical = _review_critical_findings(review)
+    if not critical and str(review.get("verdict", "")).strip().lower() != "reject":
+        return gate, "passed"
+    gate["outcome"] = "rejected"
+    gate["reason"] = (
+        "automation-reviewer flagged Critical findings: " + "; ".join(critical[:6])
+        if critical
+        else "automation-reviewer verdict was reject."
+    )
+    gate["unblock_action"] = "Address the review findings above and regenerate."
+    return gate, "rejected"
 
 
 def _merge_authored_discovery(context: dict, run: Run, discovered: dict) -> None:
@@ -348,6 +573,18 @@ def _generate_one(
                       recording the rejection in ``gate_report``. With no previous
                       spec, save ``status="blocked"`` (still not runnable).
 
+    Since #540 there are two homes for the accepted file, chosen by
+    :func:`_resolve_automation_project`:
+
+    * **Project-backed** — the spec is written to
+      ``<project>/tests/<TICKET>/<TICKET>-<TC>.spec.ts``, gated against the whole
+      project (so shared page objects and ``@q-agent/playwright-base`` imports
+      resolve), and committed; a blocked/rejected candidate rolls the tree back
+      with ``git reset --hard``. ``spec.project_id`` is set and ``spec.filename``
+      becomes the project-relative path.
+    * **Legacy** (``project_id IS NULL``) — the pre-#540 behaviour, unchanged:
+      per-run throwaway dir, spec gated alone in an empty temp dir.
+
     Args:
         db: Active session (caller commits).
         run: The owning Run (provides run.code for the spec path).
@@ -360,6 +597,11 @@ def _generate_one(
         The created or updated AutomationSpec row (not yet committed).
     """
     context = spec_service.build_case_context(db, case, env=run.env)
+    # Resolved up-front (not after generation) because the project must exist and
+    # have its deps installed before the candidate can be written into it and gated
+    # there. `None` -> the legacy per-run path, unchanged.
+    existing = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case.id).first()
+    project = _resolve_automation_project(db, run, context, existing)
     # Authoring mode (#400): "live-harness" drives the real app via browser-harness
     # to author from live-verified selectors; "blind" (default) generates from the
     # KB and relies on the heal loop. The paths differ only in where `code` comes
@@ -395,7 +637,7 @@ def _generate_one(
         )
     filename = spec_service.spec_filename(case.ticket_external_id, case.code)
 
-    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case.id).first()
+    spec = existing
     # "Good" means a genuinely runnable prior spec worth protecting from a rejected
     # regeneration — NOT merely "has code". A previously *blocked* spec is not good:
     # freezing it would discard every new attempt, so a rejected regen on a blocked
@@ -419,31 +661,29 @@ def _generate_one(
         "selectors": list(context.get("selectors", [])) + (live_discovered or {}).get("selectors", []),
         "base_url": context.get("baseUrl", ""),
     }
-    gate, outcome = _gate_spec_or_bypass(
-        code, known, run.owner_id, noun="generated spec", fix_verb="Regenerate"
-    )
-
-    # Deterministic gate passed -> ask automation-reviewer for a static review
-    # (#181). Additive: a Critical finding is treated like a gate rejection; the
-    # verdict/findings are persisted in gate_report either way so they surface
-    # on the automation screen. Best-effort — a failed/unparseable review never
-    # blocks a spec the deterministic gate already passed. Skipped when gating is
-    # bypassed (the whole gate, incl. this review, is off).
-    if outcome == "passed" and not gate.get("bypassed"):
-        review = _run_automation_review(code, case, context)
-        if review is not None:
-            gate = dict(gate)
-            gate["review"] = review
-            critical = _review_critical_findings(review)
-            if critical or str(review.get("verdict", "")).strip().lower() == "reject":
-                outcome = "rejected"
-                gate["outcome"] = "rejected"
-                gate["reason"] = (
-                    "automation-reviewer flagged Critical findings: " + "; ".join(critical[:6])
-                    if critical
-                    else "automation-reviewer verdict was reject."
-                )
-                gate["unblock_action"] = "Address the review findings above and regenerate."
+    project_path = ""
+    if project is not None:
+        # Project-backed: write into the project first (the gate lists what is on
+        # disk), gate the whole tree, then commit or `git reset --hard` back.
+        spec.project_id = project.id
+        spec.filename = _project_spec_relpath(project, case)
+        gate, outcome, project_path = _gate_into_project(
+            db,
+            project,
+            case,
+            code,
+            known,
+            run.owner_id,
+            noun="generated spec",
+            fix_verb="Regenerate",
+            review=lambda g: _apply_automation_review(g, code, case, context),
+        )
+    else:
+        gate, outcome = _gate_spec_or_bypass(
+            code, known, run.owner_id, noun="generated spec", fix_verb="Regenerate"
+        )
+        if outcome == "passed":
+            gate, outcome = _apply_automation_review(gate, code, case, context)
 
     if outcome == "blocked":
         # Missing-input: persist the generated code + reason but never write the
@@ -465,12 +705,15 @@ def _generate_one(
         spec.block_reason = f'Rejected: {gate["reason"]} {gate["unblock_action"]}'.strip()
         return spec
 
-    # passed — accept and write the runnable spec file.
-    path = spec_service.write_spec_file(
-        run.code, case.ticket_external_id, case.code, code, run.owner_id
+    # passed — accept and write the runnable spec file. Project-backed specs were
+    # already written (and committed) inside `_gate_into_project`.
+    path = project_path or str(
+        spec_service.write_spec_file(
+            run.code, case.ticket_external_id, case.code, code, run.owner_id
+        )
     )
     spec.code = code
-    spec.path = str(path)
+    spec.path = path
     spec.status = "draft"
     spec.block_reason = ""
     spec.gate_report = json.dumps(gate)
@@ -627,7 +870,8 @@ def generate_automation(
         .filter(TestCase.run_id == run_id)
         .all()
     )
-    return [_spec_out(s) for s in specs]
+    files_cache: dict[int, list[dict]] = {}
+    return [_spec_out(s, files_cache) for s in specs]
 
 
 @router.get("/runs/{run_id}/automation")
@@ -642,7 +886,8 @@ def list_automation(
         .filter(TestCase.run_id == run_id)
         .all()
     )
-    return [_spec_out(s) for s in specs]
+    files_cache: dict[int, list[dict]] = {}
+    return [_spec_out(s, files_cache) for s in specs]
 
 
 @router.get("/runs/{run_id}/automation/status")
@@ -698,16 +943,18 @@ def update_case_spec(
         "selectors": context.get("selectors", []),
         "base_url": context.get("baseUrl", ""),
     }
-    gate, outcome = _gate_spec_or_bypass(
-        payload.code, known, run.owner_id, noun="edited spec", fix_verb="Fix"
+    gate, outcome, project_path = _gate_edit(
+        db, run, case, spec, payload.code, known, noun="edited spec", fix_verb="Fix"
     )
     spec.gate_report = json.dumps(gate)
 
     if outcome == "passed":
-        path = spec_service.write_spec_file(
-            run.code, case.ticket_external_id, case.code, payload.code, run.owner_id
+        path = project_path or str(
+            spec_service.write_spec_file(
+                run.code, case.ticket_external_id, case.code, payload.code, run.owner_id
+            )
         )
-        spec.path = str(path)
+        spec.path = path
         spec.status = "draft"
         spec.block_reason = ""
     else:
@@ -759,17 +1006,25 @@ _SPEC_MENTION_RE = re.compile(r"@([\w.\-]+\.spec\.ts)")
 def _resolve_spec_mentions(db, run: Run, case: TestCase, message: str) -> list[tuple[str, str]]:
     """Resolve ``@<filename>.spec.ts`` mentions in a chat message to (filename, code)
     pairs for other specs in the same run — the reviewer's embedded context. Skips
-    the spec being edited and de-dupes; best-effort (returns [] on no matches)."""
+    the spec being edited and de-dupes; best-effort (returns [] on no matches).
+
+    Matched on the **basename**: a project-backed spec's ``filename`` is a
+    project-relative path (``tests/SUR-1428/SUR-1428-TC-01.spec.ts``), which the
+    mention syntax never spells out."""
     names = {n for n in _SPEC_MENTION_RE.findall(message or "")}
     if not names:
         return []
     rows = (
         db.query(AutomationSpec)
         .join(TestCase, AutomationSpec.test_case_id == TestCase.id)
-        .filter(TestCase.run_id == run.id, AutomationSpec.filename.in_(names))
+        .filter(TestCase.run_id == run.id)
         .all()
     )
-    return [(r.filename, r.code or "") for r in rows if r.test_case_id != case.id]
+    return [
+        (r.filename, r.code or "")
+        for r in rows
+        if r.test_case_id != case.id and (r.filename or "").rsplit("/", 1)[-1] in names
+    ]
 
 
 def _run_spec_chat(run_id: int, case_id: int, message: str, message_id: str) -> None:
@@ -810,12 +1065,12 @@ def _run_spec_chat(run_id: int, case_id: int, message: str, message_id: str) -> 
                 "selectors": context.get("selectors", []),
                 "base_url": context.get("baseUrl", ""),
             }
-            gate, outcome = _gate_spec_or_bypass(
-                new_code, known, run.owner_id, noun="edited spec", fix_verb="Fix"
+            gate, outcome, project_path = _gate_edit(
+                db, run, case, spec, new_code, known, noun="edited spec", fix_verb="Fix"
             )
             spec.gate_report = json.dumps(gate)
             if outcome == "passed":
-                spec.path = str(
+                spec.path = project_path or str(
                     spec_service.write_spec_file(
                         run.code, case.ticket_external_id, case.code, new_code, run.owner_id
                     )
@@ -1023,8 +1278,39 @@ def heal_case_spec_report(
         return {}
 
 
-def _spec_out(spec: AutomationSpec) -> dict:
-    return {
+def _project_files_out(spec: AutomationSpec, cache: dict[int, list[dict]] | None = None) -> list[dict]:
+    """The spec's project tree as read-only ``[{path, kind, code}]`` (#540, for #543).
+
+    Read from the ``automation_files`` mirror rather than disk: the mirror is
+    refreshed by ``sync_files_to_db`` right after every accepted generation, and
+    reading rows keeps this a pure DB call inside a request. Empty for a legacy
+    (``project_id IS NULL``) spec, and empty — never an error — when the spec is
+    detached from a session.
+
+    Args:
+        cache: Optional ``{project_id: files}`` memo so a list endpoint serializing
+            N specs of the same project builds the tree once instead of N times.
+    """
+    if spec.project_id is None:
+        return []
+    if cache is not None and spec.project_id in cache:
+        return cache[spec.project_id]
+    session = object_session(spec)
+    if session is None:  # pragma: no cover - defensive; specs are always attached
+        return []
+    rows = session.scalars(
+        select(AutomationFile)
+        .where(AutomationFile.project_id == spec.project_id)
+        .order_by(AutomationFile.path)
+    ).all()
+    files = [{"path": row.path, "kind": row.kind, "code": row.code} for row in rows]
+    if cache is not None:
+        cache[spec.project_id] = files
+    return files
+
+
+def _spec_out(spec: AutomationSpec, files_cache: dict[int, list[dict]] | None = None) -> dict:
+    out = {
         "id": spec.id,
         "testCaseId": spec.test_case_id,
         "filename": spec.filename,
@@ -1034,4 +1320,16 @@ def _spec_out(spec: AutomationSpec) -> dict:
         "status": spec.status,
         "blockReason": spec.block_reason,
         "gateReport": spec.gate_report,
+        # The persistent automation project this spec lives in (#540). `null` for a
+        # legacy spec.
+        "projectId": spec.project_id,
     }
+    # `projectFiles` is OPTIONAL in the UI contract (#543) and is omitted — not sent
+    # as `[]` — for a legacy spec, so the client renders it exactly as before with
+    # no empty panel. The case's own spec is part of the tree (it is mirrored from
+    # `tests/<TICKET>/…` like any other file), so the client shows its real
+    # project-relative path rather than synthesizing a bare filename.
+    files = _project_files_out(spec, files_cache)
+    if files:
+        out["projectFiles"] = files
+    return out

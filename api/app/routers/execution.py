@@ -166,7 +166,17 @@ def run_single_spec(
     run = get_owned_or_404(db, Run, case.run_id, user)
     # A blocked spec was never written to disk (it's excluded from the runnable
     # set), so materialize its current code so the runner has a file to execute.
-    if case.spec and case.spec.status == "blocked" and (case.spec.code or "").strip():
+    # Project-backed specs (#540) are deliberately excluded: their code is never
+    # committed to the project while blocked, and execution staging materializes it
+    # at `tests/<TICKET>/…` from the row. Writing it here as well would put a second
+    # copy at the staged dir's root, and Playwright would collect and report the
+    # same test twice.
+    if (
+        case.spec
+        and case.spec.project_id is None
+        and case.spec.status == "blocked"
+        and (case.spec.code or "").strip()
+    ):
         from app.services import spec_service
 
         case.spec.path = str(

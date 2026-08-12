@@ -121,14 +121,14 @@ def test_generate_writes_spec_file_and_persists_row(client, db_session, monkeypa
     assert len(specs) == 1
     spec = specs[0]
     assert spec["testCaseId"] == case.id
-    assert spec["filename"] == "1428-TC-01.spec.ts"
+    assert spec["filename"] == "SUR-1428-TC-01.spec.ts"
     assert "test('Login works'" in spec["code"]
     assert spec["language"] == "TypeScript"
     assert spec["framework"] == "Playwright"
 
     from app.services.workspace_scope import scoped_specs_dir
 
-    spec_path = scoped_specs_dir(run.owner_id) / run.code / "1428-TC-01.spec.ts"
+    spec_path = scoped_specs_dir(run.owner_id) / run.code / "SUR-1428-TC-01.spec.ts"
     assert spec_path.exists()
     assert "test('Login works'" in spec_path.read_text(encoding="utf-8")
 
@@ -186,7 +186,7 @@ def test_get_case_spec_and_regenerate(client, db_session, monkeypatch):
     resp2 = client.get(f"/cases/{case.id}/spec")
     assert resp2.status_code == 200
     assert resp2.json()["testCaseId"] == case.id
-    assert resp2.json()["filename"] == "1428-TC-01.spec.ts"
+    assert resp2.json()["filename"] == "SUR-1428-TC-01.spec.ts"
 
 
 def test_regenerate_with_comment_injects_reviewer_guidance(client, db_session, monkeypatch):
@@ -258,7 +258,7 @@ def test_update_case_spec_persists_and_rewrites_file(client, db_session, monkeyp
 
     from app.services.workspace_scope import scoped_specs_dir
 
-    spec_path = scoped_specs_dir(run.owner_id) / run.code / "1428-TC-01.spec.ts"
+    spec_path = scoped_specs_dir(run.owner_id) / run.code / "SUR-1428-TC-01.spec.ts"
     assert spec_path.exists()
     assert spec_path.read_text(encoding="utf-8") == edited
 
@@ -692,10 +692,17 @@ def test_spec_service_generate_spec_code_extracts_fenced_typescript(monkeypatch)
     assert "```" not in code
 
 
-def test_spec_filename_strips_ticket_prefix():
+def test_spec_filename_keeps_the_full_ticket_id():
+    """#540: the full ticket id, so SUR-1428 and OPS-1428 cannot collide."""
     from app.services import spec_service
 
-    assert spec_service.spec_filename("SUR-1428", "TC-01") == "1428-TC-01.spec.ts"
+    assert spec_service.spec_filename("SUR-1428", "TC-01") == "SUR-1428-TC-01.spec.ts"
+    assert spec_service.spec_filename("OPS-1428", "TC-01") == "OPS-1428-TC-01.spec.ts"
+    # The pre-#540 short form is still derivable, for legacy result matching only.
+    assert spec_service.legacy_spec_filename("SUR-1428", "TC-01") == "1428-TC-01.spec.ts"
+    # Path separators and other unsafe characters can never escape the directory.
+    assert spec_service.spec_filename("SUR/1428", "TC 01") == "SUR-1428-TC-01.spec.ts"
+    assert spec_service.spec_filename("", "") == "unknown-unknown.spec.ts"
 
 
 def test_heal_rejects_assertion_weakening_fix(client, db_session, monkeypatch):
@@ -833,7 +840,7 @@ def test_generation_gate_blocked_vs_rejected(db_session, monkeypatch):
     assert spec.block_reason
     from app.services.workspace_scope import scoped_specs_dir
 
-    assert not (scoped_specs_dir(run.owner_id) / run.code / "1428-TC-01.spec.ts").exists()
+    assert not (scoped_specs_dir(run.owner_id) / run.code / "SUR-1428-TC-01.spec.ts").exists()
 
     # KB has grounding for the very route/selectors -> the placeholder is a rejection.
     grounded = {"routes": [{"path": "/login"}], "selectors": ["#user"], "baseUrl": "https://x"}
@@ -884,7 +891,7 @@ def test_generation_gate_disabled_accepts_spec_as_runnable(db_session, monkeypat
     assert _json.loads(spec.gate_report).get("bypassed") is True
     from app.services.workspace_scope import scoped_specs_dir
 
-    assert (scoped_specs_dir(run.owner_id) / run.code / "1428-TC-01.spec.ts").exists()
+    assert (scoped_specs_dir(run.owner_id) / run.code / "SUR-1428-TC-01.spec.ts").exists()
 
 
 def test_automation_review_critical_finding_rejects_gate_passed_spec(db_session, monkeypatch):
@@ -916,7 +923,7 @@ def test_automation_review_critical_finding_rejects_gate_passed_spec(db_session,
     assert gate_report["review"] == review
     from app.services.workspace_scope import scoped_specs_dir
 
-    assert not (scoped_specs_dir(run.owner_id) / run.code / "1428-TC-01.spec.ts").exists()
+    assert not (scoped_specs_dir(run.owner_id) / run.code / "SUR-1428-TC-01.spec.ts").exists()
 
 
 def test_automation_review_non_critical_findings_still_passes(db_session, monkeypatch):

@@ -39,12 +39,14 @@ from typing import Any
 from app import db as db_module
 from app.config import settings
 from app.logging import logger
+from app.models.automation_project import AutomationProject
 from app.models.execution import Evidence, Execution, ExecutionResult
 from app.models.run import Run, RunTicket
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
 from app.services import (
     audit_service,
+    automation_project_service,
     evidence_analysis,
     evidence_service,
     execution_service,
@@ -405,34 +407,95 @@ def _fixtures_ts(session_file: Path, replay_session: bool, capture_raw: bool = T
     )
 
 
+def fixtures_specifier(relative: Path) -> str:
+    """The module specifier a file at ``relative`` uses to reach the root ``fixtures``.
+
+    ``fixtures.ts`` is generated at the **root** of the staged run dir, so a file
+    nested inside it needs one ``../`` per directory level:
+    ``x.spec.ts`` -> ``./fixtures``, ``tests/SUR-1428/x.spec.ts`` ->
+    ``../../fixtures``.
+
+    Split out (and public) because the Local Agent must compute this **identically**
+    — #541 mirrors this function byte-for-byte, or server and device diverge on
+    which specifier a nested spec gets.
+
+    Args:
+        relative: The file's path *relative to the staged run dir*.
+
+    Returns:
+        A POSIX relative specifier without the ``.ts`` extension.
+
+    Note:
+        The staged project also has a ``fixtures/`` **directory** (one of
+        ``automation_project_service.LIBRARY_DIRS``), so ``./fixtures`` is
+        nominally ambiguous. Node/TS module resolution tries ``fixtures.ts``
+        before ``fixtures/index.ts``, so the generated file always wins — but a
+        project that ever adds ``fixtures/index.ts`` would be relying on that
+        ordering, which is why nothing should be generated into ``fixtures/``.
+    """
+    depth = len(relative.parts) - 1
+    return "./fixtures" if depth == 0 else "../" * depth + "fixtures"
+
+
+# Files under the staged run dir that must NEVER have their '@playwright/test'
+# import rewritten:
+#   * the generated fixtures.ts itself — it IS the re-export site;
+#   * playwright.config.ts (and any *.config.ts) — `defineConfig` lives only in
+#     the real package, and pointing the config at fixtures.ts would make the
+#     config import the fixtures it configures;
+#   * *.d.ts declaration files.
+def _skip_fixture_rewrite(relative: Path) -> bool:
+    name = relative.name
+    if relative.parts[0] in ("node_modules", ".git"):
+        return True
+    if len(relative.parts) == 1 and name == "fixtures.ts":
+        return True
+    return name.endswith(".config.ts") or name.endswith(".d.ts")
+
+
 def _apply_fixtures(
     spec_dir: Path, session_file: Path, replay_session: bool, capture_raw: bool = True
 ) -> None:
-    """Point every spec's Playwright import at the generated ``fixtures.ts`` and write it.
+    """Point every staged TS file's Playwright import at ``fixtures.ts`` and write it.
 
     DOM capture is always on, so fixtures are ALWAYS injected (unlike the previous
-    auth-only behavior): each ``*.spec.ts`` import of ``'@playwright/test'`` is
-    rewritten to ``'./fixtures'`` and ``fixtures.ts`` is (re)written every run.
+    auth-only behavior): each import of ``'@playwright/test'`` is rewritten to the
+    generated root ``fixtures`` module and ``fixtures.ts`` is (re)written every run.
     ``replay_session`` only controls whether the generated module *also* replays the
-    captured sessionStorage. Only the import module specifier is touched in specs
-    (generated specs import just ``test``/``expect``/types from ``@playwright/test``).
+    captured sessionStorage. Only the import module specifier is touched (generated
+    specs import just ``test``/``expect``/types from ``@playwright/test``, and
+    ``fixtures.ts`` re-exports ``expect`` plus ``export type * from
+    '@playwright/test'``).
+
+    **Depth-aware since #540.** A staged project has files at depth — specs at
+    ``tests/<TICKET>/x.spec.ts``, page objects at ``pages/Foo.ts`` — so the flat
+    ``'./fixtures'`` specifier the old implementation wrote would not resolve. The
+    walk is now recursive over ``**/*.ts`` with the per-file specifier from
+    :func:`fixtures_specifier` and the exclusions in :func:`_skip_fixture_rewrite`.
+    Imports of ``@q-agent/playwright-base`` are left alone: that package already
+    ships an extended ``test`` with the same evidence/session fixtures.
 
     Args:
-        spec_dir: The run's spec directory containing ``*.spec.ts`` files.
+        spec_dir: The run's staged spec directory (project library + this run's specs).
         session_file: Absolute path to the ``sessionStorage.json`` snapshot embedded
             in the generated ``fixtures.ts``.
         replay_session: Whether sessionStorage replay is active for this run.
         capture_raw: Whether to also capture the raw-HTML DOM attachment (off for
             intermediate heal attempts — #398).
     """
-    replacements = (("'@playwright/test'", "'./fixtures'"), ('"@playwright/test"', '"./fixtures"'))
-    for spec in spec_dir.glob("*.spec.ts"):
-        text = spec.read_text(encoding="utf-8")
-        new_text = text
-        for old, new in replacements:
-            new_text = new_text.replace(old, new)
+    for path in sorted(spec_dir.rglob("*.ts")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(spec_dir)
+        if _skip_fixture_rewrite(relative):
+            continue
+        specifier = fixtures_specifier(relative)
+        text = path.read_text(encoding="utf-8")
+        new_text = text.replace("'@playwright/test'", f"'{specifier}'").replace(
+            '"@playwright/test"', f'"{specifier}"'
+        )
         if new_text != text:
-            spec.write_text(new_text, encoding="utf-8")
+            path.write_text(new_text, encoding="utf-8")
     (spec_dir / "fixtures.ts").write_text(
         _fixtures_ts(session_file, replay_session, capture_raw), encoding="utf-8"
     )
@@ -703,6 +766,136 @@ def _fail_all_results(
     )
 
 
+# ---------------------------------------------------------------------------
+# Staging: an ephemeral per-run copy of the persistent automation project (#540)
+# ---------------------------------------------------------------------------
+
+
+def _spec_relative_path(spec: AutomationSpec | None, ticket_external_id: str, case_code: str) -> str:
+    """Where a case's spec lives, relative to the staged run dir.
+
+    The stored ``spec.filename`` is authoritative and is trusted verbatim: it is
+    ``"tests/<TICKET>/<TICKET>-<TC>.spec.ts"`` for a project-backed spec and a
+    bare filename for a legacy one — including the *pre-#540 short form* for a
+    run that was generated before the rename, which is exactly why we must not
+    recompute it. Only a row with no filename at all falls back to the current
+    convention.
+    """
+    filename = ((spec.filename if spec is not None else "") or "").strip()
+    return filename or spec_service.spec_filename(ticket_external_id, case_code)
+
+
+def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Path:
+    """Prepare ``<scoped specs>/<RUN-CODE>/`` for execution and return it.
+
+    For every project-backed spec among ``cases`` this stages its project via
+    ``automation_project_service.stage_for_run``: the **whole** shared library (so
+    ``../pages/Foo`` imports resolve) but **only this run's spec files** — staging
+    all of ``tests/`` would re-run every test ever generated for that project.
+    A run legitimately spanning two projects (``RunTicket`` is many-per-run, each
+    with its own repo) stages each of them into the same dir; ``stage_for_run``
+    merges with ``dirs_exist_ok``.
+
+    Because the staged dir is per run code, two concurrent runs on the same
+    project never share a ``playwright.config.ts`` / ``report.json`` / rewritten
+    import tree.
+
+    Legacy (``project_id IS NULL``) specs are untouched: their files were already
+    written straight into this same dir by ``spec_service.write_spec_file``, so
+    the dir is simply created and left alone — which is exactly today's behaviour.
+
+    Any spec whose file is missing from the staged tree but whose row still holds
+    code is materialized from the DB. That keeps the explicit "run a blocked spec
+    anyway" override working for project-backed specs, whose blocked code is
+    deliberately never committed to the project.
+
+    Args:
+        db: Active session.
+        run: The owning run (gives the run code + owner scope).
+        cases: ``(test_case_id, ticket_external_id, case_code)`` per spec to stage.
+
+    Returns:
+        The staged run directory.
+    """
+    spec_dir = scoped_specs_dir(run.owner_id) / run.code
+    spec_dir.mkdir(parents=True, exist_ok=True)
+
+    projects: dict[int, AutomationProject] = {}
+    spec_paths: dict[int, list[str]] = {}
+    pending_code: list[tuple[str, str]] = []  # (relative path, code)
+
+    for case_id, ticket_external_id, case_code in cases:
+        spec = (
+            db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+        )
+        if spec is None or spec.project_id is None:
+            continue
+        project = db.get(AutomationProject, spec.project_id)
+        if project is None:
+            logger.warning("Spec {} references a missing automation project", spec.id)
+            continue
+        relative = _spec_relative_path(spec, ticket_external_id, case_code)
+        projects[project.id] = project
+        spec_paths.setdefault(project.id, []).append(relative)
+        pending_code.append((relative, spec.code or ""))
+
+    for project_id, project in projects.items():
+        automation_project_service.stage_for_run(
+            project, run.code, spec_paths[project_id], owner_id=run.owner_id
+        )
+
+    for relative, code in pending_code:
+        destination = spec_dir / relative
+        if destination.exists() or not code.strip():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(code, encoding="utf-8")
+    return spec_dir
+
+
+def _persist_spec_code(
+    db, run: Run, case: TestCase, spec: AutomationSpec, code: str, spec_dir: Path
+) -> str:
+    """Write an accepted spec revision to its authoritative home + the staged dir.
+
+    Project-backed: the project tree is the source of truth, so the file is
+    written there under the project lock and committed (git is the epic's
+    snapshot/rollback mechanism, and an AI-authored fix deserves history), then
+    mirrored into ``spec_dir`` so the next heal attempt runs the new code.
+    Legacy: unchanged — ``spec_service.write_spec_file`` into the run's spec dir.
+
+    Returns:
+        The authoritative absolute path, for ``AutomationSpec.path``.
+    """
+    if spec.project_id is None:
+        return str(
+            spec_service.write_spec_file(
+                run.code, case.ticket_external_id, case.code, code, run.owner_id
+            )
+        )
+    project = db.get(AutomationProject, spec.project_id)
+    if project is None:  # the project row vanished — fall back rather than lose the fix
+        logger.warning("Spec {} references a missing automation project", spec.id)
+        return str(
+            spec_service.write_spec_file(
+                run.code, case.ticket_external_id, case.code, code, run.owner_id
+            )
+        )
+    with automation_project_service.project_lock(project):
+        path = automation_project_service.write_spec(
+            project, case.ticket_external_id, case.code, code
+        )
+        automation_project_service.git_commit(
+            project, f"fix({case.ticket_external_id}): heal {case.code}"
+        )
+    automation_project_service.sync_files_to_db(db, project)
+    relative = _spec_relative_path(spec, case.ticket_external_id, case.code)
+    staged = spec_dir / relative
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(code, encoding="utf-8")
+    return str(path)
+
+
 def run_execution(execution_id: int) -> None:
     """Background worker: run Playwright for an Execution and record results.
 
@@ -749,8 +942,21 @@ def run_execution(execution_id: int) -> None:
                     },
                 )
 
-            spec_dir = scoped_specs_dir(run.owner_id) / run.code
-            spec_dir.mkdir(parents=True, exist_ok=True)
+            # Stage an ephemeral per-run copy of every project-backed spec's
+            # project (library + this run's specs only). Legacy specs already sit
+            # in this dir. NOTE the ordering below: staging copies the project's
+            # own playwright.config.ts, and `_write_config` then OVERWRITES it —
+            # deliberately. The runner's generated config is the only one that
+            # carries this execution's workers/headless/baseURL/storageState and,
+            # critically, the `report.json` JSON reporter the result parser reads;
+            # the project's config (a `results.json` reporter, testDir './tests')
+            # would silently produce no report. The project config's job is to make
+            # the tree listable by the generation gate, not to run executions.
+            spec_dir = _stage_specs_for_run(
+                db,
+                run,
+                [(r.test_case_id, r.ticket_external_id, r.case_code) for r in results],
+            )
             headless = bool(settings_store.load_settings().get("headless", True))
 
             # Resolve project auth: inject baseURL always (fixes relative goto), and
@@ -799,11 +1005,22 @@ def run_execution(execution_id: int) -> None:
             _apply_fixtures(spec_dir, session_file, replay_session)
 
             # A single-result execution targets just that one spec (the "run this
-            # test" action); a multi-case run executes the whole suite.
+            # test" action); a multi-case run executes the whole suite. Playwright's
+            # positional filter is matched against the whole file path, so we pass
+            # the BASENAME rather than `tests/<TICKET>/<file>`: a basename matches
+            # regardless of the OS path separator, and since #540 puts the full
+            # ticket id in the filename, basenames are unique project-wide.
             single_spec = ""
             if len(results) == 1:
                 r0 = results[0]
-                single_spec = f"{r0.ticket_external_id.rsplit('-', 1)[-1]}-{r0.case_code}.spec.ts"
+                r0_spec = (
+                    db.query(AutomationSpec)
+                    .filter(AutomationSpec.test_case_id == r0.test_case_id)
+                    .first()
+                )
+                single_spec = Path(
+                    _spec_relative_path(r0_spec, r0.ticket_external_id, r0.case_code)
+                ).name
 
             # Last checkpoint before spawning Playwright — registered with
             # run_control so a concurrent cancel can kill it mid-run.
@@ -1190,9 +1407,15 @@ def heal_spec(case_id: int) -> None:
 
         run_id_str = str(run.id)
         max_attempts = settings.heal_max_attempts
-        filename = spec_service.spec_filename(case.ticket_external_id, case.code)
-        spec_dir = scoped_specs_dir(run.owner_id) / run.code
-        spec_dir.mkdir(parents=True, exist_ok=True)
+        # Project-backed specs live at `tests/<TICKET>/<file>` inside the staged
+        # tree; legacy ones sit at its root. `relative` is used for file writes,
+        # `filename` (the basename) for Playwright's path filter and for matching
+        # report entries — which the report parser already basenames.
+        relative = _spec_relative_path(spec, case.ticket_external_id, case.code)
+        filename = Path(relative).name
+        spec_dir = _stage_specs_for_run(
+            db, run, [(case.id, case.ticket_external_id, case.code)]
+        )
         headless = bool(settings_store.load_settings().get("headless", True))
 
         # Reuse a saved manual-login session if present; never pop a capture
@@ -1239,7 +1462,8 @@ def heal_spec(case_id: int) -> None:
         # out of the runnable set), so without this a self-heal on a blocked spec
         # would find no file to run — writing it lets the heal loop attempt an
         # unblock. Harmless for already-runnable specs (their file matches).
-        (spec_dir / filename).write_text(spec.code or "", encoding="utf-8")
+        (spec_dir / relative).parent.mkdir(parents=True, exist_ok=True)
+        (spec_dir / relative).write_text(spec.code or "", encoding="utf-8")
 
         # A heal pass is now underway — reflect it on the spec lifecycle.
         spec.status = "running"
@@ -1467,11 +1691,8 @@ def heal_spec(case_id: int) -> None:
             attempts_log.append(rec)
             last_fix_pair = (previous_code, fixed)
 
-            path = spec_service.write_spec_file(
-                run.code, case.ticket_external_id, case.code, fixed, run.owner_id
-            )
+            spec.path = _persist_spec_code(db, run, case, spec, fixed, spec_dir)
             spec.code = fixed
-            spec.path = str(path)
             db.commit()
 
         # Reflect the heal outcome on the spec lifecycle. Terminal states set
