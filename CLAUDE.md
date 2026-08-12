@@ -37,13 +37,14 @@ Each of these produces a *green-looking* run that proved nothing. Learned the ha
 - **`page.goto` is a full reload, and the access token is in memory only** (never persisted, by design). A reload therefore boots *anonymous* and `RequireAuth` legitimately redirects to `/login` — which looks exactly like a session bug but isn't. Navigate **client-side** (click the sidebar buttons; the nav uses buttons, not `<a href>`).
 - **react-query has `staleTime: 15_000`** (`app/src/app/QueryProvider.tsx`), so revisiting a screen serves cache and issues **no request at all**. Visit a screen not yet loaded, and *assert that requests actually happened* rather than inferring it.
 
-Also: the onboarding `TourOverlay` intercepts clicks on first load — dismiss it ("Skip") before driving the shell. Its blocker is `fixed inset-0 z-[70]`, so it eats *every* click until dismissed; target it by `[data-testid=tour-card]`.
+Also: the onboarding `TourOverlay` intercepts clicks on first load. Its blocker is `fixed inset-0 z-[70]`, so it eats *every* click until dismissed; target it by `[data-testid=tour-card]`. **Better than clicking "Skip": pre-set `localStorage["qagent.tourSeen"] = "1"` in an `addInitScript`** — the tour also *auto-navigates the shell*, which silently bounces a run-scoped route to the dashboard before "Skip" can be clicked (learned in #549, after the route looked like it had redirected for auth reasons).
 
-Three more traps, learned in #543:
+Four more traps, learned in #543 and #549:
 
 - **Route-match on a predicate, not a `**/auth/**` glob.** That glob also swallows Vite's own `/src/screens/auth/*.tsx` dev modules and silently blanks the login page. Use something like `^/(api|auth)/`.
 - **`route.fallback()` for anything you are not deliberately mocking.** Fulfilling unknown endpoints with `{}` mints a bogus session (a faked `/auth/refresh` did exactly this) and crashes the shell.
 - **Assert requests actually happened.** Combined with `staleTime: 15_000`, a screen you have already visited issues none, so a passing assertion can be reading cache.
+- **Translucent `GlassCard` over the animated shell can make text genuinely unreadable** — screenshot and *look* before calling a panel done; use the opaque pattern (`ProjectFilePanel`) for anything text-heavy.
 
 ## Build & verify (api/)
 
