@@ -440,6 +440,46 @@ def _wait_heal_done(client, case_id):
         time.sleep(0.05)
 
 
+def _start_in_process_heal(client, case_id, *, expected_attempts=None):
+    """Start a heal, prove it took the **in-process** branch, and wait for it.
+
+    This exists because of #573. ``POST /cases/{id}/spec/heal`` has three
+    branches, and all three return ``{"started": True}``:
+
+      * ``mode="live-harness"`` — queues live authoring on the paired agent
+      * ``mode="local-agent"``  — queues a heal Execution for the paired agent
+      * ``mode="server"``       — the in-process ``playwright_runner.heal_spec``
+                                  loop, which is what these tests exercise
+
+    For a long time the suite's temp workspace resolved ``executionTarget`` to
+    ``local-agent`` (``settings_store.DEFAULTS``), so every heal test hit the
+    agent branch — 409 "No local agent paired" — and never reached the loop at
+    all. Asserting a status code, or even ``started is True``, does **not**
+    distinguish those cases, which is exactly why the hole went unnoticed.
+
+    So assert two things that only hold on the in-process path:
+
+      1. the response's ``mode`` is ``"server"`` — the branch is named in the
+         response, so pin it rather than trusting a bare 200, and
+      2. after the heal settles, the heal **report** holds a per-attempt trail —
+         ``attempts`` is appended once per iteration of the loop body, inside
+         ``heal_spec``, so a non-empty trail is positive proof the loop ran.
+    """
+    resp = client.post(f"/cases/{case_id}/spec/heal")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["started"] is True
+    assert body["mode"] == "server", f"heal dispatched off-server ({body['mode']}), loop never ran"
+
+    _wait_heal_done(client, case_id)
+
+    attempts = client.get(f"/cases/{case_id}/spec/heal/report").json()["attempts"]
+    assert attempts, "in-process heal loop never recorded an attempt — its body did not run"
+    if expected_attempts is not None:
+        assert len(attempts) == expected_attempts
+    return attempts
+
+
 def test_heal_missing_spec_returns_404(client, db_session):
     run, case = _seed_run_and_case(db_session)
     resp = client.post(f"/cases/{case.id}/spec/heal")
@@ -468,15 +508,15 @@ def test_heal_passes_first_run_marks_result_pass(client, db_session, monkeypatch
     _seed_spec(db_session, run, case)
     _seed_execution_result(db_session, run, case, status="fail")
 
-    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file=""):
+    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file="", **_kwargs):
         report = {
             "suites": [
                 {
-                    "file": "1428-TC-01.spec.ts",
+                    "file": "SUR-1428-TC-01.spec.ts",
                     "specs": [
                         {
                             "title": "Login works",
-                            "file": "1428-TC-01.spec.ts",
+                            "file": "SUR-1428-TC-01.spec.ts",
                             "tests": [{"results": [{"status": "passed", "duration": 42, "attachments": []}]}],
                         }
                     ],
@@ -494,8 +534,7 @@ def test_heal_passes_first_run_marks_result_pass(client, db_session, monkeypatch
     monkeypatch.setattr(playwright_runner, "_invoke_playwright", fake_invoke)
     monkeypatch.setattr(playwright_runner.spec_service, "generate_fixed_spec_code", boom_fix)
 
-    assert client.post(f"/cases/{case.id}/spec/heal").json()["started"] is True
-    _wait_heal_done(client, case.id)
+    _start_in_process_heal(client, case.id)
 
     from app.db import SessionLocal
     from app.models.execution import ExecutionResult
@@ -524,7 +563,7 @@ def test_heal_fixes_then_passes_updates_spec(client, db_session, monkeypatch):
 
     calls = {"invoke": 0, "fix": 0}
 
-    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file=""):
+    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file="", **_kwargs):
         calls["invoke"] += 1
         status = "failed" if calls["invoke"] == 1 else "passed"
         entry_result = {"status": status, "duration": 10, "attachments": []}
@@ -533,11 +572,11 @@ def test_heal_fixes_then_passes_updates_spec(client, db_session, monkeypatch):
         report = {
             "suites": [
                 {
-                    "file": "1428-TC-01.spec.ts",
+                    "file": "SUR-1428-TC-01.spec.ts",
                     "specs": [
                         {
                             "title": "Login works",
-                            "file": "1428-TC-01.spec.ts",
+                            "file": "SUR-1428-TC-01.spec.ts",
                             "tests": [{"results": [entry_result]}],
                         }
                     ],
@@ -559,7 +598,13 @@ def test_heal_fixes_then_passes_updates_spec(client, db_session, monkeypatch):
         "});\n"
     )
 
-    def fake_fix(case_arg, current_code, error_message, run_output="", context=None, examples=None):
+    # Trailing *_args/**_kwargs keeps the stub tolerant of new params on
+    # spec_service.generate_fixed_spec_code — the loop calls it *positionally*
+    # and it gained a 7th arg (`dom_snapshot`, #398). The stale 6-arg stub turned
+    # every heal into a TypeError that heal_spec swallowed into a log line, so
+    # the test failed on a downstream assertion with no hint of the real cause.
+    def fake_fix(case_arg, current_code, error_message, run_output="", context=None,
+                 examples=None, *_args, **_kwargs):
         calls["fix"] += 1
         assert "selector not found" in error_message
         return FIXED
@@ -567,8 +612,7 @@ def test_heal_fixes_then_passes_updates_spec(client, db_session, monkeypatch):
     monkeypatch.setattr(playwright_runner, "_invoke_playwright", fake_invoke)
     monkeypatch.setattr(playwright_runner.spec_service, "generate_fixed_spec_code", fake_fix)
 
-    assert client.post(f"/cases/{case.id}/spec/heal").json()["started"] is True
-    _wait_heal_done(client, case.id)
+    _start_in_process_heal(client, case.id)
 
     assert calls["fix"] == 1  # fixed once after the first failure
     assert calls["invoke"] == 2  # ran, failed, re-ran, passed
@@ -604,14 +648,14 @@ def test_heal_report_captures_attempts_and_diff(client, db_session, monkeypatch)
 
     calls = {"n": 0}
 
-    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file=""):
+    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file="", **_kwargs):
         calls["n"] += 1
         status = "failed" if calls["n"] == 1 else "passed"
         res = {"status": status, "duration": 10, "attachments": []}
         if status == "failed":
             res["error"] = {"message": "locator resolved to 0 elements"}
-        report = {"suites": [{"file": "1428-TC-01.spec.ts", "specs": [
-            {"title": "Login works", "file": "1428-TC-01.spec.ts", "tests": [{"results": [res]}]}]}]}
+        report = {"suites": [{"file": "SUR-1428-TC-01.spec.ts", "specs": [
+            {"title": "Login works", "file": "SUR-1428-TC-01.spec.ts", "tests": [{"results": [res]}]}]}]}
         (spec_dir_arg / "report.json").write_text(__import__("json").dumps(report), encoding="utf-8")
         return (1 if status == "failed" else 0), status, ""
 
@@ -628,8 +672,7 @@ def test_heal_report_captures_attempts_and_diff(client, db_session, monkeypatch)
     monkeypatch.setattr(playwright_runner.spec_service, "generate_fixed_spec_code",
                         lambda *a, **k: FIXED)
 
-    assert client.post(f"/cases/{case.id}/spec/heal").json()["started"] is True
-    _wait_heal_done(client, case.id)
+    _start_in_process_heal(client, case.id)
 
     report = client.get(f"/cases/{case.id}/spec/heal/report").json()
     assert report["finalStatus"] == "pass"
@@ -717,9 +760,9 @@ def test_heal_rejects_assertion_weakening_fix(client, db_session, monkeypatch):
     original = client.get(f"/cases/{case.id}/spec").json()["code"]  # 3 assertions
     _seed_execution_result(db_session, run, case, status="fail")
 
-    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file=""):
-        report = {"suites": [{"file": "1428-TC-01.spec.ts", "specs": [
-            {"title": "Login works", "file": "1428-TC-01.spec.ts", "tests": [
+    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file="", **_kwargs):
+        report = {"suites": [{"file": "SUR-1428-TC-01.spec.ts", "specs": [
+            {"title": "Login works", "file": "SUR-1428-TC-01.spec.ts", "tests": [
                 {"results": [{"status": "failed", "duration": 5, "attachments": [],
                               "error": {"message": "boom"}}]}]}]}]}
         (spec_dir_arg / "report.json").write_text(__import__("json").dumps(report), encoding="utf-8")
@@ -736,8 +779,7 @@ def test_heal_rejects_assertion_weakening_fix(client, db_session, monkeypatch):
     monkeypatch.setattr(playwright_runner, "_invoke_playwright", fake_invoke)
     monkeypatch.setattr(playwright_runner.spec_service, "generate_fixed_spec_code", fake_fix)
 
-    assert client.post(f"/cases/{case.id}/spec/heal").json()["started"] is True
-    _wait_heal_done(client, case.id)
+    _start_in_process_heal(client, case.id)
 
     # Previous good spec kept; the weakening fix never overwrote it.
     assert client.get(f"/cases/{case.id}/spec").json()["code"] == original
@@ -772,9 +814,9 @@ def test_heal_stops_on_product_defect_without_regenerating(client, db_session, m
     _seed_spec(db_session, run, case)
     _seed_execution_result(db_session, run, case, status="fail")
 
-    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file=""):
-        report = {"suites": [{"file": "1428-TC-01.spec.ts", "specs": [
-            {"title": "Login works", "file": "1428-TC-01.spec.ts", "tests": [
+    def fake_invoke(spec_dir_arg, workers, timeout_s, spec_file="", **_kwargs):
+        report = {"suites": [{"file": "SUR-1428-TC-01.spec.ts", "specs": [
+            {"title": "Login works", "file": "SUR-1428-TC-01.spec.ts", "tests": [
                 {"results": [{"status": "failed", "duration": 5, "attachments": [],
                               "error": {"message": "expected $10 got $0"}}]}]}]}]}
         (spec_dir_arg / "report.json").write_text(__import__("json").dumps(report), encoding="utf-8")
@@ -792,8 +834,7 @@ def test_heal_stops_on_product_defect_without_regenerating(client, db_session, m
     monkeypatch.setattr(playwright_runner, "_invoke_playwright", fake_invoke)
     monkeypatch.setattr(playwright_runner.spec_service, "generate_fixed_spec_code", boom_fix)
 
-    assert client.post(f"/cases/{case.id}/spec/heal").json()["started"] is True
-    _wait_heal_done(client, case.id)
+    _start_in_process_heal(client, case.id)
 
     from app.db import SessionLocal
     from app.models.execution import ExecutionResult

@@ -181,7 +181,8 @@ def test_start_execution_local_agent_queues_without_spawning_thread(client, db_s
 
 
 def test_start_execution_default_target_is_server(client, db_session, monkeypatch):
-    """No 'target' in the body -> falls back to the (default) 'server' setting, unchanged behavior."""
+    """No 'target' in the body -> falls back to the workspace ``executionTarget``
+    setting, which the suite pins to ``server`` (see conftest, #573)."""
     import app.services.playwright_runner as runner_module
 
     monkeypatch.setattr(runner_module, "run_execution", lambda execution_id: None)
@@ -193,6 +194,34 @@ def test_start_execution_default_target_is_server(client, db_session, monkeypatc
     body = resp.json()
     assert body["target"] == "server"
     assert body["status"] == "running"
+
+
+def test_start_execution_default_target_follows_local_agent_setting(
+    client, db_session, monkeypatch, local_agent_target
+):
+    """The bodyless default *follows the setting* rather than being hardcoded.
+
+    Companion to the test above, so that one isn't merely restating conftest's
+    pin: flip the persisted ``executionTarget`` to ``local-agent`` (via the
+    restore-guaranteeing ``local_agent_target`` fixture) and the same bodyless
+    POST must queue for the agent instead of running in-process. Together the
+    pair pins ``_resolve_target``'s fallback in both directions — which is what
+    #573 showed nobody had actually verified.
+    """
+    import app.services.playwright_runner as runner_module
+
+    called: list[int] = []
+    monkeypatch.setattr(runner_module, "run_execution", lambda execution_id: called.append(execution_id))
+    user = _make_user(db_session, "default-target-agent@example.com")
+    _pair_device(db_session, user)
+    run, _case = _seed_agent_run(db_session, user.id)
+
+    resp = client.post(f"/runs/{run.id}/execution", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["target"] == "local-agent"
+    assert body["status"] == "queued"
+    assert called == []  # never spawns the in-process runner
 
 
 def test_run_single_spec_on_terminal_run_commits_execution(client, db_session):
