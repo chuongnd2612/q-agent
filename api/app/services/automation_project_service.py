@@ -31,6 +31,7 @@ Three properties the rest of the epic leans on:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -60,6 +61,7 @@ __all__ = [
     "project_dir",
     "ensure_project",
     "materialize_scaffold",
+    "migrate_tsconfig",
     "ensure_deps",
     "git_init",
     "git_commit",
@@ -253,11 +255,32 @@ blob-report/
 *.log
 """
 
+# `module`/`moduleResolution` are **NodeNext**, not the `CommonJS` + `node` pair this
+# originally scaffolded (#562). Two reasons, both measured against a real compiler:
+#
+# 1. TypeScript 7 **removed** `moduleResolution: "node"` (it emits `TS5108: Option
+#    'moduleResolution=node10' has been removed`). #546's gate fails open on the whole
+#    TS5xxx family so *our* gate survives that, but #549 exports this project to a git
+#    remote the customer runs in **their** CI, on a toolchain we don't control — and a
+#    developer opening it in a modern IDE would see errors on a project we generated.
+# 2. `NodeNext` models what Playwright actually does at runtime more honestly than
+#    `bundler` does. The scaffolded `package.json` declares no `"type"`, so `NodeNext`
+#    classifies every `.ts` file as **CommonJS** — exactly how Playwright requires them.
+#    Extensionless relative imports (`../../pages/UserFormPage`) therefore stay legal:
+#    the extension requirement `NodeNext` is known for applies only in *ESM* mode. That
+#    was verified against TypeScript 5.9 **and** 7.1-dev before choosing it, precisely
+#    because needing extensions would have forced a change to every generated import.
+#    `"module": "ESNext"` + `"moduleResolution": "bundler"` also typechecks clean, but it
+#    tells the compiler the files are ESM, which would let a generated spec use
+#    `import.meta`/top-level `await` past the gate and then fail at Playwright runtime.
+#
+# Do not reintroduce `"type": "module"` in `_package_json` without revisiting this: that
+# would flip these files into ESM mode and *then* extensions become mandatory.
 _TSCONFIG = """{
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
     "strict": true,
     "esModuleInterop": true,
@@ -304,11 +327,56 @@ def _package_json(project: AutomationProject) -> str:
     )
 
 
+# `moduleResolution` values a modern compiler rejects outright. TypeScript 7 removed
+# both `node`/`node10` and `classic`, so a project still declaring one cannot be
+# typechecked at all — every spec in it fails for a reason that is not the spec's.
+_REMOVED_MODULE_RESOLUTIONS = frozenset({"node", "node10", "classic"})
+
+
+def migrate_tsconfig(path: Path) -> bool:
+    """Repair a ``tsconfig.json`` that still declares a removed ``moduleResolution``.
+
+    :func:`materialize_scaffold` deliberately never overwrites an existing file, so
+    projects scaffolded before #562 would keep their broken ``moduleResolution: "node"``
+    forever — and #549 hands exactly that tree to the customer's own CI. This is the one
+    narrow exception, and it is self-limiting three ways:
+
+    * It fires **only** when ``moduleResolution`` is a value no supported compiler
+      accepts. Any other config, however hand-tuned, is left completely alone.
+    * It patches the two offending keys in place rather than rewriting the file, so
+      unrelated user edits (extra ``paths``, a relaxed ``strict``) survive.
+    * A file that is not parseable JSON (hand-edited into JSONC with comments) is left
+      alone rather than reformatted — better a stale config than a clobbered one.
+
+    Returns:
+        True when the file was rewritten.
+    """
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    options = config.get("compilerOptions") if isinstance(config, dict) else None
+    if not isinstance(options, dict):
+        return False
+    if str(options.get("moduleResolution", "")).lower() not in _REMOVED_MODULE_RESOLUTIONS:
+        return False
+    # Both keys move together: `moduleResolution: NodeNext` requires `module: NodeNext`
+    # (TS5095 otherwise), so fixing one alone would swap TS5108 for a different TS5xxx.
+    options["module"] = "NodeNext"
+    options["moduleResolution"] = "NodeNext"
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    logger.info("migrated removed moduleResolution in {} to NodeNext", path)
+    return True
+
+
 def materialize_scaffold(project: AutomationProject) -> Path:
     """Create the directory skeleton and the baseline config files, idempotently.
 
     Existing files are never overwritten — the project accumulates AI-authored
-    code and a user may legitimately have edited ``playwright.config.ts``.
+    code and a user may legitimately have edited ``playwright.config.ts``. The single
+    exception is :func:`migrate_tsconfig`, which repairs a ``moduleResolution`` value
+    that no supported compiler accepts (see its docstring for why that earns an
+    exception and how narrowly it is scoped).
 
     Returns:
         The project root.
@@ -329,6 +397,7 @@ def materialize_scaffold(project: AutomationProject) -> Path:
         path = root / name
         if not path.exists():
             path.write_text(content, encoding="utf-8")
+    migrate_tsconfig(root / "tsconfig.json")
     return root
 
 

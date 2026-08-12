@@ -12,6 +12,7 @@ runner via the ``runner=`` seam.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import threading
@@ -102,6 +103,89 @@ def test_materialize_scaffold_creates_skeleton_and_never_overwrites(db_session):
     (root / "playwright.config.ts").write_text("// hand edited", encoding="utf-8")
     aps.materialize_scaffold(project)
     assert (root / "playwright.config.ts").read_text(encoding="utf-8") == "// hand edited"
+
+
+# ---------------------------------------------------------------------------
+# tsconfig — options valid across TypeScript 5 -> 7 (#562)
+# ---------------------------------------------------------------------------
+
+
+def test_scaffolded_tsconfig_avoids_the_module_resolution_removed_in_typescript_7(db_session):
+    """`moduleResolution: "node"` was REMOVED in TS 7 (measured: it emits TS5108).
+
+    #546's gate fails open on the whole TS5xxx family so *our* gate survives that, but
+    #549 exports this tree to the customer's own CI, where a removed compiler option is
+    a hard failure on a toolchain we don't control.
+    """
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    config = json.loads((aps.project_dir(project) / "tsconfig.json").read_text(encoding="utf-8"))
+    options = config["compilerOptions"]
+    assert options["moduleResolution"] == "NodeNext"
+    # `moduleResolution: NodeNext` requires `module: NodeNext` (TS5095 otherwise).
+    assert options["module"] == "NodeNext"
+    assert options["moduleResolution"].lower() not in aps._REMOVED_MODULE_RESOLUTIONS
+
+
+@pytest.mark.parametrize("removed", ["node", "node10", "Node", "classic"])
+def test_materialize_scaffold_migrates_a_removed_module_resolution(db_session, removed):
+    """The one file `materialize_scaffold` repairs rather than leaves alone.
+
+    It never overwrites, so a project scaffolded before #562 would otherwise keep a
+    config no supported compiler accepts forever.
+    """
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    path = aps.project_dir(project) / "tsconfig.json"
+    path.write_text(
+        json.dumps(
+            {
+                "compilerOptions": {
+                    "module": "CommonJS",
+                    "moduleResolution": removed,
+                    "strict": True,
+                    # A user edit that must survive the migration.
+                    "paths": {"@app/*": ["./app/*"]},
+                },
+                "include": ["**/*.ts"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    aps.materialize_scaffold(project)
+
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert config["compilerOptions"]["moduleResolution"] == "NodeNext"
+    assert config["compilerOptions"]["module"] == "NodeNext"
+    # Surgical: the two offending keys move, everything else is preserved verbatim.
+    assert config["compilerOptions"]["paths"] == {"@app/*": ["./app/*"]}
+    assert config["compilerOptions"]["strict"] is True
+    assert config["include"] == ["**/*.ts"]
+
+
+def test_migrate_tsconfig_leaves_an_already_valid_config_untouched(tmp_path):
+    """Idempotent, and it never touches a config whose resolution a compiler accepts."""
+    path = tmp_path / "tsconfig.json"
+    original = json.dumps({"compilerOptions": {"moduleResolution": "bundler"}}, indent=2)
+    path.write_text(original, encoding="utf-8")
+    assert aps.migrate_tsconfig(path) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_migrate_tsconfig_leaves_unparseable_json_alone(tmp_path):
+    """A hand-edited JSONC tsconfig is better left stale than clobbered/reformatted."""
+    path = tmp_path / "tsconfig.json"
+    original = '{\n  // a comment makes this JSONC, not JSON\n  "compilerOptions": {}\n}\n'
+    path.write_text(original, encoding="utf-8")
+    assert aps.migrate_tsconfig(path) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_migrate_tsconfig_tolerates_a_missing_or_odd_file(tmp_path):
+    assert aps.migrate_tsconfig(tmp_path / "nope.json") is False
+    weird = tmp_path / "weird.json"
+    weird.write_text("[]", encoding="utf-8")
+    assert aps.migrate_tsconfig(weird) is False
 
 
 # ---------------------------------------------------------------------------
