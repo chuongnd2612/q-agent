@@ -37,6 +37,7 @@ from app.schemas import AutomationSpecRegenerate, AutomationSpecUpdate, SpecChat
 from app.services import (
     audit_service,
     automation_gate,
+    automation_planner_service,
     automation_project_service,
     live_authoring_service,
     placeholder_gate,
@@ -301,6 +302,67 @@ def _resolve_automation_project(
     return project
 
 
+def _plan_for_case(
+    db: Session,
+    run: Run,
+    case: TestCase,
+    context: dict,
+    project: AutomationProject | None,
+    *,
+    force: bool = False,
+) -> dict | None:
+    """The Automation Plan governing this case, planned ONCE per ticket (#544).
+
+    Planning is per **feature**, not per case — the main cost lever of Wave 3 — so
+    the plan is keyed on ``(run, ticket)`` and every automation-eligible case on the
+    ticket is handed to the planner together. The on-disk plan file is the cache, so
+    the second case of a ticket costs no Claude call at all.
+
+    Returns ``None`` on the legacy path (no persistent project): with no project
+    there is no inventory, so there is nothing to reuse and nothing to authorize.
+    Never raises — ``plan_for_ticket`` degrades to an empty plan on any failure, and
+    an empty plan authorizes no imports, i.e. exactly the pre-#544 behaviour.
+    """
+    if project is None:
+        return None
+    ticket_cases = (
+        _eligible_cases_query(db, run.id)
+        .filter(TestCase.ticket_external_id == case.ticket_external_id)
+        .all()
+    )
+    if not any(c.id == case.id for c in ticket_cases):
+        # A regenerate of a case that is no longer "eligible" (e.g. approval
+        # changed under us) still needs a plan covering it.
+        ticket_cases = [*ticket_cases, case]
+    return automation_planner_service.plan_for_ticket(
+        project,
+        run.code,
+        case.ticket_external_id,
+        ticket_cases,
+        context,
+        force=force,
+    )
+
+
+def _plan_rejection(gate: dict, violations: list[str], *, what: str) -> tuple[dict, str]:
+    """Turn a plan violation into a gate rejection (#544).
+
+    The plan is not advice: it enumerates the exact files generation may import and
+    the exact paths it may write, so ignoring it is a rejection like any other gate
+    failure. Recorded inside ``gate_report`` so it surfaces on the Automation screen
+    next to every other rejection reason, with no new UI path.
+    """
+    gate = dict(gate)
+    gate["outcome"] = "rejected"
+    gate["planViolations"] = violations
+    gate["reason"] = f"The generated spec {what}: {', '.join(violations[:6])}."
+    gate["unblock_action"] = (
+        "Regenerate — the automation plan lists the only assets this spec may use; "
+        "anything else must stay inline until a later stage authors it."
+    )
+    return gate, "rejected"
+
+
 def _gate_into_project(
     db: Session,
     project: AutomationProject,
@@ -312,6 +374,7 @@ def _gate_into_project(
     noun: str,
     fix_verb: str,
     review=None,
+    plan: dict | None = None,
 ) -> tuple[dict, str, str]:
     """Write ``code`` into the project, gate it there, commit on pass / reset on fail.
 
@@ -332,6 +395,10 @@ def _gate_into_project(
         review: Optional ``callable(gate) -> (gate, outcome)`` applied only when the
             deterministic + list gate passed — the ``automation-reviewer`` stage,
             which can still flip the outcome to ``rejected``.
+        plan: The ticket's Automation Plan (#544). When present it **constrains** the
+            write: a library file that appeared but the plan never marked ``writable``
+            is a rejection, which is the literal form of "a case whose plan says
+            ``reuse`` must not produce a new file". ``None`` skips the check.
 
     Returns:
         ``(gate_report, outcome, path)`` where ``path`` is the absolute written
@@ -344,12 +411,23 @@ def _gate_into_project(
             project, f"chore: pre-generation state for {case.ticket_external_id} {case.code}"
         )
         pre_state = automation_project_service.head_commit(project) or "HEAD"
+        before_paths = [e["path"] for e in automation_project_service.inventory(project)]
         path = automation_project_service.write_spec(
             project, case.ticket_external_id, case.code, code
         )
         gate, outcome = _gate_spec_or_bypass(
             code, known, owner_id, noun=noun, fix_verb=fix_verb, project=project
         )
+        if outcome == "passed" and plan is not None:
+            unplanned = automation_planner_service.unplanned_new_paths(
+                before_paths,
+                [e["path"] for e in automation_project_service.inventory(project)],
+                plan,
+            )
+            if unplanned:
+                gate, outcome = _plan_rejection(
+                    gate, unplanned, what="created shared files the plan did not authorize"
+                )
         if outcome == "passed" and review is not None:
             gate, outcome = review(gate)
         if outcome == "passed":
@@ -576,6 +654,7 @@ def _generate_one(
     case: TestCase,
     reviewer_comment: str | None = None,
     authored: dict | None = None,
+    plans: dict[str, dict] | None = None,
 ) -> AutomationSpec:
     """Generate (or regenerate) and persist the AutomationSpec for one case.
 
@@ -606,6 +685,11 @@ def _generate_one(
     * **Legacy** (``project_id IS NULL``) — the pre-#540 behaviour, unchanged:
       per-run throwaway dir, spec gated alone in an empty temp dir.
 
+    Since #544 a project-backed case is also **planned** before it is generated:
+    ``automation_planner_service`` decides REUSE > EXTEND > CREATE once per ticket, the
+    plan is persisted to ``plan_report`` (and to ``.qagent/plans/``), and the plan is
+    what authorizes the spec's asset imports and constrains the paths it may write.
+
     Args:
         db: Active session (caller commits).
         run: The owning Run (provides run.code for the spec path).
@@ -613,6 +697,9 @@ def _generate_one(
         reviewer_comment: Optional free-text note (from a per-case regenerate)
             injected into the generation prompt as reviewer guidance. The gate
             still runs unchanged, so a comment can never bypass quality gating.
+        plans: Optional ``{ticket_external_id: plan}`` accumulator owned by the
+            caller (``_run_generation``), so a whole pass's plans can be rolled up
+            into one reuse/extend/create log line.
 
     Returns:
         The created or updated AutomationSpec row (not yet committed).
@@ -630,6 +717,16 @@ def _generate_one(
     stored = settings_store.load_settings()
     mode = stored.get("authoringMode", "blind")
     exec_target = stored.get("executionTarget", "server")
+    if mode == "live-harness" and exec_target == "local-agent" and authored is None:
+        # Nothing is generated here (the job is handed to the paired agent and comes
+        # back through `finalize_authored_spec`), so planning would be paid for a pass
+        # that never uses it. The finalize call plans.
+        return _enqueue_agent_authoring(db, run, case, context)
+    # Plan BEFORE generating (doc §8/§24) — the plan is an input to generation, not a
+    # report on it. Once per ticket; cached on disk for the ticket's other cases.
+    plan = _plan_for_case(db, run, case, context, project)
+    if plan is not None and plans is not None:
+        plans.setdefault(case.ticket_external_id, plan)
     live_discovered: dict | None = None
     if authored is not None:
         # (#403) A paired agent authored this spec live and posted it back; the
@@ -638,13 +735,9 @@ def _generate_one(
         code = authored.get("code") or ""
         live_discovered = authored.get("discovered") or {"routes": [], "selectors": []}
         _merge_authored_discovery(context, run, live_discovered)
-    elif mode == "live-harness" and exec_target == "local-agent":
-        # (#403) browser-harness must run where Claude runs. On local-agent the
-        # agent machine owns both, so enqueue an authoring session for it to claim;
-        # the spec is persisted later at /agent/authoring/{id}/finalize. Return a
-        # pending spec row now (no code yet).
-        return _enqueue_agent_authoring(db, run, case, context)
     elif mode == "live-harness":
+        # (#403) On local-agent, browser-harness runs where Claude runs, so this pass
+        # was already handed to the paired agent above and never reaches here.
         result = live_authoring_service.author_case(
             db, case, run, owner_id=run.owner_id, run_id=run.id
         )
@@ -654,7 +747,7 @@ def _generate_one(
     else:
         examples = _select_examples_for_case(db, case)
         code = spec_service.generate_spec_code(
-            case, context, examples=examples, reviewer_comment=reviewer_comment
+            case, context, examples=examples, reviewer_comment=reviewer_comment, plan=plan
         )
     filename = spec_service.spec_filename(case.ticket_external_id, case.code)
 
@@ -673,6 +766,13 @@ def _generate_one(
     spec.filename = filename
     spec.language = "TypeScript"
     spec.framework = "Playwright"
+    # Persisted on every spec of the ticket, mirroring the `gate_report`/`heal_report`
+    # convention, so the UI renders it beside them with no new endpoint (#544). Only a
+    # plan that decided something is stored — an empty one (planning failed) would
+    # render as a husk and, worse, read as "nothing to reuse" when the truth is
+    # "nothing was asked".
+    if automation_planner_service.is_actionable(plan):
+        spec.plan_report = json.dumps(plan)
 
     # Build the KB view the gate compares against (accepts raw KB shapes directly).
     # In live-harness mode, add the runtime-verified routes/selectors just
@@ -688,6 +788,24 @@ def _generate_one(
         # disk), gate the whole tree, then commit or `git reset --hard` back.
         spec.project_id = project.id
         spec.filename = _project_spec_relpath(project, case)
+
+        def _review_then_plan(gate: dict) -> tuple[dict, str]:
+            """automation-reviewer, then the plan's import constraint.
+
+            Ordered after the reviewer so a spec that is wrong on the merits is
+            reported as such; the plan check is the last word because it is the one
+            that decides whether the spec's imports can even exist.
+            """
+            gate, outcome = _apply_automation_review(gate, code, case, context)
+            if outcome != "passed":
+                return gate, outcome
+            violations = automation_planner_service.import_violations(code, plan)
+            if violations:
+                return _plan_rejection(
+                    gate, violations, what="imports assets the plan does not authorize"
+                )
+            return gate, outcome
+
         gate, outcome, project_path = _gate_into_project(
             db,
             project,
@@ -697,7 +815,8 @@ def _generate_one(
             run.owner_id,
             noun="generated spec",
             fix_verb="Regenerate",
-            review=lambda g: _apply_automation_review(g, code, case, context),
+            review=_review_then_plan,
+            plan=plan,
         )
     else:
         gate, outcome = _gate_spec_or_bypass(
@@ -775,13 +894,16 @@ def _run_generation(run_id: int, force: bool = False) -> None:
                 agent_authoring_service.drop_queued_cases(existing_case_ids)
             total = len(cases)
             cancelled = False
+            # One plan per ticket in this pass, collected so the pass can be logged
+            # as a single reuse/extend/create tally — the epic's success metric (#544).
+            pass_plans: dict[str, dict] = {}
             for index, case in enumerate(cases, start=1):
                 if run_control.is_cancelled(run_id, db):
                     logger.info("Run {} cancelled — stopping automation generation", run.code)
                     cancelled = True
                     break
                 try:
-                    spec = _generate_one(db, run, case)
+                    spec = _generate_one(db, run, case, plans=pass_plans)
                     db.commit()
                     hub.publish(
                         str(run_id),
@@ -801,6 +923,8 @@ def _run_generation(run_id: int, force: bool = False) -> None:
                             "total": total,
                         },
                     )
+            if pass_plans:
+                automation_planner_service.log_pass_counts(run.code, pass_plans.values())
             # Flip the run to 'automation' and announce it — unless cancelled
             # mid-pass, in which case the cancel path's terminal status stands.
             if not cancelled:
@@ -1341,6 +1465,10 @@ def _spec_out(spec: AutomationSpec, files_cache: dict[int, list[dict]] | None = 
         "status": spec.status,
         "blockReason": spec.block_reason,
         "gateReport": spec.gate_report,
+        # The ticket's REUSE/EXTEND/CREATE plan (#544), as a JSON string exactly like
+        # `gateReport` — so the Automation screen renders it beside the gate report
+        # with no new endpoint. `null` when the case was never planned (legacy path).
+        "planReport": spec.plan_report,
         # The persistent automation project this spec lives in (#540). `null` for a
         # legacy spec.
         "projectId": spec.project_id,

@@ -46,23 +46,29 @@ So every generated spec:
 - reads as **business steps + web-first assertions** — not a recording of browser mechanics;
 - **never inlines a login flow** (see *Auth is not your job*, below).
 
-### Page objects: import only what you can see
+### Page objects: the AUTOMATION PLAN decides what you may import
 
-Locators and low-level UI mechanics belong in a shared page object. But this stage does **not** create
-page objects, and most projects do not have one for your screen yet. Therefore:
+Locators and low-level UI mechanics belong in a shared page object. Which ones you may actually use is
+not your judgement call — it is decided before you run, by `automation-planner`, and handed to you as
+the **AUTOMATION PLAN** block in the prompt. That block was verified against the project's real tree,
+so it is the whole truth about what exists.
 
-- **Only import a project file that appears as an import in a REFERENCE SPEC** given to you. Those
-  reference specs are real, already-passing specs from this same project, so their imports are proof
-  the file exists.
+- **Import exactly what the plan lists under "IMPORTABLE NOW", and nothing else** from `../../pages/`,
+  `../../components/`, `../../fixtures/`, `../../data/` or `../../utils/`. Call only the signatures the
+  plan shows for each of those files.
+- **Anything the plan marks "TO BE CREATED LATER" does not exist yet.** A later stage authors those
+  files. Importing one fails collection and the whole spec is rejected. Use the planned name as
+  *vocabulary* and **keep that step's locators inline in the spec**, chosen by the project's locator
+  priority.
+- Same for a **planned extension** — a method the plan says will be *added* to an existing page object
+  is not written yet, so do not call it; keep that step inline too.
 - **Never invent** `import { LoginPage } from '../../pages/LoginPage'` on the assumption that it
-  exists. `pages/` is usually empty; importing a file that is not there fails collection and the whole
-  spec is rejected. Only the base-package import became legal — inventing an asset import is exactly
-  as wrong as it always was.
-- A page object / fixture **name** listed in the Project Knowledge Base is *metadata*, not a file in
-  this project. Never turn a KB name into an import path.
-- When no shared page object is available to you, **keep the locators inline in the spec**, chosen by
-  the project's locator priority, and keep the body a thin, readable sequence of steps. A later stage
-  extracts them into page objects — do not pre-empt it with an import that cannot resolve.
+  exists. If the plan doesn't list it, it isn't there.
+- A page object / fixture **name** listed in the Project Knowledge Base is *metadata about the product
+  repo*, not a file in this automation project. Never turn a KB name into an import path.
+- **When there is no plan block at all**, the base-package import is the only legal one: keep every
+  locator inline. A thin, readable sequence of steps is the right output — do not pre-empt a later
+  stage with an import that cannot resolve.
 
 ### What the base framework already gives you
 
@@ -98,6 +104,8 @@ project-bootstrap
         ↓ knowledge.md + knowledge.json
 requirement-analyst → test-case-generator → test-case-reviewer
         ↓ approved test cases
+automation-planner
+        ↓ plan.json (reuse/extend/create — what you may import)
 [automation-generator]  ← you are here
         ↓ Playwright specs
 automation-reviewer → execution-analyzer
@@ -132,7 +140,12 @@ From the Knowledge Base, use directly (do not invent):
   project context) — reference them directly, but only in an authentication-subject spec.
 - The documented **locator strategy** (selector priority order).
 - The names of existing **Page Objects / fixtures / utilities** — informational context only (see
-  *Page objects: import only what you can see*); never turn a name into an import.
+  *Page objects: the AUTOMATION PLAN decides what you may import*); never turn a name into an import.
+
+Optional, and authoritative when present:
+
+- The **AUTOMATION PLAN** for this ticket (from `automation-planner`) — the REUSE/EXTEND/CREATE
+  decisions, listing the exact project files you may import and the exact signatures you may call.
 
 Some routes/selectors may be stamped `verified_at_runtime` — discovered live by the DOM exploration
 agent rather than inferred from source. These are marked `✓ runtime-verified` in the injected project
@@ -173,14 +186,14 @@ If any prerequisite is missing, stop and request that `project-bootstrap` (for t
 ## Output
 
 - One Playwright spec file (`*.spec.ts`) following `templates/playwright-spec.ts`: a single `test()`
-  importing from `@q-agent/playwright-base` (plus any shared project file a reference spec proves
-  exists), tagged with its source Test Case ID.
+  importing from `@q-agent/playwright-base` (plus any shared project file the AUTOMATION PLAN lists as
+  importable), tagged with its source Test Case ID.
 
 ## Quality Rules
 
 - **Layered, not standalone.** Import `test`/`expect`/helpers from `@q-agent/playwright-base`; never
-  from `@playwright/test` directly. Import a shared project file only when a reference spec proves it
-  exists, and always at the real depth (`../../pages/…`). Never invent an import.
+  from `@playwright/test` directly. Import a shared project file only when the AUTOMATION PLAN lists it
+  as importable, and always at the real depth (`../../pages/…`). Never invent an import.
 - **Exactly one `test()`** per spec, plain-string title, Test Case ID prefixed. A `test.describe` with
   no `test()` inside is rejected.
 - **No inline login.** The saved manual-login session authenticates the spec; only an

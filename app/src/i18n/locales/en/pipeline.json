@@ -433,6 +433,24 @@
       "pending": "Pending…"
     }
   },
+  "plan": {
+    "title": "AUTOMATION PLAN",
+    "pendingHint": "Reuse decisions are made before generation. Assets marked Create are not written yet — their steps stay inline in the spec for now.",
+    "notYetAuthored": "Not written yet",
+    "actions": {
+      "reuse": "Reuse",
+      "extend": "Extend",
+      "create": "Create",
+      "reuseBase": "Base framework"
+    },
+    "groups": {
+      "pages": "Page objects",
+      "components": "Components",
+      "fixtures": "Fixtures",
+      "data": "Test data",
+      "utils": "Utilities"
+    }
+  },
   "projectFiles": {
     "title": "PROJECT FILES",
     "readOnlyHint": "Support files are read-only",

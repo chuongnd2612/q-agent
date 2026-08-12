@@ -52,12 +52,64 @@ export function effectiveSpecStatus(specStatus: string | undefined, execStatus: 
  * Defensively parse a `spec.gateReport` JSON string. Returns null for empty or
  * malformed input; never throws.
  */
-export function parseGateReport(raw: string | undefined): { outcome?: string; reason?: string } | null {
+export function parseGateReport(
+  raw: string | undefined,
+): { outcome?: string; reason?: string; planViolations?: string[] } | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as { outcome?: string; reason?: string }) : null;
+    return parsed && typeof parsed === "object"
+      ? (parsed as { outcome?: string; reason?: string; planViolations?: string[] })
+      : null;
   } catch {
     return null;
   }
+}
+
+/** One asset decision in an automation plan (#544). */
+export interface PlanEntry {
+  name: string;
+  path: string;
+  action: string;
+  methods?: string[];
+  existingMethods?: string[];
+  reason?: string;
+}
+
+/** The normalised automation plan the API persists in `spec.planReport` (#544). */
+export interface AutomationPlan {
+  feature?: string;
+  ticket?: string;
+  specGroups?: { name: string; testCases: string[] }[];
+  pages?: PlanEntry[];
+  components?: PlanEntry[];
+  fixtures?: PlanEntry[];
+  data?: PlanEntry[];
+  utils?: PlanEntry[];
+  counts?: Record<string, number>;
+  importable?: string[];
+  writable?: string[];
+  cases?: string[];
+}
+
+/** The plan's asset buckets, in the order the panel renders them. */
+export const PLAN_GROUPS = ["pages", "components", "fixtures", "data", "utils"] as const;
+
+/**
+ * Defensively parse a `spec.planReport` JSON string, exactly like
+ * `parseGateReport`. Returns null for empty, malformed, or empty-of-decisions
+ * input — so the plan panel simply doesn't render rather than showing a husk.
+ */
+export function parsePlanReport(raw: string | null | undefined): AutomationPlan | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const plan = parsed as AutomationPlan;
+  const hasDecisions = PLAN_GROUPS.some((g) => (plan[g] ?? []).length > 0);
+  return hasDecisions ? plan : null;
 }

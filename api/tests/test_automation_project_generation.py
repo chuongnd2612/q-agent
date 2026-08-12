@@ -653,3 +653,113 @@ def test_spec_out_omits_project_files_for_a_legacy_spec(db_session):
     out = automation_router._spec_out(spec)
     assert out["projectId"] is None
     assert "projectFiles" not in out
+
+
+# ---------------------------------------------------------------------------
+# The plan governs generation (#544)
+# ---------------------------------------------------------------------------
+
+
+@requires_git
+def test_plan_is_persisted_on_the_spec_and_exposed_for_the_ui(
+    db_session, project_generation, monkeypatch
+):
+    """A plan is produced, persisted to BOTH locations, and surfaced on the row.
+
+    The plan rides ``plan_report`` — the same convention as ``gate_report`` — so the
+    Automation screen renders it beside the gate report with no new endpoint.
+    """
+    import json as _json
+
+    from app.models.automation_project import AutomationProject
+    from app.routers import automation as automation_router
+    from app.services import automation_planner_service as planner
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(db_session)
+    monkeypatch.setattr(
+        claude_cli, "run_json",
+        lambda *a, **k: {"pages": [{"name": "LoginPage", "action": "create",
+                                    "reason": "First feature."}]},
+    )
+    spec = _generate(db_session, run, cases[0])
+
+    plan = _json.loads(spec.plan_report)
+    assert plan["counts"]["create"] == 1
+    assert plan["ticket"] == "SUR-1428" and plan["cases"] == ["TC-01"]
+    out = automation_router._spec_out(spec)
+    assert _json.loads(out["planReport"])["counts"] == plan["counts"]
+    # ...and to the on-disk artifact the next slice's editor reads.
+    project = db_session.get(AutomationProject, spec.project_id)
+    assert planner.plan_path(project, run.code, "SUR-1428").is_file()
+
+
+@requires_git
+def test_generation_is_rejected_for_an_import_the_plan_did_not_authorize(
+    db_session, project_generation, monkeypatch
+):
+    """``CANNED_SPEC`` imports ``../../pages/LoginPage``, which this plan lists as
+    ``create`` — i.e. not written yet. Importing it is a rejection, because #545 (not
+    this slice) authors page objects and the import would fail collection."""
+    import json as _json
+
+    from app.models.automation_project import AutomationProject
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(db_session)
+    monkeypatch.setattr(
+        claude_cli, "run_json",
+        lambda *a, **k: {"pages": [{"name": "LoginPage", "path": "pages/LoginPage.ts",
+                                    "action": "create"}]},
+    )
+    spec = _generate(db_session, run, cases[0])
+
+    assert spec.status == "blocked"
+    gate = _json.loads(spec.gate_report)
+    assert gate["outcome"] == "rejected"
+    assert gate["planViolations"] == ["pages/LoginPage"]
+    # The rejection rolled the tree back, so no debris was left behind.
+    project = db_session.get(AutomationProject, spec.project_id)
+    assert not (aps.project_dir(project) / spec.filename).exists()
+
+
+@requires_git
+def test_an_authorized_import_passes(db_session, project_generation, monkeypatch):
+    """The same spec passes once ``pages/LoginPage.ts`` really exists and the plan
+    reuses it — proving the rejection above is about the plan, not about imports."""
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(db_session)
+    project = aps.ensure_project(db_session, run.owner_id, "Surency Platform", "")
+    page = aps.project_dir(project) / "pages" / "LoginPage.ts"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "export class LoginPage {\n  async open() {\n    return 1;\n  }\n}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        claude_cli, "run_json",
+        lambda *a, **k: {"pages": [{"name": "LoginPage", "path": "pages/LoginPage.ts",
+                                    "action": "reuse", "methods": ["open()"]}]},
+    )
+    spec = _generate(db_session, run, cases[0])
+    assert spec.status == "draft", spec.block_reason
+
+
+@requires_git
+def test_one_plan_covers_every_case_on_the_ticket(db_session, project_generation, monkeypatch):
+    """Planning is once per ticket — the slice's main cost lever."""
+    from app.services import claude_cli
+
+    run, cases = _seed_project_run(
+        db_session, tickets=(("SUR-1428", "TC-01"), ("SUR-1428", "TC-02"))
+    )
+    calls: list[int] = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return {"pages": [{"name": "LoginPage", "action": "create"}]}
+
+    monkeypatch.setattr(claude_cli, "run_json", fake)
+    for case in cases:
+        _generate(db_session, run, case)
+    assert len(calls) == 1, "two cases on one ticket must share one plan"
