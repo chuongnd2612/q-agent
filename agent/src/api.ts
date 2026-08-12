@@ -7,6 +7,8 @@
 
 import * as fs from "fs";
 import { AgentConfig } from "./config";
+import { ProjectBundle } from "./projectBundle";
+import { agentVersion } from "./version";
 
 /** Raised for any non-2xx/204 response; carries the HTTP status for callers that care (e.g. 409). */
 export class ApiError extends Error {
@@ -48,6 +50,12 @@ export interface Job {
   manualAuth: boolean;
   authOrigins: string[];
   specs: JobSpec[];
+  /** The persistent automation project shipped wholesale with the claim (#541).
+   * Present only for layered runs; absent for legacy self-contained specs, in
+   * which case `specs[].filename` is a bare filename as before. `files[].path`
+   * is project-relative (`pages/LoginPage.ts`), and `specs[].filename` is too
+   * (`tests/SUR-1428/SUR-1428-TC-01.spec.ts`). */
+  project?: ProjectBundle;
   /** Present when this job is an agent-executed self-heal (#260): run the heal
    * LOOP for this one case, calling /agent/heal/{caseId}/fix + /finalize. */
   heal?: {
@@ -116,11 +124,22 @@ export async function disconnectDevice(cfg: AgentConfig): Promise<void> {
   await throwIfNotOk(res);
 }
 
-/** Long-poll claim the next queued job for this device's owner. `null` on 204 (nothing queued). */
+/**
+ * Long-poll claim the next queued job for this device's owner. `null` on 204
+ * (nothing queued).
+ *
+ * Sends `{agentVersion}` (#541) so the server can refuse to hand a **layered**
+ * project to a build that would flatten it — the alternative being a wall of
+ * import errors that reads as a mass test failure. That refusal comes back as a
+ * 409 whose body is the "update your Local Agent" message, which the claim loop
+ * logs; the execution is failed server-side with the same text, so it is not
+ * re-claimed in a loop. Legacy self-contained specs are unaffected.
+ */
 export async function claimNextJob(cfg: AgentConfig): Promise<Job | null> {
   const res = await fetch(`${cfg.serverUrl}/agent/jobs/next`, {
     method: "POST",
-    headers: authHeaders(cfg.deviceToken),
+    headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
+    body: JSON.stringify({ agentVersion: agentVersion() }),
   });
   if (res.status === 204) return null;
   await throwIfNotOk(res);

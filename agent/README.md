@@ -100,8 +100,11 @@ Child processes (Playwright / login capture) run via Electron-as-Node
 
 ## How a job runs
 
-1. Claim a job (`POST /agent/jobs/next`) — spec sources + run params, **never** any session/credentials.
-2. Write the specs and a `playwright.config.ts` into a temp workdir.
+1. Claim a job (`POST /agent/jobs/next`, sending `{agentVersion}`) — spec sources,
+   run params and, for a **layered** run, the whole automation project, **never**
+   any session/credentials.
+2. Write the project bundle and the specs into a temp workdir, then a
+   `playwright.config.ts`.
 3. If the project requires manual login and no valid local session exists for
    its origin yet, open a **headed** browser (`vendor/capture_auth.cjs`) for
    you to log in. The captured session is saved under
@@ -110,6 +113,44 @@ Child processes (Playwright / login capture) run via Electron-as-Node
 4. Run `@playwright/test` headed, parse `report.json`.
 5. Push each case's result, its evidence (screenshots/video/trace), and
    progress events back to the server, then mark the job complete.
+
+## Layered automation projects (#541)
+
+Q-Agent keeps a **persistent, git-backed automation project** per customer
+project — page objects, components, fixtures and test data that accumulate
+across runs, so each new feature generates less code than the last (epic #537).
+The agent is stateless and has no read access to the server's filesystem, so the
+project ships **wholesale with every claim** as `project.files[]` and is written
+back out at its real nesting:
+
+```
+<temp workdir>/
+  pages/ components/ fixtures/ data/ utils/ config/   <- the shipped library
+  tests/SUR-1428/SUR-1428-TC-01.spec.ts               <- only THIS run's specs
+  node_modules/@q-agent/playwright-base               <- from vendor/, no network
+  playwright.config.ts  fixtures.ts                   <- generated per run
+```
+
+Three consequences worth knowing:
+
+- **`applyFixtures` is depth-aware.** Files sit at different depths, so each
+  `'@playwright/test'` import is rewritten to the correct relative specifier
+  (`./fixtures`, `../fixtures`, `../../fixtures`). This mirrors the server's
+  `playwright_runner._apply_fixtures` exactly — divergence would mean a spec that
+  passes on the server fails on the device.
+- **`@q-agent/playwright-base` resolves offline.** The agent carries a built copy
+  at `vendor/playwright-base/` and copies it into the workdir's `node_modules/`
+  instead of running `npm install` per job. Regenerate it with
+  `npm run vendor:base` after the base package changes. The trade-off: the base
+  version is pinned to the agent release rather than to each project's lockfile.
+- **Version skew is refused, not tolerated.** An agent that predates this
+  materializes nothing and would flatten the tree, making every import fail
+  collection — a silent mass failure. The agent therefore reports its version on
+  every claim, and the server 409s a layered claim from a build below its minimum
+  (failing the execution with "Update your Local Agent to run layered specs")
+  rather than handing it over. **A device that reports no version at all is
+  treated as below minimum.** Legacy self-contained specs are unaffected and keep
+  running on any build.
 
 ## Known limitation (flag for the server cleanup phase)
 

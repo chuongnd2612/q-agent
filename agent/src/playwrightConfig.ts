@@ -208,57 +208,116 @@ export function fixturesTs(sessionFile: string, replaySession: boolean, captureR
   );
 }
 
+/** Directories never walked when rewriting imports: installed packages (huge,
+ * and not ours to rewrite) and Playwright's own output. */
+const FIXTURE_SKIP_DIRS = new Set(["node_modules", "test-results", "playwright-report", "blob-report", ".git"]);
+
+/** Files at the workdir root that must keep importing the real `@playwright/test`:
+ * the config (needs `defineConfig`) and the injected shim itself (which re-exports
+ * Playwright's `test`, so rewriting it to point at itself is a cycle). */
+const FIXTURE_SKIP_ROOT_FILES = new Set(["fixtures.ts", "playwright.config.ts"]);
+
 /**
- * Point each spec's Playwright import at the generated `fixtures.ts` and write
- * it — port of `_apply_fixtures`. Only the module specifier is touched.
+ * Every `.ts` file under `specDir` that should have its Playwright import
+ * rewritten, as workdir-relative POSIX paths. Mirrors the server's
+ * `**​/*.ts` glob (`_apply_fixtures`), minus the injected `fixtures.ts`.
+ */
+export function fixtureTargets(specDir: string, relative = ""): string[] {
+  const absolute = relative ? path.join(specDir, relative) : specDir;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(absolute, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    const child = relative ? `${relative}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (FIXTURE_SKIP_DIRS.has(entry.name)) continue;
+      out.push(...fixtureTargets(specDir, child));
+    } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
+      if (!relative && FIXTURE_SKIP_ROOT_FILES.has(entry.name)) continue;
+      out.push(child);
+    }
+  }
+  return out;
+}
+
+/**
+ * The module specifier that reaches the workdir-root `fixtures` module from a
+ * file at `relative` — `'./fixtures'` at the root, `'../fixtures'` one level
+ * deep, `'../../fixtures'` two, and so on.
+ *
+ * This is the whole point of the layered layout: `tests/SUR-1428/x.spec.ts` and
+ * `pages/LoginPage.ts` sit at different depths, so a flat `'./fixtures'` rewrite
+ * (what the pre-#541 code did) resolves to a file that does not exist and the
+ * spec fails collection.
+ */
+export function fixturesSpecifier(relative: string): string {
+  const depth = relative.replace(/\\/g, "/").split("/").length - 1;
+  return depth === 0 ? "./fixtures" : `${"../".repeat(depth)}fixtures`;
+}
+
+/**
+ * Point every `.ts` file's Playwright import at the generated `fixtures.ts` and
+ * write it — port of `_apply_fixtures`, kept **behaviourally identical to the
+ * server's** so a spec that passes there passes on the device. Only the module
+ * specifier is touched.
  *
  * DOM capture is always on, so fixtures are ALWAYS injected (unlike the previous
- * auth-only behavior): each spec's `'@playwright/test'` import is rewritten to
- * `'./fixtures'` and `fixtures.ts` is (re)written every run. `replaySession` only
- * controls whether the generated module also replays the captured sessionStorage.
+ * auth-only behavior): each `'@playwright/test'` import is rewritten to the
+ * depth-correct relative specifier and `fixtures.ts` is (re)written every run.
+ * `replaySession` only controls whether the generated module also replays the
+ * captured sessionStorage.
  *
- * The Python version globs `*.spec.ts` in `specDir`; the agent already knows
- * exactly which spec filenames it wrote for this job, so `specFilenames` is
- * passed explicitly instead of re-scanning the directory.
+ * Depth-aware since #541: the workdir is no longer flat. It holds a whole
+ * automation project (`pages/`, `components/`, `tests/<TICKET>/…`), so the tree
+ * is walked rather than a caller-supplied filename list being trusted — that list
+ * cannot describe the library files, which sit at their own depths. `fixtures.ts`
+ * and `playwright.config.ts` at the root are left alone (the config genuinely
+ * needs `defineConfig` from the real package); `node_modules/` is never walked.
  *
- * @param specDir The job's local workdir containing the spec files.
- * @param specFilenames The spec filenames written into `specDir` for this job.
+ * @param specDir The job's local workdir containing the staged project.
  * @param sessionFile Absolute path to the `sessionStorage.json` snapshot embedded
  *   in the generated `fixtures.ts`.
  * @param replaySession Whether sessionStorage replay is active for this run.
  * @param captureRaw Whether to also capture the raw-HTML DOM attachment (off for
  *   intermediate heal attempts — #398).
+ * @returns The workdir-relative paths that were actually rewritten.
  */
 export function applyFixtures(
   specDir: string,
-  specFilenames: string[],
   sessionFile: string,
   replaySession: boolean,
   captureRaw = true
-): void {
-  const replacements: [string, string][] = [
-    ["'@playwright/test'", "'./fixtures'"],
-    ['"@playwright/test"', '"./fixtures"'],
-  ];
-  for (const filename of specFilenames) {
-    const specPath = path.join(specDir, filename);
-    let text: string;
-    try {
-      text = fs.readFileSync(specPath, "utf-8");
-    } catch {
-      continue;
-    }
-    let newText = text;
-    for (const [oldStr, newStr] of replacements) {
-      newText = newText.split(oldStr).join(newStr);
-    }
-    if (newText !== text) {
-      fs.writeFileSync(specPath, newText, "utf-8");
-    }
-  }
+): string[] {
+  // Write the shim FIRST so it exists no matter what the walk finds, then skip it
+  // in the walk (it lives at the root, in FIXTURE_SKIP_ROOT_FILES).
   fs.writeFileSync(
     path.join(specDir, "fixtures.ts"),
     fixturesTs(sessionFile, replaySession, captureRaw),
     "utf-8"
   );
+  const rewritten: string[] = [];
+  for (const relative of fixtureTargets(specDir)) {
+    const specifier = fixturesSpecifier(relative);
+    const filePath = path.join(specDir, relative);
+    let text: string;
+    try {
+      text = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+    const newText = text
+      .split("'@playwright/test'")
+      .join(`'${specifier}'`)
+      .split('"@playwright/test"')
+      .join(`"${specifier}"`);
+    if (newText !== text) {
+      fs.writeFileSync(filePath, newText, "utf-8");
+      rewritten.push(relative);
+    }
+  }
+  return rewritten;
 }

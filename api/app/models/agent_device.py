@@ -30,6 +30,14 @@ class AgentDevice(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     token_hash: Mapped[str] = mapped_column(String(64), default="")  # sha256 hex
+    # The agent build that last claimed a job, self-reported on
+    # ``POST /agent/jobs/next`` (#541). Empty string means "never reported" — a
+    # pre-#541 agent, which is treated as BELOW the minimum by
+    # ``agent_project_bundle.version_ok``. That default is the whole point of the
+    # guard: an old agent flattens a layered project tree into its workdir and
+    # every import fails collection, which looks like a mass test failure rather
+    # than a version problem.
+    agent_version: Mapped[str] = mapped_column(String(32), default="", server_default="")
     created_at: Mapped[datetime] = timestamp_column()
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=None)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=None)
