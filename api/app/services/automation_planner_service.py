@@ -55,7 +55,9 @@ from app.services.workspace_scope import slug
 __all__ = [
     "ACTIONS",
     "ASSET_GROUPS",
+    "DUPLICATE_MAX_EXTRA_TOKENS",
     "counts",
+    "duplicate_owner",
     "empty_plan",
     "import_violations",
     "is_actionable",
@@ -117,6 +119,8 @@ def empty_plan(feature: str = "", ticket: str = "") -> dict[str, Any]:
         "counts": {action: 0 for action in ACTIONS},
         "importable": [],
         "writable": [],
+        "duplicates": [],
+        "duplicatesDemoted": 0,
         "cases": [],
         "plannedAt": utcnow().isoformat(),
     }
@@ -186,6 +190,332 @@ def counts(plan: dict[str, Any]) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate detection (doc §21) — machine-enforced, at the point of authorization
+# ---------------------------------------------------------------------------
+#
+# Doc §21 requires searching for a semantically equivalent existing implementation
+# BEFORE creating a new file. Until #571 that was prompt-enforced only: `normalize`
+# demoted a *hallucinated* `reuse` and the `writable` boundary blocked
+# *unauthorized* paths, but a plan that deliberately asked to `create`
+# `pages/CreateUserPage.ts` beside an existing `pages/UserPage.ts` was authorized,
+# written, and rejected by nothing — and duplicates degrade the epic's metric
+# INVISIBLY, because each one is legitimately "reused" from then on.
+#
+# The check is deliberately NOT a fuzzy similarity score. A false positive that
+# blocks a legitimately distinct page object is worse than a missed duplicate, and
+# `UserPage` / `UserListPage` / `UserFormPage` are genuinely distinct screens in
+# this codebase's own examples (doc §11), whose token sets differ *exactly as much*
+# as `CreateUserPage` differs from `UserPage`. Overlap size therefore cannot
+# separate them; only the KIND of the extra token can:
+#
+#   CreateUserPage vs UserPage  -> extra {create}: a VERB. The difference is a
+#                                  capability, which belongs in a method on the
+#                                  screen's existing owner (doc §8's `extend`).
+#   UserListPage  vs UserPage   -> extra {list}: a NOUN. The difference names a
+#                                  different screen, so it is a genuine `create`.
+#
+# So the rule is: the candidate's core tokens must CONTAIN the existing file's core
+# tokens, and every extra token must come from a small closed vocabulary of
+# CRUD verbs (pages/components) or wrapper words (everything else). One unknown
+# token is enough to leave the `create` alone.
+
+# How many extra qualifier tokens a name may carry and still be judged the same
+# asset. The tunable threshold: 0 makes the check exact-name-only, 2+ makes it
+# progressively more aggressive. 1 catches doc §21's own two examples.
+DUPLICATE_MAX_EXTRA_TOKENS = 1
+
+# Dropped before comparison: they carry no meaning of their own.
+_STOPWORDS = frozenset({"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"})
+
+# The asset's own type, not part of its identity: `UserPage` and `User` are the
+# same screen. Stripped from both sides.
+_TYPE_WORDS = frozenset(
+    {
+        "page", "component", "fixture", "fixtures", "data", "util", "utils",
+        "helper", "helpers", "object", "objects", "po",
+    }
+)
+
+# CRUD verbs. An extra one of these means the name describes an ACTION on a screen
+# that something else already owns — doc §21's `CreateUserPage` case.
+_ACTION_WORDS = frozenset(
+    {
+        "add", "cancel", "create", "delete", "destroy", "edit", "manage", "modify",
+        "new", "open", "remove", "save", "show", "submit", "update", "view",
+    }
+)
+
+# Wrapper words. Only for non-class assets, where the duplicate is usually the same
+# capability wrapped differently — doc §21's `waitForDownload` vs `download` case.
+_WRAPPER_WORDS = frozenset(
+    {
+        "common", "do", "ensure", "get", "handle", "perform", "shared", "trigger",
+        "until", "wait", "waits",
+    }
+)
+
+_CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _stem_of(path: str) -> str:
+    """``"pages/UserPage.ts"`` -> ``"UserPage"``."""
+    return path.rsplit("/", 1)[-1].removesuffix(".ts")
+
+
+def _singular(token: str) -> str:
+    """A crude, symmetric plural fold so ``UsersPage`` and ``UserPage`` collide."""
+    if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        return token[:-1]
+    return token
+
+
+def _tokens(text: Any) -> list[str]:
+    """``"waitForDownload"`` -> ``["wait", "download"]`` (stopwords dropped)."""
+    spaced = _CAMEL_SPLIT_RE.sub(" ", re.sub(r"[^A-Za-z0-9]+", " ", str(text or "")))
+    out = []
+    for raw in spaced.split():
+        token = _singular(raw.lower())
+        if token and token not in _STOPWORDS:
+            out.append(token)
+    return out
+
+
+def _core(text: Any) -> frozenset[str]:
+    """The identity tokens of a name — its own type word is not one of them."""
+    return frozenset(t for t in _tokens(text) if t not in _TYPE_WORDS)
+
+
+def _qualifier_extra(
+    candidate: frozenset[str],
+    existing: frozenset[str],
+    vocabulary: frozenset[str],
+    *,
+    both_ways: bool,
+) -> frozenset[str] | None:
+    """The extra qualifier tokens when two names denote the same asset, else None.
+
+    ``candidate`` must contain ``existing`` (or, when ``both_ways``, either may
+    contain the other — ``download`` vs ``waitForDownload`` is the wrapped-capability
+    direction), the difference must be no larger than
+    :data:`DUPLICATE_MAX_EXTRA_TOKENS`, and **every** differing token must be in
+    ``vocabulary``. Anything else — a differing noun, a disjoint name, a bigger
+    difference — is a genuinely distinct asset.
+    """
+    if not candidate or not existing:
+        return None
+    if candidate == existing:
+        return frozenset()
+    if candidate > existing:
+        extra = candidate - existing
+    elif both_ways and existing > candidate:
+        extra = existing - candidate
+    else:
+        return None
+    if len(extra) > DUPLICATE_MAX_EXTRA_TOKENS or not extra <= vocabulary:
+        return None
+    return extra
+
+
+def _capability_names(entry: dict) -> list[str]:
+    """The names an on-disk file offers — its exports plus its method names."""
+    names = [str(n) for n in (entry.get("exports") or [])]
+    names += [str(m).split("(", 1)[0].strip() for m in (entry.get("methods") or [])]
+    return [n for n in names if n]
+
+
+def duplicate_owner(
+    path: str, name: str, methods: Sequence[str], entries: Sequence[dict]
+) -> tuple[dict, str] | None:
+    """The existing asset that already owns what a planned ``create`` describes.
+
+    Deterministic, conservative, and confined to the planned path's own library
+    directory (a page never "duplicates" a util). Returns ``(inventory_entry,
+    reason)`` — the reason names the suspected duplicate, so a demotion or a
+    rejection can say which file it deferred to — or ``None`` when the planned
+    asset is genuinely new.
+
+    Args:
+        path: The planned project-relative path, e.g. ``pages/CreateUserPage.ts``.
+        name: The planned asset name (usually the exported class/function).
+        methods: The signatures the plan wants, used for the capability-overlap
+            check that catches doc §21's ``waitForDownload`` vs ``download``.
+        entries: :func:`automation_project_service.inventory` — what is on disk.
+    """
+    directory = path.split("/", 1)[0]
+    is_class = directory in ("pages", "components")
+    vocabulary = _ACTION_WORDS if is_class else (_ACTION_WORDS | _WRAPPER_WORDS)
+    planned = _core(_stem_of(path)) | _core(name)
+    planned_methods = [str(m).split("(", 1)[0].strip() for m in methods if str(m).strip()]
+
+    found: list[tuple[int, str, dict, str]] = []
+    for existing in entries:
+        existing_path = str(existing.get("path") or "")
+        if existing_path == path or existing_path.split("/", 1)[0] != directory:
+            continue
+        extra = _qualifier_extra(
+            planned, _core(_stem_of(existing_path)), vocabulary, both_ways=not is_class
+        )
+        if extra is not None:
+            found.append((
+                len(extra),
+                existing_path,
+                existing,
+                f"`{existing_path}` already owns this asset"
+                + (
+                    f" (`{_stem_of(existing_path)}` and `{_stem_of(path)}` differ only "
+                    f"by `{'`, `'.join(sorted(extra))}`)"
+                    if extra
+                    else f" (`{_stem_of(existing_path)}` names the same thing)"
+                ),
+            ))
+            continue
+        if is_class or not planned_methods:
+            # Capability overlap is a utils-shaped duplicate: a page object's
+            # methods legitimately repeat across screens (`open`, `search`).
+            continue
+        offered = _capability_names(existing)
+        matched: list[str] = []
+        for wanted in planned_methods:
+            near = next(
+                (
+                    have
+                    for have in offered
+                    if _qualifier_extra(_core(wanted), _core(have), vocabulary, both_ways=True)
+                    is not None
+                ),
+                None,
+            )
+            if near is None:
+                break
+            matched.append(f"`{near}` vs `{wanted}`")
+        else:
+            found.append((
+                DUPLICATE_MAX_EXTRA_TOKENS + 1,  # weaker evidence than a name match
+                existing_path,
+                existing,
+                f"`{existing_path}` already provides this capability "
+                f"({', '.join(matched)})",
+            ))
+    if not found:
+        return None
+    found.sort(key=lambda item: (item[0], item[1]))
+    return found[0][2], found[0][3]
+
+
+def _still_missing(methods: Sequence[str], owner: dict) -> list[str]:
+    """The planned signatures the owning file does not already provide.
+
+    Exact name matches are dropped for every kind. For non-class assets a
+    *near-synonym* is dropped too: if ``download`` was judged a duplicate of
+    ``waitForDownload`` because the names are synonymous, then authoring a
+    ``download()`` beside it would recreate the very duplicate this check exists to
+    stop — one level down, inside the file.
+    """
+    owner_path = str(owner.get("path") or "")
+    is_class = owner_path.split("/", 1)[0] in ("pages", "components")
+    vocabulary = _ACTION_WORDS if is_class else (_ACTION_WORDS | _WRAPPER_WORDS)
+    offered = _capability_names(owner)
+    exact = set(offered)
+    out: list[str] = []
+    for signature in methods:
+        name = str(signature).split("(", 1)[0].strip()
+        if not name or name in exact:
+            continue
+        if not is_class and any(
+            _qualifier_extra(_core(name), _core(have), vocabulary, both_ways=True) is not None
+            for have in offered
+        ):
+            continue
+        out.append(signature)
+    return out
+
+
+def _enforce_duplicate_detection(
+    plan: dict[str, Any], entries: Sequence[dict]
+) -> list[dict[str, Any]]:
+    """Demote every ``create`` that duplicates an on-disk asset. Returns the findings.
+
+    **Demote, never reject.** The target is unambiguous by construction (the
+    heuristic only fires when one existing file contains the planned name), so
+    rewriting the entry into an ``extend`` of that file keeps generation moving and
+    produces what doc §8's hierarchy wanted anyway. A rejection would fail the whole
+    feature over a naming judgement.
+
+    When the plan *also* has an entry for the owning file — the realistic §21 shape,
+    "reuse `UserPage` and create `CreateUserPage`" — the demoted entry's new methods
+    are merged into that entry instead of appended as a second entry for the same
+    path, which would hand the project editor two conflicting instructions for one
+    file.
+    """
+    findings: list[dict[str, Any]] = []
+    on_disk = {str(entry.get("path") or ""): entry for entry in entries}
+    for group in ASSET_GROUPS:
+        group_entries = plan.get(group) or []
+        kept: list[dict[str, Any]] = []
+        for entry in group_entries:
+            path = entry.get("path") or ""
+            # A `create` of a path that is already on disk is left alone: it is not a
+            # near-duplicate, and the additive-diff guard already covers it.
+            if entry.get("action") != "create" or not path or path in on_disk:
+                kept.append(entry)
+                continue
+            match = duplicate_owner(path, entry.get("name") or "", entry.get("methods") or [], entries)
+            if match is None:
+                kept.append(entry)
+                continue
+            owner, reason = match
+            owner_path = str(owner["path"])
+            new_methods = _still_missing(entry.get("methods") or [], owner)
+            action = "extend" if new_methods else "reuse"
+            sibling = next(
+                (
+                    other
+                    for other in group_entries
+                    if other is not entry and other.get("path") == owner_path
+                ),
+                None,
+            )
+            finding = {
+                "plannedPath": path,
+                "plannedName": entry.get("name") or "",
+                "existingPath": owner_path,
+                "action": action,
+                "reason": reason,
+                "mergedInto": bool(sibling),
+            }
+            findings.append(finding)
+            logger.info(
+                "automation plan: duplicate detected (doc §21) — demoting create {} "
+                "-> {} {} ({})",
+                path, action, owner_path, reason,
+            )
+            if sibling is not None:
+                merged = list(sibling.get("methods") or [])
+                for method in new_methods:
+                    if method not in merged:
+                        merged.append(method)
+                sibling["methods"] = merged
+                if new_methods and sibling.get("action") == "reuse":
+                    sibling["action"] = "extend"
+                continue  # the duplicate entry disappears into the real owner
+            entry.update(
+                {
+                    "name": (owner.get("exports") or [None])[0] or _stem_of(owner_path),
+                    "path": owner_path,
+                    "action": action,
+                    "methods": new_methods if action == "extend" else entry.get("methods") or [],
+                    "duplicateOf": owner_path,
+                    "plannedPath": path,
+                    "plannedName": entry.get("name") or "",
+                    "reason": f"Duplicate detection (doc §21): {reason}.",
+                }
+            )
+            kept.append(entry)
+        plan[group] = kept
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Normalization — where the model's claims meet the real tree
 # ---------------------------------------------------------------------------
 
@@ -212,6 +542,9 @@ def normalize(
       again through :func:`refresh_plan` after authoring, this is what promotes a
       brand-new page object into the generator's import allowlist with no second
       opinion from the model;
+    * a ``create`` that near-duplicates an on-disk asset (doc §21) is demoted to an
+      ``extend`` of that asset — see :func:`duplicate_owner`. This happens *before*
+      ``writable`` is computed, so the duplicate path is never authorized at all;
     * ``extend``/``create`` paths are ``writable``, i.e. the only paths the
       project editor and generation may touch.
 
@@ -244,8 +577,6 @@ def normalize(
                 }
             )
 
-    importable: list[str] = []
-    writable: list[str] = []
     for group in ASSET_GROUPS:
         raw_entries = raw.get(group) or []
         if not isinstance(raw_entries, list):
@@ -277,6 +608,26 @@ def normalize(
                 "methods": _methods(item.get("methods") or item.get("method")),
                 "reason": str(item.get("reason") or "").strip()[:400],
             }
+            # Provenance of a §21 demotion survives re-normalization (`refresh_plan`
+            # feeds a plan back through here), so the plan on the spec row still says
+            # which duplicate this entry replaced.
+            for key in ("duplicateOf", "plannedPath", "plannedName"):
+                if item.get(key):
+                    entry[key] = str(item[key])
+            plan[group].append(entry)
+
+    # Doc §21, machine-enforced (#571): a `create` that near-duplicates an existing
+    # asset becomes an `extend` of that asset, BEFORE `writable` is computed — so the
+    # duplicate path is never authorized for writing in the first place.
+    duplicates = _enforce_duplicate_detection(plan, entries)
+    plan["duplicates"] = duplicates
+    plan["duplicatesDemoted"] = len(duplicates)
+
+    importable: list[str] = []
+    writable: list[str] = []
+    for group in ASSET_GROUPS:
+        for entry in plan[group]:
+            path = entry.get("path") or ""
             if path and path in on_disk:
                 # On disk == importable, whatever the action claims. Signatures come
                 # from the file itself, so an `extend`'s planned-but-unwritten method
@@ -286,9 +637,8 @@ def normalize(
                 entry["existingMethods"] = list(on_disk[path].get("methods") or [])
                 if path not in importable:
                     importable.append(path)
-            if action in ("extend", "create") and path and path not in writable:
+            if entry.get("action") in ("extend", "create") and path and path not in writable:
                 writable.append(path)
-            plan[group].append(entry)
 
     plan["importable"] = sorted(importable)
     plan["writable"] = sorted(writable)
@@ -379,6 +729,15 @@ def refresh_plan(
         ticket=str(plan.get("ticket") or ticket_external_id),
         cases=[str(c) for c in (plan.get("cases") or [])],
     )
+    # A duplicate demoted on the first pass is an `extend` by now, so re-normalizing
+    # finds nothing to demote — carry the findings forward so the persisted plan keeps
+    # the record of what was caught.
+    previous = [d for d in (plan.get("duplicates") or []) if isinstance(d, dict)]
+    seen = {(d.get("plannedPath"), d.get("existingPath")) for d in refreshed["duplicates"]}
+    refreshed["duplicates"] += [
+        d for d in previous if (d.get("plannedPath"), d.get("existingPath")) not in seen
+    ]
+    refreshed["duplicatesDemoted"] = len(refreshed["duplicates"])
     refreshed.update(extra)
     try:
         _save_plan(project, run_code, ticket_external_id, refreshed)
@@ -447,7 +806,9 @@ def _build_prompt(
         "Duplicate detection (doc §21): do NOT plan `pages/CreateUserPage.ts` when "
         "`pages/UserPage.ts` already owns user interactions, and do NOT plan a "
         "second download helper when `utils/waitForDownload.ts` exists. Check the "
-        "inventory above for a semantically equivalent owner first.\n"
+        "inventory above for a semantically equivalent owner first. This is checked "
+        "server-side: a `create` whose name is an existing inventory entry's name "
+        "plus an action word is demoted to an `extend` of that entry.\n"
         "Locator reuse (doc §22): prefer updating the existing page object over "
         "adding a duplicate locator elsewhere — that is an `extend`, not a "
         "`create`.\n"
@@ -549,18 +910,33 @@ def plan_for_ticket(
 # ---------------------------------------------------------------------------
 
 
+def _demoted(plan: dict) -> int:
+    """How many ``create``s this plan had demoted as duplicates (doc §21, #571).
+
+    Logged beside reuse/extend/create because it is the real signal on whether the
+    planner prompt is working: the headline reuse rate cannot show it (once a
+    near-duplicate exists it is legitimately reused from then on), so a rising
+    demotion rate is the only visible warning that the model has stopped reading §21.
+    """
+    value = plan.get("duplicatesDemoted")
+    if isinstance(value, int):
+        return value
+    return len(plan.get("duplicates") or [])
+
+
 def log_plan_counts(run_code: str, ticket_external_id: str, plan: dict) -> dict[str, int]:
     """Log one plan's reuse/extend/create tally and return it."""
     tally = plan.get("counts") or counts(plan)
     logger.info(
         "automation plan {} {}: reuse={} extend={} create={} reuse-base={} "
-        "(importable={} writable={})",
+        "duplicates-demoted={} (importable={} writable={})",
         run_code,
         ticket_external_id,
         tally.get("reuse", 0),
         tally.get("extend", 0),
         tally.get("create", 0),
         tally.get("reuse-base", 0),
+        _demoted(plan),
         len(plan.get("importable") or []),
         len(plan.get("writable") or []),
     )
@@ -576,20 +952,23 @@ def log_pass_counts(run_code: str, plans: Iterable[dict]) -> dict[str, int]:
     """
     total = {action: 0 for action in ACTIONS}
     tickets = 0
+    demoted = 0
     for plan in plans:
         tickets += 1
+        demoted += _demoted(plan)
         for action, value in (plan.get("counts") or counts(plan)).items():
             if action in total:
                 total[action] += value
     logger.info(
         "automation generation pass {} planned {} ticket(s): reuse={} extend={} "
-        "create={} reuse-base={}",
+        "create={} reuse-base={} duplicates-demoted={}",
         run_code,
         tickets,
         total["reuse"],
         total["extend"],
         total["create"],
         total["reuse-base"],
+        demoted,
     )
     return total
 

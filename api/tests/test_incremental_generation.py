@@ -37,16 +37,20 @@ relative import of every spec in the tree against real files**, which is what ma
 "both features' specs still collect under the whole-project gate" an actual assertion
 rather than a stub returning ``True``.
 
-## The one property that is NOT machine-enforced
+## Duplicate detection, now machine-enforced (#571)
 
-Duplicate detection (doc §21) is enforced by the **planner prompt**, not by the
-pipeline: ``normalize`` demotes a *hallucinated* ``reuse`` to ``create`` and the
-writable boundary stops files the plan never authorized — but a plan that deliberately
-asks to ``create`` ``pages/CreateUserPage.ts`` beside an existing ``pages/UserPage.ts``
-is rejected by no code. So the guard asserted here is the one that exists:
-:func:`test_the_planner_is_shown_everything_duplicate_detection_needs` pins the §21
-instruction *and* the on-disk semantic owner into the prompt, and the scenario test
-pins the resulting file set.
+This file used to record duplicate detection (doc §21) as the one property enforced
+by the **planner prompt** alone: ``normalize`` demoted a *hallucinated* ``reuse`` and
+the writable boundary stopped files the plan never authorized, but a plan that
+*deliberately* asked to ``create`` ``pages/CreateUserPage.ts`` beside an existing
+``pages/UserPage.ts`` was rejected by no code. #571 closed that hole in ``normalize``,
+so all three halves are pinned here now: the §21 instruction and the on-disk semantic
+owner in the prompt
+(:func:`test_the_planner_is_shown_everything_duplicate_detection_needs`), the
+resulting file set (the scenario test), and — with the planner replaced by one that
+deliberately violates §21 —
+:func:`test_a_rogue_plan_cannot_create_a_second_owner_for_one_screen`, which proves
+the duplicate never reaches disk even when the model asks for it.
 """
 
 from __future__ import annotations
@@ -808,13 +812,14 @@ def test_a_reuse_only_feature_costs_no_authoring_call(db_session, incremental):
 
 @requires_git
 def test_the_planner_is_shown_everything_duplicate_detection_needs(db_session, incremental):
-    """Doc §21 is enforced by the planner PROMPT, so the prompt is what gets pinned.
+    """Doc §21's *first* line of defence is the planner PROMPT, so the prompt is pinned.
 
-    Nothing in the pipeline rejects a plan that deliberately asks to ``create``
-    ``pages/CreateUserPage.ts`` beside an existing ``pages/UserPage.ts`` — the duplicate
-    is prevented only by the planner being told the rule *and* being shown the semantic
-    owner that is already on disk. Both halves are asserted, because a prompt retune
-    dropping either is exactly how the property erodes.
+    #571 added the second line (``normalize`` demotes a duplicate ``create``, see
+    :func:`test_a_rogue_plan_cannot_create_a_second_owner_for_one_screen`), but that
+    guard is a conservative name heuristic by design — it cannot catch a duplicate
+    called something wholly different. Keeping the planner *told the rule* and *shown
+    the semantic owner already on disk* therefore stays load-bearing, and a prompt
+    retune dropping either half is exactly how the property erodes.
     """
     _run_feature(db_session, incremental, FEATURE_A)
     # A: nothing to reuse, and the prompt says so in as many words.
@@ -843,6 +848,76 @@ def test_the_planner_is_shown_everything_duplicate_detection_needs(db_session, i
     generation = incremental.models.generator_prompts[-1]
     assert "AUTOMATION PLAN" in generation
     assert "`pages/LoginPage.ts` (reuse)" in generation
+
+
+@requires_git
+def test_a_rogue_plan_cannot_create_a_second_owner_for_one_screen(db_session, incremental):
+    """Doc §21, machine-enforced end to end (#571): the model asks, the pipeline refuses.
+
+    The obedient planner is replaced, for one ticket only, by one that **deliberately**
+    violates §21 — it asks to ``create`` ``pages/CreateUserTablePage.ts`` while A's
+    ``pages/UserTablePage.ts`` already owns that screen. Everything downstream is the
+    real code path, so this measures the guarantee rather than the heuristic: the
+    duplicate path is never authorized (``writable``), never authored, and the
+    capability lands on the existing owner instead.
+    """
+    from app.models.run import Run
+    from app.routers import automation as automation_router
+    from app.services import claude_cli
+
+    a = _run_feature(db_session, incremental, FEATURE_A)
+    project = _project(db_session, a.project_id)
+    root = aps.project_dir(project)
+
+    rogue_feature = Feature(
+        "AUT-1004", "Bulk create users",
+        (("TC-01", "A user bulk-creates users from the user list"),), (),
+    )
+    rogue_plan = {
+        "feature": rogue_feature.name,
+        "specGroups": [{"name": "bulk-create", "testCases": ["TC-01"]}],
+        "pages": [
+            {
+                "name": "CreateUserTablePage",
+                "path": "pages/CreateUserTablePage.ts",
+                "action": "create",
+                "methods": ["bulkCreate(count)"],
+                "reason": "This feature creates users, so it gets its own page object.",
+            }
+        ],
+        "components": [], "fixtures": [], "data": [], "utils": [],
+    }
+    incremental.monkeypatch.setattr(claude_cli, "run_json", lambda *a, **k: rogue_plan)
+
+    run, cases = _seed_feature(db_session, rogue_feature)
+    run = db_session.query(Run).filter(Run.code == run.code).one()
+    spec = automation_router._generate_one(db_session, run, cases[0])
+    db_session.commit()
+    db_session.refresh(spec)
+    assert spec.status == "draft", spec.block_reason
+
+    plan = json.loads(spec.plan_report)
+    entry = plan["pages"][0]
+    assert entry["action"] == "extend", "the §21 duplicate is demoted, not authored"
+    assert entry["path"] == "pages/UserTablePage.ts"
+    assert entry["duplicateOf"] == "pages/UserTablePage.ts"
+    assert entry["plannedPath"] == "pages/CreateUserTablePage.ts"
+    assert plan["writable"] == ["pages/UserTablePage.ts"], (
+        "the duplicate path was never authorized for writing"
+    )
+    assert plan["duplicatesDemoted"] == 1
+
+    # The tree: one owner for the screen, carrying the new capability.
+    assert sorted(p.name for p in (root / "pages").glob("*.ts")) == [
+        "LoginPage.ts", "UserTablePage.ts"
+    ]
+    table = (root / "pages" / "UserTablePage.ts").read_text(encoding="utf-8")
+    assert "async bulkCreate(count: string)" in table
+    assert "async rows()" in table, "the extend stayed additive"
+    # ...and the spec drives the screen through its real owner.
+    assert "../../pages/UserTablePage" in (root / spec.filename).read_text(encoding="utf-8")
+    ok, detail = _collects(root)
+    assert ok, detail
 
 
 @requires_git
