@@ -18,6 +18,7 @@ Two kinds of coverage here:
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import settings
-from app.services import automation_gate
+from app.services import automation_gate, automation_project_service
 
 # ---------------------------------------------------------------------------
 # A minimal layered project: one page object + one spec-shaped consumer.
@@ -59,20 +60,19 @@ MISSPELLED_SPEC = GOOD_SPEC.replace("fillUser(", "fillUsre(")
 # Wrong argument shape: `age` as a string where the payload declares a number.
 WRONG_ARGS_SPEC = GOOD_SPEC.replace("age: 36", "age: '36'")
 
-_MINIMAL_TSCONFIG = """{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
-    "lib": ["ES2022", "DOM"],
-    "strict": true,
-    "noEmit": true,
-    "types": []
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules"]
-}
-"""
+# Derived from the **real** scaffold rather than hand-copied, so these real-tsc tests
+# exercise the config that actually ships (#562 changed it once already after a
+# hand-copied duplicate silently drifted). The single override is `types: []`: this
+# project deliberately installs nothing, so demanding `@types/node` would add
+# environmental noise and the type error must be the ONLY diagnostic.
+_SCAFFOLD_TSCONFIG = json.loads(automation_project_service._TSCONFIG)
+_MINIMAL_TSCONFIG = json.dumps(
+    {
+        **_SCAFFOLD_TSCONFIG,
+        "compilerOptions": {**_SCAFFOLD_TSCONFIG["compilerOptions"], "types": []},
+    },
+    indent=2,
+)
 
 
 def _write_project(root: Path, spec: str) -> Path:
@@ -170,9 +170,11 @@ def test_typecheck_fails_open_on_a_timeout(tmp_path, monkeypatch):
         "tests/a.spec.ts(2,25): error TS2307: Cannot find module '@q-agent/playwright-base'.",
         "tests/a.spec.ts(4,3): error TS2584: Cannot find name 'document'.",
         "error TS5083: Cannot read file 'tsconfig.json'.",
-        # Measured, not hypothetical: TypeScript 7 REMOVED `moduleResolution: "node"`,
-        # which `automation_project_service._TSCONFIG` still scaffolds. A server that
-        # resolved a v7 tsc would emit this once and reject every spec forever.
+        # Measured, not hypothetical: TypeScript 7 REMOVED `moduleResolution: "node"`.
+        # #562 fixed the scaffold so we no longer *emit* this, but the classifier stays:
+        # it is cheap insurance against the next option removal, and it still covers
+        # projects on disk that predate the migration. A server resolving a v7 tsc would
+        # otherwise emit this once and reject every spec forever.
         "tsconfig.json(5,25): error TS5108: Option 'moduleResolution=node10' has been "
         "removed. Please remove it from your configuration.",
     ],
@@ -278,6 +280,18 @@ def test_typecheck_uses_the_projects_own_tsconfig(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Real tsc — the motivating case, proven rather than mocked
 # ---------------------------------------------------------------------------
+
+
+def test_the_real_tsc_tests_run_against_the_shipped_scaffold_config():
+    """Guards the derivation above: these tests must not drift from what we scaffold.
+
+    The whole point of the real-tsc suite is that the config the gate meets in production
+    is the config proven here. A hand-copied duplicate would let #562 regress invisibly.
+    """
+    options = json.loads(_MINIMAL_TSCONFIG)["compilerOptions"]
+    shipped = _SCAFFOLD_TSCONFIG["compilerOptions"]
+    assert options["module"] == shipped["module"] == "NodeNext"
+    assert options["moduleResolution"] == shipped["moduleResolution"] == "NodeNext"
 
 
 @needs_tsc
