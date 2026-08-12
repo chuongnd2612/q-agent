@@ -432,5 +432,23 @@
       "linkedTo": "Linked to {{provider}}",
       "pending": "Pending…"
     }
+  },
+  "projectFiles": {
+    "title": "PROJECT FILES",
+    "readOnlyHint": "Support files are read-only",
+    "readOnly": "Read-only",
+    "copied": "File copied",
+    "emptyFile": "This file is empty.",
+    "footer": "Support files are generated and maintained by Q-Agent. Editing them here is coming — a change has to pass the quality gate first.",
+    "kinds": {
+      "spec": "Specs",
+      "page": "Page objects",
+      "component": "Components",
+      "fixture": "Fixtures",
+      "data": "Test data",
+      "util": "Utilities",
+      "config": "Config",
+      "other": "Other"
+    }
   }
 }

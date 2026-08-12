@@ -659,6 +659,29 @@ export type SpecStatus =
   | "failed"
   | "product_defect";
 
+/** Which layer of the automation project a file belongs to (#537 doc §20's
+ * ownership model): `page`/`component` carry app-UI knowledge, `fixture` test
+ * setup, `data` scenario input, `util`/`config` generic plumbing, and `spec` the
+ * business intent. Kept as a widened `string` on the wire so an unknown kind
+ * from a newer server degrades into an "Other" group instead of breaking. */
+export type ProjectFileKind =
+  | "page"
+  | "component"
+  | "fixture"
+  | "data"
+  | "util"
+  | "config"
+  | "spec";
+
+/** One file of the persistent automation project shipped alongside a spec.
+ * `path` is project-relative (e.g. `pages/LoginPage.ts`). Read-only in the UI —
+ * editing support files must route through the quality gate (#543). */
+export interface ProjectFile {
+  path: string;
+  kind: string;
+  code: string;
+}
+
 export interface AutomationSpecOut {
   id: number;
   testCaseId: number;
@@ -669,6 +692,10 @@ export interface AutomationSpecOut {
   status: string;
   blockReason: string;
   gateReport: string;
+  /** The automation project's files, when this spec lives in one (#537). Absent
+   * for legacy specs (`project_id IS NULL`) — the screen then renders exactly as
+   * before, with no file list. */
+  projectFiles?: ProjectFile[];
 }
 
 /** Payload of the `automation.chat.reply` run-WS event: the successful result
