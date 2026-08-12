@@ -692,6 +692,22 @@ async function processHealJob(cfg: AgentConfig, job: api.Job, heal: NonNullable<
           break;
         }
         // action === "fixed": apply it and re-run.
+        // The repair may be in the shared LIBRARY rather than in the spec (#547) —
+        // a stale locator inside an imported page object, fixed where it lives so
+        // the architecture stays layered. Merge the returned sources into the job's
+        // bundle: `stageJobTree` re-materializes it at the top of every attempt, so
+        // this is all it takes for the next re-run to exercise the repair. `code`
+        // then comes back unchanged, and the spec is deliberately left alone.
+        if (fix.libraryFiles?.length && job.project) {
+          const merged = new Map((job.project.files || []).map((f) => [f.path, f]));
+          for (const file of fix.libraryFiles) merged.set(file.path, file);
+          job.project.files = [...merged.values()];
+          console.log(
+            `Server repaired the shared library: ${fix.libraryFiles.map((f) => f.path).join(", ")}` +
+              (fix.librarySummary ? ` — ${fix.librarySummary}` : "")
+          );
+          rec.libraryHealed = fix.libraryFiles.map((f) => f.path);
+        }
         rec.fixed = true;
         rec.diff = fix.diff;
         attempts.push(rec);

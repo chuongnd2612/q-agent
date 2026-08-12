@@ -225,6 +225,13 @@ inline login, uses web-first assertions and no hard waits.
 
 Fix the defect, not the design. Keep the `@q-agent/playwright-base` import and every import of a
 shared project file. **Inlining a page object's locators, a fixture's setup, or a login flow back into
-the spec to route around it is a rejection** — even if the flattened spec would pass. If the real
-defect looks like it lives in an imported page object, correct how the spec uses it and note the
-suspect file in one brief comment.
+the spec to route around it is a rejection** — even if the flattened spec would pass.
+
+You are not the only stage that can fix things any more. Before you are asked for anything,
+`page-object-healer` has already inspected the page objects this spec imports and repaired them if the
+defect was in there. So a failure that reaches you is a failure in the **spec's own use** of the
+library: a wrong method, a missing step, a bad wait or route, wrong data. Assume the page objects are
+correct and fix your side of the boundary.
+
+The assertion count is checked across the spec **plus** the library files it imports, so an assertion
+may move into the page object that owns the screen, but it may never disappear.
