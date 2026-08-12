@@ -37,12 +37,18 @@ Each of these produces a *green-looking* run that proved nothing. Learned the ha
 - **`page.goto` is a full reload, and the access token is in memory only** (never persisted, by design). A reload therefore boots *anonymous* and `RequireAuth` legitimately redirects to `/login` — which looks exactly like a session bug but isn't. Navigate **client-side** (click the sidebar buttons; the nav uses buttons, not `<a href>`).
 - **react-query has `staleTime: 15_000`** (`app/src/app/QueryProvider.tsx`), so revisiting a screen serves cache and issues **no request at all**. Visit a screen not yet loaded, and *assert that requests actually happened* rather than inferring it.
 
-Also: the onboarding `TourOverlay` intercepts clicks on first load — dismiss it ("Skip") before driving the shell.
+Also: the onboarding `TourOverlay` intercepts clicks on first load — dismiss it ("Skip") before driving the shell. Its blocker is `fixed inset-0 z-[70]`, so it eats *every* click until dismissed; target it by `[data-testid=tour-card]`.
+
+Three more traps, learned in #543:
+
+- **Route-match on a predicate, not a `**/auth/**` glob.** That glob also swallows Vite's own `/src/screens/auth/*.tsx` dev modules and silently blanks the login page. Use something like `^/(api|auth)/`.
+- **`route.fallback()` for anything you are not deliberately mocking.** Fulfilling unknown endpoints with `{}` mints a bogus session (a faked `/auth/refresh` did exactly this) and crashes the shell.
+- **Assert requests actually happened.** Combined with `staleTime: 15_000`, a screen you have already visited issues none, so a passing assertion can be reading cache.
 
 ## Build & verify (api/)
 
 - The gate is `uv run pytest -q` from `api/`. **In a fresh worktree (no `.venv`) use `uv run --extra dev pytest -q`** — `pytest` lives in the `dev` **optional-dependency extra** (`[project.optional-dependencies]`), not the default dependency set, so a plain `uv run pytest` fails with `Failed to spawn: pytest / program not found`.
-- **The suite is not green on `master` and is not expected to be: 22 tests fail (#469).** Baseline that number *before* you start and compare against it; do not assume a failure is yours.
+- **The suite is not green on `master` and is not expected to be: 18 tests fail (#469).** Baseline that number *before* you start and compare against it — by **name**, not just by count — and do not assume a failure is yours. (Was 22; #542 legitimately fixed 4 `test_prompts.py` failures whose `SimpleNamespace` stubs were missing `test_data`, so those assertions had never actually run.) Most of the remaining 18 are one pre-existing order-dependent cascade in `test_execution.py` (a leaked `executionTarget=local-agent` setting).
 - The suite runs with `settings.auth_required = False` (see `tests/conftest.py`), which makes the global `auth_guard` middleware in `main.py` a **passthrough**. Anything that touches token acceptance must add a test that flips `auth_required=True`, or the middleware path is never exercised.
 
 ## Local Agent (agent/)
