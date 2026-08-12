@@ -17,7 +17,7 @@ REPO_ROOT = API_DIR.parent
 
 # Artifact kinds every per-owner workspace scope holds (ADR 0009). Mirrors the
 # flat `workspace/<kind>/` dirs `Settings.*_dir` has historically exposed.
-_SCOPED_KINDS = ("specs", "evidence", "knowledge", "repos", "auth")
+_SCOPED_KINDS = ("specs", "evidence", "knowledge", "repos", "auth", "automation")
 
 # Sentinel file marking that the one-time legacy-flat-dirs migration ran.
 _LEGACY_MIGRATION_SENTINEL = ".workspace_scoped"

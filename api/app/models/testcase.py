@@ -72,6 +72,15 @@ class AutomationSpec(Base):
     block_reason: Mapped[str] = mapped_column(Text, default="")
     # JSON string of the last placeholder-gate outcome (see placeholder_gate.gate_spec).
     gate_report: Mapped[str] = mapped_column(Text, default="")
+    # The persistent git-backed automation project this spec lives in (#538).
+    # Nullable on purpose and with no backfill: every pre-existing spec keeps
+    # working as `project_id IS NULL` (per-run, self-contained, legacy model).
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("automation_projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # JSON string of the Reuse/Extend/Create planner outcome (#544), mirroring the
+    # `gate_report`/`heal_report` convention. Nullable — NULL means "not planned".
+    plan_report: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = timestamp_column()
 
     test_case: Mapped["TestCase"] = relationship(back_populates="spec")
