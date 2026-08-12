@@ -157,7 +157,13 @@ def _test_data_lines(case) -> str:
 
 
 def _build_prompt(
-    case, context: dict, spec_filename: str, sidecar: str, base_url: str, heal: dict | None = None
+    case,
+    context: dict,
+    spec_filename: str,
+    sidecar: str,
+    base_url: str,
+    heal: dict | None = None,
+    plan: dict | None = None,
 ) -> str:
     """Build the live task prompt (the skill supplies the methodology).
 
@@ -165,7 +171,21 @@ def _build_prompt(
     frames the task as a self-heal (#428): reproduce the failure live, find the
     real cause, and emit a CORRECTED spec — instead of authoring from scratch.
     Reuses the same browser-harness/skill machinery either way.
+
+    When ``plan`` is given (#569) the ticket's Automation Plan is rendered into the
+    prompt by the SAME :func:`automation_planner_service.render_plan` the blind path
+    uses, so a live-authored spec imports the project's existing page objects
+    instead of re-inlining their locators. The plan's ``create``/``extend`` assets
+    have already been authored **server-side** before this prompt is built, so every
+    path the block lists as importable really is on disk. ``skills/live-authoring/
+    SKILL.md`` documents how to consume the block — change one and change the other
+    in the same commit (#178).
     """
+    # Local import: `automation_planner_service` pulls in the project services, and
+    # importing it at module scope makes live_authoring <-> planner a cycle.
+    from app.services.automation_planner_service import render_plan
+
+    plan_block = render_plan(plan)
     accounts = context.get("testAccounts") or []
     cred_lines = "\n".join(
         f"- role={a.get('role', '')} username={a.get('username', '')} password={a.get('password', '')}"
@@ -208,9 +228,17 @@ def _build_prompt(
         f"Auth: {auth}\n"
         f"Known routes: {routes}\n"
         f"Known selectors: {selectors}\n\n"
-        f"## Deliverables — write BOTH files into the current working directory\n"
+        + (f"## Shared library\n{plan_block}\n\n" if plan_block else "")
+        + f"## Deliverables — write BOTH files into the current working directory\n"
         f"1. `{spec_filename}` — the Playwright spec (layered contract in the skill: import from "
-        f"`@q-agent/playwright-base`, no inline login).\n"
+        f"`@q-agent/playwright-base`, no inline login"
+        + (
+            ", and drive the UI through the IMPORTABLE assets above instead of "
+            "re-inlining their locators"
+            if plan_block
+            else ""
+        )
+        + ").\n"
         f"2. `{sidecar}` — the runtime-verified routes/selectors sidecar (shape in the skill).\n\n"
         f"Perform every step live and confirm every expected result before writing the spec. "
         f"Create any missing test data through the UI first and bake it into the spec. "
@@ -218,8 +246,16 @@ def _build_prompt(
     )
 
 
-def author_case(db, case, run, *, owner_id: int | None, run_id: int | None) -> AuthoringResult:
+def author_case(
+    db, case, run, *, owner_id: int | None, run_id: int | None, plan: dict | None = None
+) -> AuthoringResult:
     """Author one case's spec by driving the real app live via browser-harness (#400).
+
+    ``plan`` (#569) is the ticket's Automation Plan, whose ``create``/``extend``
+    assets the caller has **already authored server-side** — it is rendered into the
+    task prompt so the live session reuses the project's page objects instead of
+    inlining locators. ``None`` (legacy path, no persistent project, planning
+    failed) keeps the pre-#569 prompt exactly.
 
     Returns an :class:`AuthoringResult` with the emitted spec code and the
     runtime-verified discovery (already normalized for the KB). Raises
@@ -298,7 +334,9 @@ def author_case(db, case, run, *, owner_id: int | None, run_id: int | None) -> A
             raise LiveAuthoringError(f"Chrome CDP endpoint did not come up on port {port}.")
         _publish("driving", message="Driving the app live with browser-harness")
 
-        prompt = _build_prompt(case, context, spec_filename, sidecar_path.name, base_url)
+        prompt = _build_prompt(
+            case, context, spec_filename, sidecar_path.name, base_url, plan=plan
+        )
         summary = claude_cli.run_agentic(
             prompt,
             workspace_dir=workspace,
