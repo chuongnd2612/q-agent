@@ -914,6 +914,41 @@ export const useExploreStatus = (projectKey: string, repo: string, enabled: bool
     refetchInterval: (q) => (q.state.data?.exploring ? 1500 : false),
   });
 
+// Prefill + readiness for exporting the automation project (#549). A plain query:
+// it pushes nothing, so it is safe to fetch whenever the export panel is open.
+export const useAutomationExportPreflight = (
+  runId: number | string,
+  projectId: number | null,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: queryKeys.automationExport(runId, projectId),
+    queryFn: () => api.automationExportPreflight(runId, projectId),
+    enabled: enabled && projectId != null,
+    retry: false,
+  });
+
+// The export itself — the **only** push trigger in the client, deliberately a
+// mutation behind an explicit button. Nothing invalidates or re-runs it on its own:
+// pushing AI-authored commits to a customer's remote must never happen as a side
+// effect of rendering. Invalidates the preflight so the reported HEAD/commit
+// refreshes after a successful push.
+export const useExportAutomationProject = (runId: number | string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      remoteUrl: string;
+      branch: string;
+      projectId?: number | null;
+      message?: string;
+    }) => api.exportAutomationProject(runId, body),
+    onSuccess: (_result, body) =>
+      qc.invalidateQueries({
+        queryKey: queryKeys.automationExport(runId, body.projectId ?? null),
+      }),
+  });
+};
+
 // The last self-heal trail for a case (per-attempt error + diff + outcome).
 export const useHealReport = (caseId: number, enabled: boolean) =>
   useQuery({

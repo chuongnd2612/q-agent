@@ -37,6 +37,8 @@ export const queryKeys = {
   specs: (runId: number | string) => ["runs", runId, "automation"] as const,
   automationStatus: (runId: number | string) =>
     ["runs", runId, "automation", "status"] as const,
+  automationExport: (runId: number | string, projectId: number | null) =>
+    ["runs", runId, "automation", "export", projectId ?? 0] as const,
   healStatus: (caseId: number) => ["cases", caseId, "heal", "status"] as const,
   healReport: (caseId: number) => ["cases", caseId, "heal", "report"] as const,
   exploreStatus: (projectKey: string, repo: string) =>

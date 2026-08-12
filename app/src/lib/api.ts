@@ -21,6 +21,8 @@ import type {
   ClaudeCredentialsStatus,
   ClaudeCredentialsTestResult,
   ClaudeCredentialsUpload,
+  AutomationExportPreflight,
+  AutomationExportResult,
   AutomationSpecOut,
   AutomationStatus,
   BackendLogOut,
@@ -834,6 +836,18 @@ export const api = {
       `/projects/${encodeURIComponent(projectKey)}/repos/${encodeURIComponent(repo)}/explore`,
       body,
     ),
+  // Export the automation project to a customer-owned git remote (#549). Both are
+  // user-triggered: the GET only prefills the panel (it pushes nothing) and the POST
+  // is the explicit action, with the remote and branch chosen by the user.
+  automationExportPreflight: (runId: number | string, projectId?: number | null) =>
+    get<AutomationExportPreflight>(
+      `/runs/${runId}/automation/export${projectId ? `?projectId=${projectId}` : ""}`,
+    ),
+  exportAutomationProject: (
+    runId: number | string,
+    body: { remoteUrl: string; branch: string; projectId?: number | null; message?: string },
+  ) => post<AutomationExportResult>(`/runs/${runId}/automation/export`, body),
+
   exploreStatus: (projectKey: string, repo: string) =>
     get<ExploreStatus>(
       `/projects/${encodeURIComponent(projectKey)}/repos/${encodeURIComponent(repo)}/explore/status`,

@@ -16,6 +16,7 @@ host-guessing). Tokens are redacted from all logs.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -102,6 +103,73 @@ def _run_git(args: list[str]) -> bool:
         logger.warning("git {} exited {}: {}", args[0], proc.returncode, proc.stderr.strip()[:300])
         return False
     return True
+
+
+def scrub(text: str, secret: str = "") -> str:
+    """Make ``text`` safe to log, return to a client, or publish over WS (#549).
+
+    Two independent passes, because either alone leaks:
+
+    * :func:`_redact` masks ``https://<credentials>@host`` — the form git echoes
+      back when a push/fetch against an authenticated URL fails.
+    * The literal ``secret`` is then replaced verbatim, which catches every other
+      shape a token could take in git's output (a bare token in a credential
+      helper message, a URL-encoded variant of the same host line, and so on).
+
+    Args:
+        text: Raw command output or message.
+        secret: The PAT to scrub verbatim. Empty means "URL masking only".
+
+    Returns:
+        The scrubbed text (never ``None``).
+    """
+    out = _redact(text or "")
+    if secret:
+        out = out.replace(secret, "***")
+    return out
+
+
+def run_git_captured(
+    args: list[str], *, secret: str = "", timeout: int = _CLONE_TIMEOUT_S
+) -> tuple[int, str]:
+    """Run git and hand back ``(returncode, scrubbed combined output)`` (#549).
+
+    :func:`_run_git` is deliberately left alone: it answers pass/fail and logs raw
+    stderr, which is fine for the clone paths it serves but unusable for export —
+    the caller there must *surface* git's message to the user, and git routinely
+    echoes the remote URL (PAT included) in push/fetch failures. Every byte
+    returned here has already been through :func:`scrub`.
+
+    Interactive credential prompts are disabled (``GIT_TERMINAL_PROMPT=0`` and a
+    no-op ``GIT_ASKPASS``), so a wrong or expired PAT fails fast instead of
+    hanging the request waiting on a terminal that does not exist.
+
+    Never raises: a missing git or a timeout comes back as ``(-1, message)``.
+    """
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "echo",
+        "GCM_INTERACTIVE": "never",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        # `exc` can embed the command line — and therefore the authenticated URL.
+        return -1, scrub(f"git {args[0] if args else ''} failed: {exc}", secret)
+    output = scrub(f"{proc.stdout or ''}{proc.stderr or ''}".strip(), secret)
+    if proc.returncode != 0:
+        logger.warning("git {} exited {}: {}", args[0] if args else "", proc.returncode, output[:300])
+    return proc.returncode, output
 
 
 def materialize_remote(

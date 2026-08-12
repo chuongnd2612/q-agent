@@ -893,6 +893,22 @@ class AutomationSpecRegenerate(ApiModel):
     comment: str | None = None
 
 
+class AutomationExportRequest(ApiModel):
+    """A user-triggered export of the automation project to their own git remote (#549).
+
+    Every field is chosen by the user — the target remote and the branch are never
+    inferred, and nothing here has a server-side default that would let an export
+    happen implicitly. ``branch`` is refused when it names the remote's default
+    branch (or any mainline-shaped name); ``projectId`` is optional and only needed
+    when a run's specs span more than one automation project.
+    """
+
+    remoteUrl: str
+    branch: str
+    projectId: int | None = None
+    message: str | None = None
+
+
 class SpecChatRequest(ApiModel):
     """A reviewer's chat instruction to edit the selected spec (AI chat panel).
 

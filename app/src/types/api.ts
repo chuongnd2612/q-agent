@@ -700,6 +700,48 @@ export interface AutomationSpecOut {
    * for legacy specs (`project_id IS NULL`) — the screen then renders exactly as
    * before, with no file list. */
   projectFiles?: ProjectFile[];
+  /** The persistent git-backed automation project this spec lives in (#540).
+   * `null`/absent for a legacy spec — which is also what makes the project
+   * unexportable (#549), since there is no repo to push. */
+  projectId?: number | null;
+}
+
+/** Prefill + readiness for exporting the automation project to a customer-owned
+ * remote (#549). Read-only: fetching it pushes nothing. `credentialsError` is an
+ * actionable sentence explaining why `hasCredentials` is false, so the UI can say
+ * what to fix *before* the user triggers a push. */
+export interface AutomationExportPreflight {
+  projectId: number;
+  projectSlug: string;
+  projectKey: string;
+  repo: string;
+  /** Suggested branch — never the remote's default (the server refuses those). */
+  branch: string;
+  /** Suggested remote, credentials redacted. May be empty. */
+  remoteUrl: string;
+  commit: string | null;
+  connection: string | null;
+  hasCredentials: boolean;
+  credentialsError: string | null;
+  credentialsCode: string | null;
+  /** False until a provider adapter can open a PR; the UI then reports the branch. */
+  canOpenPullRequest: boolean;
+}
+
+/** Result of a user-triggered export. `remote` is always redacted, and `prUrl` is
+ * `null` while no provider adapter can open a pull request. */
+export interface AutomationExportResult {
+  ok: boolean;
+  projectId: number;
+  branch: string;
+  remote: string;
+  commit: string;
+  committed: boolean;
+  pushed: boolean;
+  upToDate: boolean;
+  created: boolean;
+  prUrl: string | null;
+  detail: string;
 }
 
 /** Payload of the `automation.chat.reply` run-WS event: the successful result

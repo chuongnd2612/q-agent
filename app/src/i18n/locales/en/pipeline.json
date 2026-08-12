@@ -468,5 +468,22 @@
       "config": "Config",
       "other": "Other"
     }
+  },
+  "export": {
+    "title": "Export automation project",
+    "description": "Push this project's automation suite — page objects, fixtures, test data and specs — to a git remote you own, so you can run it in your own CI. Nothing is pushed until you export, and Q-Agent only ever pushes to a branch, never to the remote's default branch.",
+    "loading": "Checking export readiness…",
+    "remoteLabel": "Git remote",
+    "remoteHint": "The HTTPS clone URL of a repository you control. It is pushed to with your project's repository connection.",
+    "branchLabel": "Branch",
+    "branchHint": "A branch of your own, so the generated commits go through your review. Mainline names are refused.",
+    "action": "Export to remote",
+    "pushing": "Pushing…",
+    "head": "HEAD {{commit}}",
+    "pushed": "Pushed to {{branch}}",
+    "alreadyUpToDate": "{{branch}} is already up to date",
+    "failed": "Export failed",
+    "openPr": "Open the pull request",
+    "openPrYourself": "Open a pull request from this branch on your git host to review and merge it."
   }
 }
