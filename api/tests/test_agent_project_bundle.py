@@ -291,7 +291,14 @@ def test_legacy_claim_is_unaffected_by_the_version_guard(client, db_session):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "project" not in body, "a legacy payload is unchanged from before"
-    assert body["specs"][0]["filename"] == "1428-TC-01.spec.ts"
+    # #540 changed `spec_filename` to carry the FULL ticket id, so that two tickets
+    # sharing a short id (SUR-1428 / OPS-1428) cannot collide in one persistent
+    # project. Legacy claims get the new name too — that is fine and intended:
+    # results pushed back in either form still match, because
+    # `execution_service.match_result` tries the full form first and falls back to
+    # the legacy short form. What this test guards is the *version guard*, i.e. that
+    # a `project_id IS NULL` spec ships with no `project` bundle on any agent build.
+    assert body["specs"][0]["filename"] == "SUR-1428-TC-01.spec.ts"
 
 
 def test_claim_fails_fast_when_the_bundle_is_over_cap(client, db_session, monkeypatch):
