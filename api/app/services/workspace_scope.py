@@ -12,7 +12,7 @@ the ``workspace/claude-config/<owner_id|"shared">/`` pattern already used by
 - owner absent (``owner_id is None``) -> ``workspace/shared/``
 
 Every per-owner artifact tree (``specs``, ``evidence``, ``knowledge``, ``repos``,
-``auth``) lives under the scope root. This module is a pure new library: it does
+``auth``, ``automation``) lives under the scope root. This module is a pure new library: it does
 not change any existing call site (those migrate in later slices per ADR 0009).
 """
 
@@ -31,13 +31,14 @@ __all__ = [
     "scoped_knowledge_dir",
     "scoped_repos_dir",
     "scoped_auth_dir",
+    "scoped_automation_dir",
     "served_evidence_path",
     "slug",
 ]
 
 # The artifact kinds every scope holds (mirrors the flat `workspace/<kind>/`
 # dirs config.py has historically exposed as `specs_dir`/`evidence_dir`/etc).
-_KINDS = ("specs", "evidence", "knowledge", "repos", "auth")
+_KINDS = ("specs", "evidence", "knowledge", "repos", "auth", "automation")
 
 
 def scope_for(owner_id: int | None) -> str:
@@ -59,7 +60,7 @@ def scoped_dir(kind: str, owner_id: int | None) -> Path:
     """Return the scoped directory for artifact ``kind`` owned by ``owner_id``.
 
     ``kind`` is one of ``"specs"``, ``"evidence"``, ``"knowledge"``, ``"repos"``,
-    ``"auth"``. The path is not created on disk here — callers ``mkdir`` as
+    ``"auth"``, ``"automation"``. The path is not created on disk here — callers ``mkdir`` as
     needed, matching the existing (unscoped) ``Settings.*_dir`` properties.
 
     Returns ``get_settings().workspace_dir / scope_for(owner_id) / kind``.
@@ -90,6 +91,15 @@ def scoped_repos_dir(owner_id: int | None) -> Path:
 def scoped_auth_dir(owner_id: int | None) -> Path:
     """Scoped ``auth`` directory for ``owner_id`` — see :func:`scoped_dir`."""
     return scoped_dir("auth", owner_id)
+
+
+def scoped_automation_dir(owner_id: int | None) -> Path:
+    """Scoped ``automation`` directory for ``owner_id`` — see :func:`scoped_dir`.
+
+    Root of the persistent git-backed automation projects (#538):
+    ``workspace/<scope>/automation/<project-slug>/<repo-slug>/``.
+    """
+    return scoped_dir("automation", owner_id)
 
 
 def served_evidence_path(owner_id: int | None, relative_path: str) -> str:
