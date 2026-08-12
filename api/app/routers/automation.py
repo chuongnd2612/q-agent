@@ -203,7 +203,9 @@ def _gate_spec_or_bypass(
             imports resolve because the files genuinely exist, and a page-object
             edit that breaks *another* case's spec fails collection here.
             ``None`` keeps the legacy path byte-for-byte for
-            ``project_id IS NULL`` specs.
+            ``project_id IS NULL`` specs. A project also enables the second static
+            gate, ``automation_gate.typecheck_ok`` (#546), run after the cheaper
+            collection check.
 
     Returns:
         ``(gate_report, outcome)`` where outcome is ``passed`` | ``blocked`` | ``rejected``.
@@ -216,11 +218,12 @@ def _gate_spec_or_bypass(
     # (best-effort: an unavailable CLI/timeout skips the check, never blocks).
     if outcome == "passed":
         if project is not None:
+            project_root = automation_project_service.project_dir(project)
             list_ok, detail = automation_gate.list_ok_in_project(
-                automation_project_service.project_dir(project),
-                automation_gate.test_titles(code),
+                project_root, automation_gate.test_titles(code)
             )
         else:
+            project_root = None
             list_ok = spec_service.playwright_list_ok(code, owner_id)
             detail = "playwright --list parse failure"
         if not list_ok:
@@ -231,6 +234,24 @@ def _gate_spec_or_bypass(
                 "reason": f"Playwright could not parse/collect the {noun}.",
                 "unblock_action": f"{fix_verb} the spec so it parses cleanly under Playwright.",
             }
+        elif project_root is not None:
+            # `--list` transpiles with esbuild, which erases types without checking
+            # them — a misspelled page-object method or a wrong argument shape
+            # collects cleanly. Only `tsc --noEmit` sees those (#546). Second, after
+            # the cheaper collection check, and only for project-backed specs: the
+            # legacy single-spec-in-a-temp-dir path has no tsconfig to check against.
+            types_ok, type_detail = automation_gate.typecheck_ok(project_root)
+            if not types_ok:
+                outcome = "rejected"
+                gate = {
+                    "outcome": "rejected",
+                    "findings": [type_detail],
+                    "reason": f"TypeScript rejected the {noun}.",
+                    "unblock_action": (
+                        f"{fix_verb} the spec so it typechecks against the project's "
+                        "page objects and fixtures."
+                    ),
+                }
     return gate, outcome
 
 

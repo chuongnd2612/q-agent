@@ -131,6 +131,12 @@ def project_generation(monkeypatch):
         return True, "collected cleanly"
 
     monkeypatch.setattr(automation_gate, "list_ok_in_project", fake_gate)
+    # The second static gate (#546) is stubbed here too, so these tests stay
+    # hermetic: `settings.playwright_node_modules` may well hold a real `tsc` on a
+    # dev machine, and shelling out to it per generation would make the suite slow
+    # and machine-dependent. `tsc --noEmit` gets its own dedicated coverage in
+    # `test_automation_gate.py`.
+    monkeypatch.setattr(automation_gate, "typecheck_ok", lambda _dir: (True, "stubbed"))
     return SimpleNamespace(calls=calls, monkeypatch=monkeypatch)
 
 
@@ -270,6 +276,9 @@ def test_the_project_gate_resolves_imports_the_legacy_gate_cannot(
     from app.routers import automation as automation_router
 
     monkeypatch.setattr(automation_router, "_run_automation_review", lambda *a, **k: None)
+    # The undo() above also dropped the fixture's `typecheck_ok` stub; re-apply it so
+    # this test stays about `--list` cwd/NODE_PATH and never shells out to a real tsc.
+    monkeypatch.setattr(automation_gate, "typecheck_ok", lambda _dir: (True, "stubbed"))
 
     project = aps.ensure_project(db_session, run.owner_id, "Surency Platform", "")
     root = aps.project_dir(project)
