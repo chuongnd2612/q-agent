@@ -48,6 +48,9 @@ import { diffLines } from "./automation/lineDiff";
 import { SpecChatPanel } from "./automation/chat/SpecChatPanel";
 import { useUI } from "@/store/ui";
 import { RegenSummary, deriveTags } from "./automation/RegenSummary";
+import { ProjectFileTree } from "./automation/ProjectFileTree";
+import { ProjectFilePanel } from "./automation/ProjectFilePanel";
+import { buildFileList } from "./automation/projectFiles";
 
 export function Automation() {
   const { t } = useTranslation("pipeline");
@@ -83,6 +86,9 @@ export function Automation() {
         (prev) => {
           const next = new URLSearchParams(prev);
           next.set("case", String(caseId));
+          // Picking a spec always lands on that spec's editor, never on whichever
+          // read-only project file (`?file=`) happened to be open.
+          next.delete("file");
           return next;
         },
         { replace },
@@ -203,6 +209,41 @@ export function Automation() {
   const selectedSpec = useMemo(
     () => specs?.find((s) => s.testCaseId === selectedSpecCaseId) ?? specs?.[0] ?? null,
     [specs, selectedSpecCaseId],
+  );
+
+  // ---- Automation project files (#543) ---------------------------------------
+  // A spec that lives in a persistent automation project ships the project's other
+  // files alongside it (page objects, fixtures, data, …), read-only. A legacy spec
+  // (`project_id IS NULL`) has no `projectFiles`: `fileList` is then null, nothing
+  // extra renders, and the screen behaves exactly as it did before this slice.
+  const fileList = useMemo(
+    () => buildFileList(selectedSpec?.projectFiles, selectedSpec?.filename),
+    [selectedSpec?.projectFiles, selectedSpec?.filename],
+  );
+  // Which project file is open — a deep-linkable intra-screen selection in the URL
+  // (`?file=`), never store state. Absent, unknown, or pointing at the spec itself
+  // means "show the editable spec", so the spec is the default selection.
+  const fileParam = searchParams.get("file");
+  const openFile = useMemo(
+    () =>
+      fileList != null && fileParam != null && fileParam !== fileList.specPath
+        ? selectedSpec?.projectFiles?.find((f) => f.path === fileParam) ?? null
+        : null,
+    [fileList, fileParam, selectedSpec?.projectFiles],
+  );
+  const selectFile = useCallback(
+    (path: string) =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          // The spec row is the absence of `?file=` — keeps legacy URLs canonical.
+          if (path === fileList?.specPath) next.delete("file");
+          else next.set("file", path);
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams, fileList],
   );
 
   // Code-folding state for the read-only spec viewer. Reset whenever the selected
@@ -691,14 +732,30 @@ export function Automation() {
 
       {!thinking && specs && specs.length > 0 && (
         <div className="flex flex-col gap-3.5 md:grid md:grid-cols-[230px_1fr] md:items-start">
-          <SpecList
-            specs={specs}
-            selectedTestCaseId={selectedSpec?.testCaseId ?? null}
-            resultStatusByCase={resultStatusByCase}
-            healProgress={healProgress}
-            onSelect={selectSpec}
-          />
+          <div className="flex flex-col gap-3.5">
+            <SpecList
+              specs={specs}
+              selectedTestCaseId={selectedSpec?.testCaseId ?? null}
+              resultStatusByCase={resultStatusByCase}
+              healProgress={healProgress}
+              onSelect={selectSpec}
+            />
+            {/* Only for project-backed specs — a legacy spec renders nothing here. */}
+            {fileList && (
+              <ProjectFileTree
+                groups={fileList.groups}
+                specPath={fileList.specPath}
+                selectedPath={openFile?.path ?? fileList.specPath}
+                onSelect={selectFile}
+              />
+            )}
+          </div>
 
+          {openFile ? (
+            <div className="min-w-0">
+              <ProjectFilePanel file={openFile} />
+            </div>
+          ) : (
           <div className="flex min-w-0 flex-col gap-3.5">
           {isProductDefect && <ProductDefectBanner />}
           {isBlocked && (
@@ -807,6 +864,7 @@ export function Automation() {
           />
           {healReport && <HealTimeline report={healReport} />}
           </div>
+          )}
         </div>
       )}
     </div>

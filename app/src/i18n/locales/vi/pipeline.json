@@ -432,5 +432,23 @@
       "linkedTo": "Đã liên kết với {{provider}}",
       "pending": "Đang chờ…"
     }
+  },
+  "projectFiles": {
+    "title": "TỆP DỰ ÁN",
+    "readOnlyHint": "Tệp hỗ trợ chỉ đọc",
+    "readOnly": "Chỉ đọc",
+    "copied": "Đã sao chép tệp",
+    "emptyFile": "Tệp này trống.",
+    "footer": "Các tệp hỗ trợ do Q-Agent tạo và duy trì. Việc chỉnh sửa tại đây sẽ có sau — mọi thay đổi phải vượt qua cổng kiểm tra chất lượng trước.",
+    "kinds": {
+      "spec": "Tệp kiểm thử",
+      "page": "Đối tượng trang",
+      "component": "Thành phần",
+      "fixture": "Fixture",
+      "data": "Dữ liệu kiểm thử",
+      "util": "Tiện ích",
+      "config": "Cấu hình",
+      "other": "Khác"
+    }
   }
 }
