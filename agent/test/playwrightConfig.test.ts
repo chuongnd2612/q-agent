@@ -10,7 +10,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { applyFixtures, fixturesTs, writeConfig } from "../src/playwrightConfig";
+import {
+  applyFixtures,
+  fixtureTargets,
+  fixturesSpecifier,
+  fixturesTs,
+  writeConfig,
+} from "../src/playwrightConfig";
 
 test("fixturesTs always wires DOM capture; sessionStorage replay is gated", () => {
   const sessionFile = "/tmp/sessionStorage.json";
@@ -71,7 +77,7 @@ test("applyFixtures always rewrites imports to './fixtures' + writes fixtures.ts
   const sessionFile = path.join(dir, "sessionStorage.json");
 
   // Even without session replay, DOM capture means fixtures are injected.
-  applyFixtures(dir, [specName], sessionFile, false);
+  applyFixtures(dir, sessionFile, false);
   const rewritten = fs.readFileSync(specPath, "utf-8");
   assert.ok(rewritten.includes("'./fixtures'"));
   assert.ok(!rewritten.includes("'@playwright/test'"));
@@ -80,9 +86,88 @@ test("applyFixtures always rewrites imports to './fixtures' + writes fixtures.ts
   assert.ok(!fixtures.includes("addInitScript"));
 
   // With replay enabled, the init script is added; specs stay pointed at './fixtures'.
-  applyFixtures(dir, [specName], sessionFile, true);
+  applyFixtures(dir, sessionFile, true);
   assert.ok(fs.readFileSync(specPath, "utf-8").includes("'./fixtures'"));
   assert.ok(fs.readFileSync(path.join(dir, "fixtures.ts"), "utf-8").includes("addInitScript"));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ── Depth-aware fixtures (#541) ────────────────────────────────────────────
+// A layered project puts specs at `tests/<TICKET>/x.spec.ts` and page objects at
+// `pages/Foo.ts`, so a flat `'./fixtures'` rewrite resolves to nothing and every
+// spec fails collection. These mirror the server's `_apply_fixtures` change —
+// divergence means specs pass on the server and fail on the device.
+
+test("fixturesSpecifier: one specifier per depth", () => {
+  assert.equal(fixturesSpecifier("1428-TC-01.spec.ts"), "./fixtures");
+  assert.equal(fixturesSpecifier("pages/LoginPage.ts"), "../fixtures");
+  assert.equal(fixturesSpecifier("tests/SUR-1428/SUR-1428-TC-01.spec.ts"), "../../fixtures");
+  assert.equal(fixturesSpecifier("a/b/c/d.ts"), "../../../fixtures");
+  // Windows separators resolve the same way.
+  assert.equal(fixturesSpecifier("tests\\SUR-1428\\x.spec.ts"), "../../fixtures");
+});
+
+test("fixtureTargets: globs **/*.ts, skips the shim, config, node_modules and .d.ts", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-tgt-"));
+  const write = (rel: string, body = "// x\n") => {
+    const p = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body, "utf-8");
+  };
+  write("fixtures.ts");
+  write("playwright.config.ts");
+  write("types.d.ts");
+  write("pages/LoginPage.ts");
+  write("components/Nav.ts");
+  write("tests/SUR-1428/SUR-1428-TC-01.spec.ts");
+  write("node_modules/@q-agent/playwright-base/dist/index.ts");
+  write("test-results/leftover.ts");
+  // A nested `fixtures/` LIBRARY dir is a real project directory and must be
+  // rewritten — only the injected ROOT `fixtures.ts` is exempt.
+  write("fixtures/authenticated.ts");
+
+  const targets = fixtureTargets(dir).sort();
+  assert.deepEqual(targets, [
+    "components/Nav.ts",
+    "fixtures/authenticated.ts",
+    "pages/LoginPage.ts",
+    "tests/SUR-1428/SUR-1428-TC-01.spec.ts",
+  ]);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("applyFixtures rewrites each file to its own depth and never touches the config", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-fxd-"));
+  const write = (rel: string, body: string) => {
+    const p = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body, "utf-8");
+  };
+  const read = (rel: string) => fs.readFileSync(path.join(dir, rel), "utf-8");
+
+  write("playwright.config.ts", "import { defineConfig } from '@playwright/test';\n");
+  write("pages/LoginPage.ts", "import { Page } from '@playwright/test';\nexport class LoginPage {}\n");
+  write(
+    "tests/SUR-1428/SUR-1428-TC-01.spec.ts",
+    'import { test, expect } from "@playwright/test";\nimport { LoginPage } from "../../pages/LoginPage";\n'
+  );
+  write("utils/wait.ts", "// no playwright import here\n");
+
+  const rewritten = applyFixtures(dir, path.join(dir, "sessionStorage.json"), false).sort();
+  assert.deepEqual(rewritten, ["pages/LoginPage.ts", "tests/SUR-1428/SUR-1428-TC-01.spec.ts"]);
+
+  assert.ok(read("pages/LoginPage.ts").includes("'../fixtures'"));
+  assert.ok(read("tests/SUR-1428/SUR-1428-TC-01.spec.ts").includes('"../../fixtures"'));
+  // The relative page-object import is untouched — only the module specifier for
+  // Playwright itself is rewritten.
+  assert.ok(read("tests/SUR-1428/SUR-1428-TC-01.spec.ts").includes('"../../pages/LoginPage"'));
+  // The config MUST keep the real package: fixtures.ts exports no defineConfig.
+  assert.ok(read("playwright.config.ts").includes("'@playwright/test'"));
+  assert.ok(fs.existsSync(path.join(dir, "fixtures.ts")));
+  // No stray '@playwright/test' left in any rewritten file.
+  assert.ok(!read("pages/LoginPage.ts").includes("@playwright/test"));
 
   fs.rmSync(dir, { recursive: true, force: true });
 });

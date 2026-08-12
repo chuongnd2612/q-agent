@@ -19,6 +19,7 @@ import { ensureChromium } from "./ensureBrowser";
 import { agentNodeModules, childNodeEnv, claudeCli, nodeBin, playwrightCli, vendorAuthoringScript, vendorCaptureScript, vendorExploreScript, vendorLiveReporter } from "./paths";
 import { ensureBrowserHarness } from "./ensureTooling";
 import { applyFixtures, writeConfig } from "./playwrightConfig";
+import { installBaseFramework, materializeProject, writeProjectFile } from "./projectBundle";
 import { ParsedAttachment, ParsedResult, normalizeStatus, parsePlaywrightReport, parseSpecIdentity } from "./report";
 import { hasSessionStorage, hasValidSession, sessionPathsForOrigin } from "./session";
 import { agentVersion } from "./version";
@@ -154,8 +155,56 @@ function identityFor(spec: api.JobSpec): { ticket: string; caseCode: string } {
   if (spec.ticketExternalId && spec.caseCode) {
     return { ticket: spec.ticketExternalId, caseCode: spec.caseCode };
   }
-  const parsed = parseSpecIdentity(spec.filename);
+  // A layered spec's `filename` is project-relative (`tests/SUR-1428/…`), so parse
+  // the basename — the convention only ever described the file's own name.
+  const parsed = parseSpecIdentity(path.basename(spec.filename));
   return { ticket: spec.ticketExternalId || parsed.shortTicket, caseCode: spec.caseCode || parsed.caseCode };
+}
+
+/**
+ * Stage a job's whole tree into `workDir`: the shipped automation project (#541),
+ * then this job's spec sources at their (possibly nested) paths, then the base
+ * framework in `node_modules/`.
+ *
+ * Order matters. The project ships without `tests/**` (other runs' specs are
+ * irrelevant and would be re-executed), so the specs are written after it — and
+ * their `filename` is project-relative for a layered run, which is why both
+ * writes go through the path-confined `writeProjectFile`.
+ *
+ * @returns An error message when the job cannot be staged (an over-cap bundle),
+ *   or `""` on success. Logs the bundle size on this side to match the server's
+ *   log line.
+ */
+function stageJobTree(workDir: string, job: api.Job, specs: { filename: string; code: string }[]): string {
+  if (job.project) {
+    const staged = materializeProject(workDir, job.project);
+    if (staged.overCap) {
+      return (
+        `Automation project bundle is too large to stage (${staged.bytes} bytes) — ` +
+        `remove large or generated files from the project.`
+      );
+    }
+    console.log(
+      `Staged automation project (bundle v${job.project.baseVersion || "?"}): ` +
+        `${staged.files} file(s), ${staged.bytes} bytes`
+    );
+    if (staged.skipped.length) {
+      console.error(`Refused ${staged.skipped.length} unsafe bundle path(s): ${staged.skipped.join(", ")}`);
+    }
+    const base = installBaseFramework(workDir);
+    if (base === "unavailable") {
+      console.error(
+        "@q-agent/playwright-base is not bundled with this agent build — specs importing it will " +
+          "fail to resolve. Update the Local Agent."
+      );
+    }
+  }
+  for (const spec of specs) {
+    if (!writeProjectFile(workDir, spec.filename, spec.code)) {
+      return `Refusing to write spec outside the job workdir: ${spec.filename}`;
+    }
+  }
+  return "";
 }
 
 /** Mark every spec in the job failed with `message` and finalize — used when a run cannot proceed (e.g. manual login was not completed). */
@@ -243,8 +292,10 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
   // finally cleans up (error / early-return paths).
   let handedOff = false;
   try {
-    for (const spec of job.specs) {
-      fs.writeFileSync(path.join(workDir, spec.filename), spec.code, "utf-8");
+    const stageError = stageJobTree(workDir, job, job.specs);
+    if (stageError) {
+      await failAllResults(cfg, job, stageError);
+      return;
     }
 
     const auth = await resolveJobAuth(cfg, job);
@@ -265,13 +316,15 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     const replaySession = Boolean(job.manualAuth && storageState && sessionStoragePath && fs.statSync(sessionStoragePath).size > 0);
     applyFixtures(
       workDir,
-      job.specs.map((s) => s.filename),
       sessionStoragePath || path.join(workDir, "sessionStorage.json"),
       replaySession
     );
 
     const total = job.specs.length;
-    const specByFile = new Map(job.specs.map((s) => [s.filename, s]));
+    // Keyed by BASENAME: a layered spec's `filename` is project-relative, and
+    // Playwright's report/live reporter emit their own (config-relative) paths, so
+    // the basename is the only stable join key.
+    const specByFile = new Map(job.specs.map((s) => [path.basename(s.filename), s]));
     for (let i = 0; i < job.specs.length; i++) {
       const { ticket, caseCode } = identityFor(job.specs[i]);
       await api.postEvent(cfg, job.executionId, "exec.case.running", { ticket, caseCode, index: i + 1, total });
@@ -364,7 +417,7 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     // video/trace/DOM uploads.
     const pendingEvidence: { ticket: string; caseCode: string; kind: string; filePath: string }[] = [];
     for (const spec of job.specs) {
-      const entry = parsed.find((e) => path.basename(e.file) === spec.filename);
+      const entry = parsed.find((e) => path.basename(e.file) === path.basename(spec.filename));
       const { ticket, caseCode } = identityFor(spec);
       if (entry) {
         for (const att of entry.attachments) {
@@ -523,7 +576,15 @@ async function processHealJob(cfg: AgentConfig, job: api.Job, heal: NonNullable<
     } else {
       const { storageState, sessionStoragePath } = auth;
       for (let attempt = 1; attempt <= heal.maxAttempts; attempt++) {
-        fs.writeFileSync(path.join(workDir, spec.filename), currentCode, "utf-8");
+        // Re-stage the whole tree each attempt: the project bundle is idempotent,
+        // and the spec is rewritten with the latest fix at its (possibly nested)
+        // project-relative path.
+        const stageError = stageJobTree(workDir, job, [{ filename: spec.filename, code: currentCode }]);
+        if (stageError) {
+          finalError = stageError;
+          await progress("failed", attempt, stageError, stageError);
+          break;
+        }
         // Heal re-runs fail fast (shorter timeouts) and skip heavy trace/video +
         // raw-DOM capture except on the final attempt (#398).
         const isFinalAttempt = attempt === heal.maxAttempts;
@@ -538,7 +599,6 @@ async function processHealJob(cfg: AgentConfig, job: api.Job, heal: NonNullable<
         );
         applyFixtures(
           workDir,
-          [spec.filename],
           sessionStoragePath || path.join(workDir, "sessionStorage.json"),
           replaySession,
           isFinalAttempt,
@@ -555,7 +615,7 @@ async function processHealJob(cfg: AgentConfig, job: api.Job, heal: NonNullable<
         if (!timedOut && fs.existsSync(reportPath)) {
           try {
             const parsed = parsePlaywrightReport(JSON.parse(fs.readFileSync(reportPath, "utf-8")));
-            entry = parsed.find((e) => path.basename(e.file) === spec.filename);
+            entry = parsed.find((e) => path.basename(e.file) === path.basename(spec.filename));
           } catch {
             // fall through to the no-report error below
           }

@@ -160,6 +160,29 @@ export function vendorLiveReporter(): string {
   return found;
 }
 
+/**
+ * The vendored `@q-agent/playwright-base` package directory (#541), or null when
+ * this build predates it.
+ *
+ * A layered project's specs import the base framework, so it must resolve inside
+ * the ephemeral job workdir. The agent carries a built copy rather than
+ * `npm install`-ing per job: no network, no per-job install, deterministic —
+ * see `scripts/vendor-playwright-base.mjs` for the full trade-off. Returns a
+ * directory (not a file), copied into `<workdir>/node_modules/@q-agent/…` by
+ * `projectBundle.installBaseFramework`.
+ */
+export function vendorPlaywrightBase(): string | null {
+  const root = packagedRoot();
+  // Probe the manifest (a directory always "exists" once created), then hand back
+  // its directory.
+  const manifest = firstExisting([
+    ...(root ? [path.join(root, "vendor", "playwright-base", "package.json")] : []),
+    path.join(__dirname, "..", "..", "vendor", "playwright-base", "package.json"),
+    path.join(__dirname, "..", "vendor", "playwright-base", "package.json"),
+  ]);
+  return manifest ? path.dirname(manifest) : null;
+}
+
 /** The vendored live-authoring Chrome launcher (`authoring_browser.cjs`, #403).
  * Uses only Node built-ins (no Playwright), so it runs with a bare `node`. */
 export function vendorAuthoringScript(): string {

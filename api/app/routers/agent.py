@@ -31,7 +31,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,7 @@ from app.config import settings
 from app.db import SessionLocal, get_db
 from app.logging import logger
 from app.deps_auth import require_agent, require_user
+from app.models.automation_project import AutomationProject
 from app.models.execution import Execution, ExecutionResult
 from app.models.run import Run
 from app.models.testcase import AutomationSpec, TestCase
@@ -57,7 +58,7 @@ from app.schemas import (
     ExploreFinalizeRequest,
     ExploreTarget,
 )
-from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, evidence_service, execution_service, exploration_agent, heal_service, knowledge_service, project_config_service, run_context, settings_store, spec_service
+from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, agent_project_bundle, automation_project_service, evidence_service, execution_service, exploration_agent, heal_service, knowledge_service, project_config_service, run_context, settings_store, spec_service
 from app.services.auth_service import AuthError
 from app.services.ownership import get_owned_or_404
 from app.services.playwright_runner import _resolve_project_for_run
@@ -81,6 +82,9 @@ def list_devices(user: User = Depends(require_user), db: Session = Depends(get_d
         {
             "id": d.id,
             "name": d.name,
+            # Self-reported on the last job claim (#541); "" until the device runs
+            # an agent new enough to report it.
+            "agentVersion": d.agent_version or "",
             "lastSeenAt": d.last_seen_at,
             "createdAt": d.created_at,
         }
@@ -140,15 +144,75 @@ def _owned_execution(db: Session, execution_id: int, user: User) -> tuple[Execut
     return execution, run
 
 
+def _fail_claimed_execution(
+    db: Session, execution: Execution, run: Run, results: list[ExecutionResult], message: str
+) -> None:
+    """Fail an already-claimed execution cleanly, with ``message`` on every case.
+
+    The claim flips the row to ``running`` before we know whether the device can
+    actually run it (version skew, an over-cap bundle). When it can't, the run
+    must end with one legible reason rather than being left ``running`` forever
+    or handed to an agent that will emit a wall of import errors.
+    """
+    for result in results:
+        result.status = "fail"
+        result.duration_ms = 0
+        result.error_message = message
+    execution.passed = 0
+    execution.failed = len(results)
+    db.commit()
+    for result in results:
+        hub.publish(
+            str(run.id),
+            "exec.case.result",
+            {
+                "ticket": result.ticket_external_id,
+                "caseCode": result.case_code,
+                "status": "fail",
+                "durationMs": 0,
+            },
+        )
+    execution_service.finalize(
+        db, execution, run, message, advance_run=execution.heal_case_id is None
+    )
+
+
+def _spec_relpath(
+    project: AutomationProject, spec: AutomationSpec, ticket_external_id: str, filename: str
+) -> str:
+    """The spec's path **relative to the project root**, for a nested bundle.
+
+    Prefers the path ``automation_project_service.write_spec`` persisted on the
+    row (``tests/<TICKET>/<file>.spec.ts``, set by #540) so server and device
+    agree by construction; falls back to deriving it from
+    :func:`automation_project_service.spec_dir` when the row still holds a bare
+    filename (a spec generated before the project layout landed).
+    """
+    stored = (spec.filename or "").replace("\\", "/").strip("/")
+    if stored.startswith("tests/"):
+        return stored
+    directory = automation_project_service.spec_dir(project, ticket_external_id)
+    relative = directory.relative_to(automation_project_service.project_dir(project))
+    return f"{relative.as_posix()}/{filename}"
+
+
 @router.post("/jobs/next")
 def claim_next_job(
-    response: Response, user: User = Depends(require_agent), db: Session = Depends(get_db)
+    response: Response,
+    body: dict | None = Body(default=None),
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
 ) -> dict | None:
     """Atomically claim the oldest queued local-agent Execution owned by this user.
 
     Uses a conditional UPDATE (``WHERE status='queued'``) so a concurrent claim
     from another poll can never double-claim the same row: only one caller's
     UPDATE affects a row. Returns 204 (empty) when nothing is queued.
+
+    Body (optional): ``{"agentVersion": "0.2.1"}``. The version is recorded on
+    the claiming device and gates the layered-project payload (#541) — see
+    :mod:`app.services.agent_project_bundle`. A body-less claim from a pre-#541
+    agent still works for legacy (``project_id IS NULL``) specs.
     """
     candidate = (
         db.query(Execution.id)
@@ -166,6 +230,12 @@ def claim_next_job(
         return None
     execution_id = candidate[0]
     device = getattr(user, "_device", None)
+    # Record the claiming build BEFORE anything else, so the paired-devices list
+    # shows a stale agent even when the claim is then refused for version skew.
+    reported_version = str((body or {}).get("agentVersion") or "").strip()
+    if device is not None and reported_version and device.agent_version != reported_version:
+        device.agent_version = reported_version[:32]
+        db.commit()
     result = db.execute(
         update(Execution)
         .where(Execution.id == execution_id, Execution.status == "queued")
@@ -196,7 +266,13 @@ def claim_next_job(
         if parts.scheme and parts.netloc:
             auth_origins = [f"{parts.scheme}://{parts.netloc}"]
 
+    # Layered (#537/#541) vs legacy specs. A project-backed spec imports from
+    # `../pages/…` and `@q-agent/playwright-base`, so it only runs on a device
+    # that materializes the nested tree — hence the version guard below. Legacy
+    # `project_id IS NULL` specs keep the exact pre-#541 payload and keep working
+    # on every agent build, forever.
     specs: list[dict] = []
+    project: AutomationProject | None = None
     for r in results:
         spec = (
             db.query(AutomationSpec)
@@ -205,9 +281,15 @@ def claim_next_job(
         )
         if spec is None:
             continue
+        filename = spec_service.spec_filename(r.ticket_external_id, r.case_code)
+        if spec.project_id is not None:
+            candidate_project = db.get(AutomationProject, spec.project_id)
+            if candidate_project is not None:
+                project = candidate_project
+                filename = _spec_relpath(candidate_project, spec, r.ticket_external_id, filename)
         specs.append(
             {
-                "filename": spec_service.spec_filename(r.ticket_external_id, r.case_code),
+                "filename": filename,
                 "code": spec.code,
                 # Explicit identity so the agent can match /jobs/{id}/evidence by exact
                 # ticket_external_id (the filename convention drops the provider prefix,
@@ -216,6 +298,31 @@ def claim_next_job(
                 "caseCode": r.case_code,
             }
         )
+
+    project_bundle: dict | None = None
+    if project is not None:
+        # Version skew is a SILENT mass-failure mode: an old agent flattens the
+        # tree and every import fails collection. Refuse the claim and fail the
+        # execution with one legible reason instead.
+        if not agent_project_bundle.version_ok(reported_version):
+            logger.warning(
+                "refusing layered claim for execution {}: device {} reports version {!r} "
+                "(minimum {})",
+                execution.id,
+                device.id if device else None,
+                reported_version or None,
+                agent_project_bundle.MIN_AGENT_VERSION,
+            )
+            _fail_claimed_execution(
+                db, execution, run, results, agent_project_bundle.UPDATE_MESSAGE
+            )
+            raise HTTPException(status_code=409, detail=agent_project_bundle.UPDATE_MESSAGE)
+        project_bundle, total_bytes = agent_project_bundle.bundle_payload(project)
+        if total_bytes > agent_project_bundle.BUNDLE_MAX_BYTES:
+            _fail_claimed_execution(
+                db, execution, run, results, agent_project_bundle.OVERSIZE_MESSAGE
+            )
+            raise HTTPException(status_code=413, detail=agent_project_bundle.OVERSIZE_MESSAGE)
 
     payload = {
         "executionId": execution.id,
@@ -232,6 +339,10 @@ def claim_next_job(
         "authOrigins": auth_origins,
         "specs": specs,
     }
+    # The persistent automation project, shipped wholesale (#541). Present only
+    # for layered runs, so a legacy claim is byte-identical to before.
+    if project_bundle is not None:
+        payload["project"] = project_bundle
     # An agent-executed self-heal (issue #260): the agent runs the heal LOOP for
     # this one case (run → on fail POST /agent/heal/{caseId}/fix → re-run → …),
     # then POSTs /agent/heal/{caseId}/finalize. Flagged so the agent branches into
