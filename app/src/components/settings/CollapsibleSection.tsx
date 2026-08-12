@@ -21,12 +21,16 @@ export function CollapsibleSection({
   title,
   id,
   defaultOpen = false,
+  onOpenChange,
   children,
 }: {
   title: string;
   /** Anchor id for deep-links (kept on the section wrapper). */
   id?: string;
   defaultOpen?: boolean;
+  /** Notified whenever the open state changes — lets a caller defer work (e.g. a
+   * query) until its body is actually visible. Optional and purely additive. */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -37,6 +41,12 @@ export function CollapsibleSection({
   useEffect(() => {
     if (defaultOpen) setOpen(true);
   }, [defaultOpen]);
+  useEffect(() => {
+    onOpenChange?.(open);
+    // `onOpenChange` is intentionally not a dependency: callers commonly pass an
+    // inline arrow, and re-firing on every render would defeat the point.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   // The height-collapse animation needs `overflow: hidden`, but that clips a
   // child card's hover-lift shadow/glow (#430) once a section is open. Keep it
   // hidden while collapsed/animating and switch to `visible` only after the

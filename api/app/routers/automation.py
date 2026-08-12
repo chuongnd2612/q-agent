@@ -33,9 +33,15 @@ from app.models.run import Run, RunTicket
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.schemas import AutomationSpecRegenerate, AutomationSpecUpdate, SpecChatRequest
+from app.schemas import (
+    AutomationExportRequest,
+    AutomationSpecRegenerate,
+    AutomationSpecUpdate,
+    SpecChatRequest,
+)
 from app.services import (
     audit_service,
+    automation_export_service,
     automation_gate,
     automation_planner_service,
     automation_project_service,
@@ -1525,3 +1531,164 @@ def _spec_out(spec: AutomationSpec, files_cache: dict[int, list[dict]] | None = 
     if files:
         out["projectFiles"] = files
     return out
+
+
+# ---------------------------------------------------------------------------
+# Export the automation project to a customer-owned remote (#549)
+# ---------------------------------------------------------------------------
+
+
+def _export_project_or_404(
+    db: Session, run: Run, project_id: int | None, user: User | None
+) -> AutomationProject:
+    """The automation project this run's specs live in, ownership-checked.
+
+    Two ways in, both of which enforce ADR 0008/0009 ownership:
+
+    * An explicit ``projectId`` goes through ``get_owned_or_404``, so a user asking
+      to export **another user's** project gets a 404, not a push.
+    * Otherwise it is derived from the run's own specs (already ownership-checked
+      via the run). A run whose specs span more than one project is ambiguous and
+      asks the client to name one rather than guessing.
+
+    Raises:
+        HTTPException: 404 for an unowned/missing project, 400 when the run has no
+            persistent automation project (legacy specs) or the choice is ambiguous.
+    """
+    if project_id is not None:
+        return get_owned_or_404(db, AutomationProject, project_id, user)
+
+    project_ids = sorted(
+        {
+            pid
+            for (pid,) in db.query(AutomationSpec.project_id)
+            .join(TestCase, AutomationSpec.test_case_id == TestCase.id)
+            .filter(TestCase.run_id == run.id, AutomationSpec.project_id.isnot(None))
+            .distinct()
+            .all()
+        }
+    )
+    if not project_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This run has no persistent automation project to export — its specs predate "
+                "the git-backed project. Generate automation for a run bound to a project first."
+            ),
+        )
+    if len(project_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="This run's specs span several automation projects; specify which to export.",
+        )
+    return get_owned_or_404(db, AutomationProject, project_ids[0], user)
+
+
+def _suggested_remote(db: Session, project: AutomationProject) -> str:
+    """A best-effort prefill for the remote URL: the project's own configured repo.
+
+    Only ever a *suggestion* — the user confirms or replaces it, because the target
+    of an export is a decision Q-Agent does not own (#549). Returns ``""`` when the
+    project has no configured repo URL.
+    """
+    config = project_config_service.get_config_for_owner(
+        db, project.project_key, project.owner_id
+    ) or project_config_service.get_config(db, project.project_key)
+    if config is None:
+        return ""
+    for repo in project_config_service.get_repos(config):
+        if project.repo and repo.get("name") == project.repo:
+            return (repo.get("repo_url") or "").strip()
+    return (config.repo_url or "").strip()
+
+
+@router.get("/runs/{run_id}/automation/export")
+def automation_export_preflight(
+    run_id: int,
+    projectId: int | None = None,  # noqa: N803 - query param mirrors the JSON body field
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """What the export panel needs to prefill itself. **Pushes nothing.**
+
+    A read-only call by construction: it resolves the project, suggests a branch and
+    remote, and reports whether a repository connection with a usable PAT exists.
+    A missing connection comes back as ``credentialsError`` (an actionable sentence)
+    rather than an HTTP error, so the UI can explain the problem *before* the user
+    triggers an action instead of after a failed push.
+    """
+    run = get_owned_or_404(db, Run, run_id, user)
+    project = _export_project_or_404(db, run, projectId, user)
+    return automation_export_service.export_preflight(
+        db, project, suggested_remote=_suggested_remote(db, project)
+    )
+
+
+@router.post("/runs/{run_id}/automation/export")
+def export_automation_project(
+    run_id: int,
+    payload: AutomationExportRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """Push the run's automation project to a branch on a remote the user names (#549).
+
+    **The only export trigger in the codebase.** Nothing calls it on generate, on
+    heal, on execute or from any background thread — the customer owning their
+    automation suite is an explicit decision, so it takes an explicit action, and the
+    remote and branch both come from the request body.
+
+    Synchronous on purpose: the user is waiting on a yes/no answer and every refusal
+    (diverged branch, default branch, missing connection) is only actionable in the
+    moment. Refusals are 400s whose ``detail`` is safe to render verbatim — every
+    message routes through the PAT scrubbing in
+    ``repo_service.run_git_captured`` / ``automation_export_service``, so neither the
+    response, the WS frame nor the log line can carry the token.
+    """
+    run = get_owned_or_404(db, Run, run_id, user)
+    project = _export_project_or_404(db, run, payload.projectId, user)
+    branch = (payload.branch or "").strip()
+    try:
+        result = automation_export_service.export_to_remote(
+            db,
+            project,
+            remote_url=payload.remoteUrl,
+            branch=branch,
+            message=(payload.message or "").strip(),
+        )
+    except automation_export_service.ExportError as exc:
+        hub.publish(
+            str(run_id),
+            "automation.exported",
+            {
+                "ok": False,
+                "code": exc.code,
+                "error": exc.message,
+                "branch": branch,
+                "remote": automation_export_service.redact_remote(payload.remoteUrl),
+                "projectId": project.id,
+            },
+        )
+        audit_service.record(
+            category="automation",
+            action="Automation project export refused",
+            target=f"{run.code} · {project.slug}",
+            status="warning",
+            detail={"code": exc.code, "branch": branch},
+        )
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+
+    hub.publish(str(run_id), "automation.exported", {**result, "projectId": project.id})
+    audit_service.record(
+        category="automation",
+        action="Exported automation project",
+        target=f"{run.code} · {project.slug}",
+        # `remote` is already redacted by the service; `commit`/`branch` carry no secret.
+        detail={
+            "remote": result["remote"],
+            "branch": result["branch"],
+            "commit": result["commit"],
+            "pushed": result["pushed"],
+        },
+    )
+    return {**result, "projectId": project.id}

@@ -38,6 +38,7 @@ import { useAutomationEvents } from "./automation/useAutomationEvents";
 import { useThinkingSteps } from "./automation/useThinkingSteps";
 import { useCodeFolding } from "./automation/useCodeFolding";
 import { TargetRepoPanel } from "./automation/TargetRepoPanel";
+import { ExportProjectPanel } from "./automation/ExportProjectPanel";
 import { ThinkingBanner, GeneratingBanner, HealProgressBanner, ExploreProgressBanner, AuthoringProgressBanner } from "./automation/ProgressBanners";
 import { NoAutomationEmptyState } from "./automation/EmptyState";
 import { SpecList } from "./automation/SpecList";
@@ -472,6 +473,14 @@ export function Automation() {
   // like the gate report — so it renders beside it with no extra request.
   const planReport = useMemo(() => parsePlanReport(selectedSpec?.planReport), [selectedSpec?.planReport]);
 
+  // The persistent automation project backing this run's specs, if any (#549) —
+  // the export target. `null` for a legacy run (every spec has `projectId: null`),
+  // which hides the export panel entirely since there is no repo to push.
+  const exportableProjectId = useMemo(
+    () => specs?.find((s) => s.projectId != null)?.projectId ?? null,
+    [specs],
+  );
+
   // ---- DOM exploration (ADR 0010): "Explore to unblock" a blocked case. -------
   // The selected case's target repo — the per-work-item repo (else the project
   // default), the same source TargetRepoPanel uses.
@@ -704,6 +713,11 @@ export function Automation() {
           }
         />
       )}
+
+      {/* Export the project to a remote the customer owns (#549) — user-triggered,
+          never automatic. Only for a project-backed run: a legacy spec has no
+          `projectId`, so there is no git repo to push and the panel is hidden. */}
+      <ExportProjectPanel runId={runId} projectId={exportableProjectId} />
 
       {thinking && <ThinkingBanner runCode={run?.code} thinkStep={thinkStep} />}
 
