@@ -40,6 +40,7 @@ from app.services import (
     automation_planner_service,
     automation_project_service,
     live_authoring_service,
+    page_object_author_service,
     placeholder_gate,
     playwright_runner,
     project_config_service,
@@ -325,23 +326,33 @@ def _plan_for_case(
     """
     if project is None:
         return None
-    ticket_cases = (
-        _eligible_cases_query(db, run.id)
-        .filter(TestCase.ticket_external_id == case.ticket_external_id)
-        .all()
-    )
-    if not any(c.id == case.id for c in ticket_cases):
-        # A regenerate of a case that is no longer "eligible" (e.g. approval
-        # changed under us) still needs a plan covering it.
-        ticket_cases = [*ticket_cases, case]
     return automation_planner_service.plan_for_ticket(
         project,
         run.code,
         case.ticket_external_id,
-        ticket_cases,
+        _ticket_cases(db, run, case),
         context,
         force=force,
     )
+
+
+def _ticket_cases(db: Session, run: Run, case: TestCase) -> list[TestCase]:
+    """Every automation-eligible case on ``case``'s ticket, including ``case`` itself.
+
+    The unit of both planning (#544) and asset authoring (#545) is the **feature**,
+    not the case, so both need the whole ticket in one call — five cases on one
+    screen share one page object, and per-case calls would invent five.
+    """
+    cases = (
+        _eligible_cases_query(db, run.id)
+        .filter(TestCase.ticket_external_id == case.ticket_external_id)
+        .all()
+    )
+    if not any(c.id == case.id for c in cases):
+        # A regenerate of a case that is no longer "eligible" (e.g. approval
+        # changed under us) still needs a plan covering it.
+        cases = [*cases, case]
+    return cases
 
 
 def _plan_rejection(gate: dict, violations: list[str], *, what: str) -> tuple[dict, str]:
@@ -690,6 +701,13 @@ def _generate_one(
     plan is persisted to ``plan_report`` (and to ``.qagent/plans/``), and the plan is
     what authorizes the spec's asset imports and constrains the paths it may write.
 
+    Since #545 the plan is also **acted on** before generation: when it contains
+    ``create``/``extend`` actions, ``page_object_author_service`` authors those page
+    objects/components/fixtures/data in the project (behind three stacked defences and
+    a git rollback) and returns a plan whose ``importable`` includes them — so the spec
+    imports real files instead of inlining locators. A reuse-only plan makes no
+    agentic call, which is the slice's cost control.
+
     Args:
         db: Active session (caller commits).
         run: The owning Run (provides run.code for the spec path).
@@ -745,6 +763,31 @@ def _generate_one(
         live_authoring_service.merge_discovery_to_kb(result)
         live_discovered = result.discovered
     else:
+        # (#545) Author the plan's create/extend assets BEFORE generating the spec,
+        # then hand generation the REFRESHED plan — whose `importable` now includes
+        # the page objects that were just written, which is the entire point of the
+        # slice. Reuse-only plans make no agentic call at all (the cost control), and
+        # a rejected/failed edit returns the plan unchanged, so the pass degrades to
+        # inline locators exactly as it did before this slice.
+        if project is not None and plan is not None:
+            plan, authoring_report = page_object_author_service.author_assets(
+                db,
+                project,
+                run.code,
+                case.ticket_external_id,
+                plan,
+                _ticket_cases(db, run, case),
+                context,
+                run_id=run.id,
+            )
+            if plans is not None:
+                plans[case.ticket_external_id] = plan
+            if authoring_report["ran"] and not authoring_report["ok"]:
+                logger.warning(
+                    "Asset authoring for {} did not land ({}) — this spec falls back to "
+                    "inline locators",
+                    case.ticket_external_id, authoring_report["reason"],
+                )
         examples = _select_examples_for_case(db, case)
         code = spec_service.generate_spec_code(
             case, context, examples=examples, reviewer_comment=reviewer_comment, plan=plan

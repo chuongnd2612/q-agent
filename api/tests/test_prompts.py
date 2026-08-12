@@ -205,17 +205,26 @@ def test_build_prompt_asks_for_the_layered_shape():
 
 def test_build_prompt_forbids_inventing_page_object_imports():
     """#544 replaces #542's reference-spec proof with the AUTOMATION PLAN as the sole
-    import authorization. With no plan (legacy path) nothing under `pages/` is legal,
-    so the locators must stay inline or the gate rejects every spec."""
+    import authorization; #545 **inverts the default** on top of that.
+
+    Deliberate wording change (#545): the old bullet told the generator to keep
+    locators inline "for any capability the plan marks as still to be created,
+    because a later stage authors those files". That later stage now runs BEFORE
+    generation, so the sentence was false. A page object is now the default and an
+    inline locator is the exception — asserted here and in the matching skill test,
+    which must move in the same commit (#178 discipline)."""
     from app.services.spec_service import _build_prompt
 
     prompt = _build_prompt(_auth_policy_case())
-    assert "the AUTOMATION PLAN block above is the exhaustive list" in prompt
+    assert "AUTOMATION PLAN block above is the exhaustive list" in prompt
     assert "Import nothing else from `../../pages/`" in prompt
     assert "those names describe the product repo, not this" in prompt
-    assert "keep the locators inline" in prompt
-    # The superseded rule is gone (#178 discipline: skill and prompt move together).
+    # Inverted: page object by default, inline locator as the exception.
+    assert "that is the DEFAULT, not an aspiration" in prompt
+    assert "An inline locator is the EXCEPTION, not the rule." in prompt
+    # The superseded rules are gone from the prompt half.
     assert "REFERENCE SPEC" not in prompt
+    assert "A later stage authors those files" not in prompt
 
 
 def test_build_prompt_injects_the_plan_when_one_exists():
@@ -229,7 +238,7 @@ def test_build_prompt_injects_the_plan_when_one_exists():
           "methods": ["openCreateUser()"]}],
     )
     prompt = _build_prompt(_auth_policy_case(), plan=plan)
-    assert "IMPORTABLE NOW" in prompt
+    assert "IMPORTABLE" in prompt
     assert "pages/UserPage.ts" in prompt and "openCreateUser()" in prompt
 
 

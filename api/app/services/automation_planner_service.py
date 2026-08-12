@@ -18,15 +18,17 @@ rest of the pipeline can trust:
 Two properties are load-bearing and are why the normalization step exists at all:
 
 1. **``importable`` is computed from disk, never from the model's claim.** It is
-   the intersection of the plan's ``reuse``/``extend`` targets with
+   the intersection of the plan's asset paths with
    :func:`automation_project_service.inventory`, so a hallucinated path can never
    become an import. #178 died from the opposite arrangement.
-2. **A ``create`` target is NOT importable in this slice.** #545 is what actually
-   authors those files; until it ships, telling the generator it may import every
-   path the plan lists as ``create`` would fail collection for every spec — #178
-   again, one layer up. ``create`` targets stay in ``writable`` (so the plan is
-   complete and #545 can act on it) and out of ``importable`` (so today's
-   generator keeps those locators inline).
+2. **The criterion is "the file is on disk", not "the action was ``reuse``".**
+   #544 shipped with ``create`` targets deliberately excluded, because nothing
+   authored them yet and authorizing the import would have failed collection for
+   every spec. #545 authors them, so the exclusion is gone: the project editor
+   runs, and then :func:`refresh_plan` re-normalizes the plan against the tree it
+   just wrote, at which point a freshly created page object *is* on disk and
+   therefore importable. A ``create`` whose authoring failed is still not on disk
+   and still not importable — the safety property survives without a special case.
 
 Planning is **once per ticket**, not once per case — the main cost lever for
 Wave 3. The on-disk plan file *is* the cache: a second case on the same ticket in
@@ -64,6 +66,7 @@ __all__ = [
     "render_inventory",
     "plan_for_ticket",
     "plan_path",
+    "refresh_plan",
     "render_plan",
     "unplanned_new_paths",
 ]
@@ -204,10 +207,13 @@ def normalize(
     * an asset whose path is not in the inventory cannot be ``reuse``/``extend``;
       it is demoted to ``create`` (that is the honest decision, and it keeps the
       plan internally consistent);
-    * only a surviving ``reuse``/``extend`` path becomes ``importable``;
-    * ``create`` paths are ``writable`` but **not** ``importable`` — see the module
-      docstring: #545 authors them, and until then an import of one fails
-      collection.
+    * **a path that is on disk is ``importable``, whatever the action says** —
+      including a ``create`` the project editor has just authored (#545). Called
+      again through :func:`refresh_plan` after authoring, this is what promotes a
+      brand-new page object into the generator's import allowlist with no second
+      opinion from the model;
+    * ``extend``/``create`` paths are ``writable``, i.e. the only paths the
+      project editor and generation may touch.
 
     Args:
         raw: Whatever ``claude_cli.run_json`` returned (any shape; never trusted).
@@ -271,10 +277,12 @@ def normalize(
                 "methods": _methods(item.get("methods") or item.get("method")),
                 "reason": str(item.get("reason") or "").strip()[:400],
             }
-            if action in ("reuse", "extend") and path:
-                # Existing signatures are ground truth; the planned-but-unwritten
-                # ones an `extend` names are carried separately so the generator is
-                # never told a method exists before #545 writes it.
+            if path and path in on_disk:
+                # On disk == importable, whatever the action claims. Signatures come
+                # from the file itself, so an `extend`'s planned-but-unwritten method
+                # is never presented to the generator as if it existed; once the
+                # project editor has actually written it, the refreshed inventory
+                # carries it here automatically.
                 entry["existingMethods"] = list(on_disk[path].get("methods") or [])
                 if path not in importable:
                     importable.append(path)
@@ -330,6 +338,53 @@ def _save_plan(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
     return path
+
+
+def refresh_plan(
+    project: AutomationProject,
+    run_code: str,
+    ticket_external_id: str,
+    plan: dict,
+    **extra: Any,
+) -> dict:
+    """Re-derive the plan's ``importable``/``writable`` from the tree as it is NOW (#545).
+
+    The single line that connects the project editor to the spec generator. The
+    editor authors ``create``/``extend`` assets as **real files**; re-running
+    :func:`normalize` against a fresh :func:`automation_project_service.inventory`
+    then promotes each of those paths into ``importable`` and refreshes its
+    ``existingMethods`` from the file itself — no prompt rewording and no second
+    opinion from the model. A ``create`` the editor failed to write is simply still
+    absent from the inventory and still not importable.
+
+    The plan dict is its own input shape (``normalize`` reads ``name``/``path``/
+    ``action``/``methods``/``reason``/``specGroups``), so this is a genuine
+    re-normalization rather than a parallel derivation that could drift.
+
+    Args:
+        project/run_code/ticket_external_id: Identify the cached plan file to rewrite.
+        plan: The plan to refresh (typically the one just acted on).
+        **extra: Bookkeeping keys to merge onto the refreshed plan and persist —
+            :mod:`page_object_author_service` stamps ``authoredAt`` here so a
+            ticket's second case never re-runs the (paid) editor.
+
+    Returns:
+        The refreshed plan. Persisted over the cached plan file, best-effort.
+    """
+    entries = automation_project_service.inventory(project)
+    refreshed = normalize(
+        plan,
+        entries,
+        feature=str(plan.get("feature") or ""),
+        ticket=str(plan.get("ticket") or ticket_external_id),
+        cases=[str(c) for c in (plan.get("cases") or [])],
+    )
+    refreshed.update(extra)
+    try:
+        _save_plan(project, run_code, ticket_external_id, refreshed)
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.warning("could not persist refreshed plan for {}: {}", ticket_external_id, exc)
+    return refreshed
 
 
 # ---------------------------------------------------------------------------
@@ -586,59 +641,46 @@ def unplanned_new_paths(before: Sequence[str], after: Sequence[str], plan: dict 
 def render_plan(plan: dict | None) -> str:
     """The plan as a generation-prompt block: what may be imported, what may not.
 
-    The asymmetry is deliberate and is the crux of shipping #544 before #545:
-
-    * ``reuse``/``extend`` targets exist on disk **now**, so they are importable —
-      but only their ``existingMethods`` may be called, because an ``extend``'s new
-      method is planned, not written.
-    * ``create`` targets (and an ``extend``'s new methods) are named so the spec
-      keeps the right vocabulary, and explicitly marked NOT importable, because
-      nothing has authored them yet.
+    Since #545 there is no asymmetry left to explain. The project editor has
+    already authored every ``create`` and ``extend`` the plan asked for, and
+    :func:`refresh_plan` re-derived ``importable`` from the resulting tree — so this
+    block simply reports which files are on disk, with the signatures they really
+    export. **Locators belong in a page object; an inline locator in a spec is the
+    exception**, taken only for an asset the plan named but that is not in the
+    importable list (i.e. its authoring did not land).
     """
     if not is_actionable(plan):
         return ""
     lines = ["AUTOMATION PLAN for this feature (decided before generation, doc §24):"]
+    allowed = set(plan.get("importable") or [])
     importable = [
         entry
         for group in ASSET_GROUPS
         for entry in (plan.get(group) or [])
-        if entry.get("action") in ("reuse", "extend") and entry.get("path")
+        if entry.get("path") in allowed
     ]
-    pending = [
+    missing = [
         entry
         for group in ASSET_GROUPS
         for entry in (plan.get(group) or [])
-        if entry.get("action") == "create" and entry.get("path")
+        if entry.get("path") and entry.get("path") not in allowed
     ]
     if importable:
         lines.append(
-            "- IMPORTABLE NOW — these files exist in this project. Import them at "
-            "the real spec depth (`../../pages/Foo`) and call ONLY the signatures "
-            "listed:"
+            "- IMPORTABLE — these files exist in this project and were authored/"
+            "extended for exactly this feature. Import them at the real spec depth "
+            "(`../../pages/Foo`) and call ONLY the signatures listed. Drive the UI "
+            "THROUGH them rather than repeating their locators here:"
         )
         for entry in importable:
             methods = ", ".join(entry.get("existingMethods") or []) or "(no methods yet)"
             lines.append(f"  - `{entry['path']}` ({entry['action']}) — {methods}")
-        extend_methods = [
-            f"{entry['path']}::{signature}"
-            for entry in importable
-            if entry.get("action") == "extend"
-            for signature in entry.get("methods") or []
-            if signature not in (entry.get("existingMethods") or [])
-        ]
-        if extend_methods:
-            lines.append(
-                "- PLANNED EXTENSIONS — a later stage adds these methods. They do "
-                "NOT exist yet, so do NOT call them; keep that step's locators "
-                "inline in this spec: " + "; ".join(extend_methods)
-            )
-    if pending:
+    if missing:
         lines.append(
-            "- TO BE CREATED LATER — a later stage authors these files. They do NOT "
-            "exist yet, so importing one FAILS collection and the spec is rejected. "
-            "Keep their locators/data inline in this spec, using the names below as "
-            "vocabulary only: "
-            + "; ".join(f"{entry['name']} (`{entry['path']}`)" for entry in pending)
+            "- NOT ON DISK — these were planned but are not in the project, so "
+            "importing one FAILS collection and the spec is rejected. For those "
+            "steps only, an inline locator is the accepted exception: "
+            + "; ".join(f"{entry['name']} (`{entry['path']}`)" for entry in missing)
         )
     lines.append(
         "- Import NOTHING else from `../../pages/`, `../../components/`, "

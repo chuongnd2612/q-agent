@@ -8,9 +8,11 @@ import { PLAN_GROUPS, type AutomationPlan, type PlanEntry } from "./specStatus";
  *
  * The plan is decided **before** generation (doc §8/§24) and is what authorises the
  * spec's imports, so it is the artifact a reviewer reads to judge whether the reuse
- * decisions were sound. This slice deliberately surfaces the plan while authoring no
- * page objects yet (#545 does that) — the decisions are meant to be watched before
- * they are trusted.
+ * decisions were sound. Since #545 the plan is also **acted on** before generation:
+ * `create`/`extend` assets are authored into the project, and the plan persisted on the
+ * row is the refreshed one — so a method listed under a row is one the file really
+ * exports, and anything still shown as missing is an asset whose authoring did not land
+ * (that step's locators stayed inline).
  *
  * The counts row is the epic's own success metric ("how little new code is generated
  * while still fully covering the new test cases"), so it stays visible even while the
@@ -92,14 +94,13 @@ function CountChip({ action, count, label }: { action: string; count: number; la
 function PlanRow({ entry }: { entry: PlanEntry }) {
   const { t } = useTranslation("pipeline");
   const hue = ACTION_HUE[entry.action] ?? "#8b8b9e";
-  // An `extend` names methods that do NOT exist yet — the honest label matters,
-  // because the generator is told to keep those steps inline until #545 authors them.
+  // A planned method the file does not actually export. Since #545 this is the same
+  // computation for `extend` and `create` — both are authored before generation, so a
+  // leftover here means that method never landed and the spec inlined the step.
   const pending =
-    entry.action === "extend"
+    entry.action === "extend" || entry.action === "create"
       ? (entry.methods ?? []).filter((m) => !(entry.existingMethods ?? []).includes(m))
-      : entry.action === "create"
-        ? (entry.methods ?? [])
-        : [];
+      : [];
   const existing = entry.action === "reuse" ? entry.methods ?? [] : entry.existingMethods ?? [];
   return (
     <div className="rounded-[10px] bg-white/[.03] px-2.5 py-1.5">

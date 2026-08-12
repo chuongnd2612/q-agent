@@ -435,8 +435,8 @@
   },
   "plan": {
     "title": "KẾ HOẠCH TỰ ĐỘNG HÓA",
-    "pendingHint": "Quyết định tái sử dụng được đưa ra trước khi sinh mã. Các tài sản được đánh dấu Tạo mới chưa được viết — các bước của chúng tạm thời vẫn nằm trực tiếp trong tệp kiểm thử.",
-    "notYetAuthored": "Chưa được viết",
+    "pendingHint": "Quyết định tái sử dụng được đưa ra trước khi sinh mã, sau đó các tài sản được đánh dấu Tạo mới hoặc Mở rộng sẽ được viết vào dự án. Những gì vẫn hiển thị là thiếu thì chưa được tạo, nên các bước đó vẫn nằm trực tiếp trong tệp kiểm thử.",
+    "notYetAuthored": "Không có trên đĩa",
     "actions": {
       "reuse": "Tái sử dụng",
       "extend": "Mở rộng",
