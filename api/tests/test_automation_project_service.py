@@ -189,6 +189,249 @@ def test_migrate_tsconfig_tolerates_a_missing_or_odd_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# package.json — the base pin that never propagated (#566)
+# ---------------------------------------------------------------------------
+
+
+def _server_moves_to(monkeypatch, version: str) -> None:
+    """Simulate the server shipping a new ``@q-agent/playwright-base`` release.
+
+    Both constants move together, exactly as a real release would move them.
+    """
+    monkeypatch.setattr(aps, "BASE_VERSION", version)
+    monkeypatch.setattr(aps, "BASE_VERSION_SPEC", f"^{version}")
+
+
+def _base_pin(project) -> str:
+    manifest = json.loads((aps.project_dir(project) / "package.json").read_text(encoding="utf-8"))
+    return manifest["dependencies"][aps.BASE_PACKAGE]
+
+
+def test_base_pin_major_parses_ranges_and_refuses_non_semver():
+    assert aps.base_pin_major("^1.0.0") == 1
+    assert aps.base_pin_major("~2.3") == 2
+    assert aps.base_pin_major("3.x") == 3
+    assert aps.base_pin_major(">=4.0.0 <5") == 4
+    assert aps.base_pin_major("2.1.0") == 2
+    assert aps.base_pin_major("") is None
+    assert aps.base_pin_major(None) is None
+    # A deliberate override by whoever edited the manifest — never reinterpreted.
+    assert aps.base_pin_major("file:../vendor/base.tgz") is None
+    assert aps.base_pin_major("git+ssh://git@example.com/base.git#v1") is None
+    assert aps.base_pin_major("npm:@fork/base@2") is None
+    assert aps.base_pin_major("*") is None
+
+
+def test_materialize_scaffold_migrates_a_base_pin_a_major_behind(db_session, monkeypatch):
+    """The scenario the whole issue is about: the first 2.x reaching a 1.x project.
+
+    `materialize_scaffold` never overwrites, so without this the project would keep
+    resolving 1.x while the generator emits imports against the 2.x API surface.
+    """
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    path = aps.project_dir(project) / "package.json"
+    assert _base_pin(project) == "^1.0.0"
+
+    # A human owns this repo (#549) and has edited it.
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["name"] = "renamed-by-the-customer"
+    manifest["scripts"]["lint"] = "eslint ."
+    manifest["devDependencies"] = {"typescript": "^5.9.0"}
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    _server_moves_to(monkeypatch, "2.0.0")
+    aps.materialize_scaffold(project)
+
+    migrated = json.loads(path.read_text(encoding="utf-8"))
+    assert migrated["dependencies"][aps.BASE_PACKAGE] == "^2.0.0"
+    # Surgical: only that one entry moved.
+    assert migrated["name"] == "renamed-by-the-customer"
+    assert migrated["scripts"]["lint"] == "eslint ."
+    assert migrated["scripts"]["test"] == "playwright test"
+    assert migrated["devDependencies"] == {"typescript": "^5.9.0"}
+    assert migrated["private"] is True
+
+
+def test_migrate_base_pin_leaves_a_current_pin_untouched(db_session):
+    """A project already on the server's major is byte-identical afterwards."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    path = aps.project_dir(project) / "package.json"
+    original = path.read_text(encoding="utf-8")
+
+    assert aps.migrate_base_pin(project) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_migrate_base_pin_ignores_a_minor_or_patch_gap(db_session, monkeypatch):
+    """Only a *major* gap earns a rewrite — `npm install` already resolves the rest."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    _server_moves_to(monkeypatch, "1.4.2")
+
+    assert aps.migrate_base_pin(project) is False
+    assert _base_pin(project) == "^1.0.0"
+
+
+def test_migrate_base_pin_leaves_unparseable_json_alone(tmp_path, monkeypatch):
+    """A hand-edited JSONC manifest is better left stale than clobbered."""
+    _server_moves_to(monkeypatch, "2.0.0")
+    path = tmp_path / "package.json"
+    original = (
+        "{\n  // a comment makes this JSONC, not JSON\n"
+        f'  "dependencies": {{ "{aps.BASE_PACKAGE}": "^1.0.0" }}\n}}\n'
+    )
+    path.write_text(original, encoding="utf-8")
+
+    assert aps.migrate_base_pin(path) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "pin", ["file:../vendor/base.tgz", "git+ssh://git@example.com/base.git#v1", "npm:@fork/base@1"]
+)
+def test_migrate_base_pin_leaves_a_non_semver_pin_alone(tmp_path, monkeypatch, pin):
+    """A vendored/forked install is a deliberate override, not drift to be repaired."""
+    _server_moves_to(monkeypatch, "2.0.0")
+    path = tmp_path / "package.json"
+    original = json.dumps({"dependencies": {aps.BASE_PACKAGE: pin}}, indent=2) + "\n"
+    path.write_text(original, encoding="utf-8")
+
+    assert aps.migrate_base_pin(path) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_migrate_base_pin_tolerates_a_missing_file_or_absent_dependency(tmp_path, monkeypatch):
+    _server_moves_to(monkeypatch, "2.0.0")
+    assert aps.migrate_base_pin(tmp_path / "nope.json") is False
+    for content in ("[]", "{}", '{"dependencies": {}}', '{"dependencies": "not-a-dict"}'):
+        path = tmp_path / "package.json"
+        path.write_text(content, encoding="utf-8")
+        assert aps.migrate_base_pin(path) is False, content
+        assert path.read_text(encoding="utf-8") == content
+
+
+def test_migrate_base_pin_finds_the_dependency_in_dev_dependencies(tmp_path, monkeypatch):
+    _server_moves_to(monkeypatch, "2.0.0")
+    path = tmp_path / "package.json"
+    path.write_text(
+        json.dumps({"devDependencies": {aps.BASE_PACKAGE: "^1.2.0"}}), encoding="utf-8"
+    )
+
+    assert aps.migrate_base_pin(path) is True
+    assert json.loads(path.read_text(encoding="utf-8"))["devDependencies"][aps.BASE_PACKAGE] == "^2.0.0"
+
+
+def test_migrate_base_pin_drops_the_now_stale_lockfile(db_session, monkeypatch):
+    """`npm ci` refuses a lockfile that disagrees with the manifest, so it must go.
+
+    It is a generated artifact, never hand-authored — `ensure_deps` regenerates it via
+    `npm install` on the next call.
+    """
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    lockfile = aps.project_dir(project) / "package-lock.json"
+    lockfile.write_text('{"lockfileVersion": 3}', encoding="utf-8")
+    _server_moves_to(monkeypatch, "2.0.0")
+
+    assert aps.migrate_base_pin(project) is True
+    assert not lockfile.exists()
+
+    # A no-op migration must never touch the lockfile.
+    lockfile.write_text('{"lockfileVersion": 3}', encoding="utf-8")
+    assert aps.migrate_base_pin(project) is False
+    assert lockfile.exists()
+
+
+# ---------------------------------------------------------------------------
+# base_version — no longer a write-only column (#566)
+# ---------------------------------------------------------------------------
+
+
+def test_base_version_drift_is_none_for_a_current_project(db_session):
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    npm = FakeNpm(succeed_on=(aps.BASE_PACKAGE,))
+    aps.ensure_deps(project, runner=npm)
+
+    assert aps.base_version_drift(project) is None
+
+
+def test_base_version_drift_names_every_signal_that_is_behind(db_session, monkeypatch):
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,)))
+    assert project.base_version == "1.0.0"
+
+    _server_moves_to(monkeypatch, "2.0.0")
+    drift = aps.base_version_drift(project)
+
+    assert drift is not None
+    assert "2.0.0" in drift
+    assert "package.json pins ^1.0.0" in drift
+    assert "node_modules has 1.0.0" in drift
+    assert "recorded base_version is 1.0.0" in drift
+
+
+def test_base_version_drift_clears_signal_by_signal(db_session, monkeypatch):
+    """Migrating the pin resolves that signal; reinstalling resolves the other two."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,)))
+    _server_moves_to(monkeypatch, "2.0.0")
+
+    aps.migrate_base_pin(project)
+    drift = aps.base_version_drift(project)
+    assert drift is not None and "package.json pins" not in drift
+
+    aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,)))
+    assert aps.base_version_drift(project) is None
+
+
+def test_deps_installed_is_false_for_a_base_a_major_behind(db_session, monkeypatch):
+    """Presence is not enough — otherwise the migrated pin would never be installed."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,)))
+    assert aps.deps_installed(project)
+
+    _server_moves_to(monkeypatch, "2.0.0")
+    assert not aps.deps_installed(project)
+
+
+def test_deps_installed_fails_open_on_an_unreadable_installed_manifest(db_session, monkeypatch):
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    installed = aps.project_dir(project) / "node_modules" / aps.BASE_PACKAGE
+    installed.mkdir(parents=True, exist_ok=True)
+    # No package.json at all, then an unparseable one: both must count as installed
+    # rather than trigger a reinstall on a guess.
+    assert aps.deps_installed(project)
+    (installed / "package.json").write_text("not json", encoding="utf-8")
+    _server_moves_to(monkeypatch, "2.0.0")
+    assert aps.deps_installed(project)
+
+
+def test_ensure_deps_reinstalls_after_a_major_bump_instead_of_reporting_cached(
+    db_session, monkeypatch
+):
+    """The end-to-end propagation path: migrate the pin, then actually install 2.x."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    assert aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,))) == "registry"
+
+    _server_moves_to(monkeypatch, "2.0.0")
+    aps.materialize_scaffold(project)  # migrates the pin
+    npm = FakeNpm(succeed_on=(aps.BASE_PACKAGE,))
+
+    assert aps.ensure_deps(project, runner=npm) == "registry"
+    assert npm.calls == [["install", f"{aps.BASE_PACKAGE}@^2.0.0"]]
+    assert project.base_version == "2.0.0"
+    assert aps.base_version_drift(project) is None
+
+
+def test_ensure_deps_refreshes_a_stale_recorded_base_version_on_the_cached_path(db_session):
+    """A project installed before #566 has an empty column nothing else would ever fix."""
+    project = aps.ensure_project(db_session, 1, "SUR", "web")
+    aps.ensure_deps(project, runner=FakeNpm(succeed_on=(aps.BASE_PACKAGE,)))
+    project.base_version = ""
+
+    assert aps.ensure_deps(project, runner=FakeNpm()) == "cached"
+    assert project.base_version == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
 # git — replaces snapshot/rollback
 # ---------------------------------------------------------------------------
 
@@ -251,10 +494,13 @@ def test_head_commit_is_none_outside_a_repo(db_session, monkeypatch):
 class FakeNpm:
     """Injectable npm stand-in: records calls, optionally "installs" the package."""
 
-    def __init__(self, *, succeed_on: tuple[str, ...] = (), root=None):
+    def __init__(self, *, succeed_on: tuple[str, ...] = (), root=None, version: str | None = None):
         self.calls: list[list[str]] = []
         self._succeed_on = succeed_on
         self._root = root
+        # Resolved lazily so a test that monkeypatches the server's BASE_VERSION gets an
+        # "install" of the version the server actually ships.
+        self._version = version
 
     def __call__(self, args, cwd):
         self.calls.append(list(args))
@@ -262,7 +508,10 @@ class FakeNpm:
         if any(token in joined for token in self._succeed_on):
             target = (self._root or cwd) / "node_modules" / aps.BASE_PACKAGE
             target.mkdir(parents=True, exist_ok=True)
-            (target / "package.json").write_text('{"version":"1.0.0"}', encoding="utf-8")
+            version = self._version or aps.BASE_VERSION
+            (target / "package.json").write_text(
+                json.dumps({"version": version}), encoding="utf-8"
+            )
             return True
         return False
 

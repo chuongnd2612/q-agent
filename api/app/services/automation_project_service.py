@@ -62,6 +62,10 @@ __all__ = [
     "ensure_project",
     "materialize_scaffold",
     "migrate_tsconfig",
+    "migrate_base_pin",
+    "base_pin_major",
+    "base_version_drift",
+    "installed_base_version",
     "ensure_deps",
     "git_init",
     "git_commit",
@@ -87,6 +91,10 @@ BASE_VERSION_SPEC = "^1.0.0"
 # Pinned committed tarball, relative to the repo root — the offline/registry-down
 # fallback for :func:`ensure_deps` (published by #539). Absent in a checkout that
 # predates it, which `ensure_deps` degrades gracefully around.
+#
+# **This path must move with BASE_VERSION on a major bump.** Since #566 `deps_installed`
+# is major-aware, so installing a 1.0.0 tarball under a server on 2.x no longer counts as
+# installed — the fallback would correctly but silently degrade to "unavailable" forever.
 VENDORED_TARBALL_RELPATH = "playwright-base/vendor/q-agent-playwright-base-1.0.0.tgz"
 
 # The shared asset library — everything an accumulating project reuses. This is
@@ -370,14 +378,173 @@ def migrate_tsconfig(path: Path) -> bool:
     return True
 
 
+# A dependency range this module is willing to reason about: plain semver only
+# (``^2.1.0``, ``~2.0``, ``2.x``, ``>=2 <3``). Anything else — ``file:../base.tgz``,
+# ``git+ssh://…``, ``npm:alias@2`` — is a deliberate override by whoever edited the
+# manifest, and rewriting it would break their vendored/forked install.
+_SEMVER_RANGE_RE = re.compile(r"^[\s\d.xX*^~<>=|v\-]+$")
+
+
+def base_pin_major(spec: str | None) -> int | None:
+    """The major version a ``@q-agent/playwright-base`` range resolves to, or None.
+
+    ``"^2.1.0"``/``"~2.0"``/``"2.x"``/``">=2 <3"`` -> ``2``; an exact ``"2.1.0"`` -> ``2``.
+    None for an empty value **and** for anything that is not a plain semver range, which
+    is what keeps :func:`migrate_base_pin` off ``file:``/``git+``/``npm:`` pins.
+    """
+    text = (spec or "").strip()
+    if not text or not _SEMVER_RANGE_RE.match(text):
+        return None
+    match = re.search(r"\d+", text)
+    return int(match.group()) if match else None
+
+
+def _read_json(path: Path) -> object | None:
+    """Parsed JSON at ``path``, or None when missing/unreadable/not valid JSON.
+
+    Returning None rather than raising is what lets both the migration and the drift check
+    leave a hand-edited JSONC manifest alone instead of clobbering or 500-ing on it.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _base_dependency(manifest: object) -> tuple[dict, str] | None:
+    """The ``(deps section, current range)`` holding :data:`BASE_PACKAGE`, or None."""
+    if not isinstance(manifest, dict):
+        return None
+    for section in ("dependencies", "devDependencies"):
+        deps = manifest.get(section)
+        if isinstance(deps, dict) and isinstance(deps.get(BASE_PACKAGE), str):
+            return deps, deps[BASE_PACKAGE]
+    return None
+
+
+def migrate_base_pin(target: "Path | AutomationProject") -> bool:
+    """Bump a ``package.json`` whose base-package pin is a **major** behind (#566).
+
+    :func:`materialize_scaffold` never overwrites, so a project's ``package.json`` — and
+    with it the ``@q-agent/playwright-base`` pin — is frozen at whatever it was scaffolded
+    against. Minor/patch releases still flow (the pin is a caret range and
+    :func:`ensure_deps` runs ``npm install``), but the first ``2.x`` would never reach an
+    existing project: it would keep resolving 1.x while the generator, prompted against
+    the *current* base API surface, emits imports the installed base lacks — failing the
+    gate for a reason that points at the spec rather than at the stale pin.
+
+    Modelled on :func:`migrate_tsconfig` and self-limiting the same four ways:
+
+    * It fires **only** on a major-version gap. A project on ``^1.0.0`` with the server on
+      ``^1.4.0`` is left alone, because ``npm install`` already resolves that.
+    * It rewrites **only** that one dependency entry, via a JSON round-trip, so every
+      other field — a hand-added ``devDependencies``, extra ``scripts``, a changed
+      ``name`` — survives verbatim.
+    * A manifest that is not parseable JSON is left alone rather than clobbered, and so is
+      a pin that is not a plain semver range (see :func:`base_pin_major`).
+    * A stale ``package-lock.json`` is *deleted* when the pin moves, because ``npm ci``
+      refuses a lockfile that disagrees with the manifest — that would turn the upgrade
+      into a hard install failure. The lockfile is a generated artifact, never
+      hand-authored, and ``npm install`` regenerates it on the next :func:`ensure_deps`.
+
+    Args:
+        target: The project's ``package.json`` path, or the :class:`AutomationProject`.
+
+    Returns:
+        True when the file was rewritten.
+    """
+    path = (project_dir(target) / "package.json") if isinstance(target, AutomationProject) else target
+    current = base_pin_major(BASE_VERSION_SPEC)
+    if current is None:  # pragma: no cover - BASE_VERSION_SPEC is a semver constant
+        return False
+    manifest = _read_json(path)
+    found = _base_dependency(manifest)
+    if found is None:
+        return False
+    deps, pinned = found
+    pinned_major = base_pin_major(pinned)
+    if pinned_major is None or pinned_major >= current:
+        return False
+    deps[BASE_PACKAGE] = BASE_VERSION_SPEC
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    logger.info(
+        "migrated {} pin in {} from {} to {}", BASE_PACKAGE, path, pinned, BASE_VERSION_SPEC
+    )
+    lockfile = path.parent / "package-lock.json"
+    if lockfile.exists():
+        try:
+            lockfile.unlink()
+        except OSError as exc:  # pragma: no cover - permission edge
+            logger.warning("could not drop stale lockfile {}: {}", lockfile, exc)
+        else:
+            logger.info("dropped {} — stale against the migrated pin", lockfile)
+    return True
+
+
+def installed_base_version(project: AutomationProject) -> str | None:
+    """The ``@q-agent/playwright-base`` version actually present in ``node_modules``.
+
+    None when nothing is installed, or when the installed package's own manifest is
+    unreadable — callers treat that as "assume it is fine" rather than reinstalling on a
+    guess.
+    """
+    manifest = _read_json(project_dir(project) / "node_modules" / BASE_PACKAGE / "package.json")
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    return str(version) if version else None
+
+
+def base_version_drift(project: AutomationProject) -> str | None:
+    """A legible one-line reason when this project's base package is a major behind.
+
+    This is what stops ``AutomationProject.base_version`` being a **write-only** column —
+    before #566 nothing ever read it, which was half the bug. All three signals are
+    checked, because they can disagree and each says something different:
+
+    * the on-disk ``package.json`` pin — what the *next* install will resolve;
+    * ``node_modules`` — what a generated spec will actually compile and run against;
+    * the recorded ``base_version`` — the DB's view, which a stale row can contradict.
+
+    Returns:
+        None when nothing is behind the server's :data:`BASE_VERSION`; otherwise a
+        sentence naming the concrete versions, safe to log or surface to a user.
+    """
+    current = base_pin_major(BASE_VERSION)
+    if current is None:  # pragma: no cover - BASE_VERSION is a semver constant
+        return None
+    found = _base_dependency(_read_json(project_dir(project) / "package.json"))
+    pinned = found[1] if found else None
+    installed = installed_base_version(project)
+    recorded = project.base_version or None
+
+    behind: list[str] = []
+    for label, value in (
+        ("package.json pins {}", pinned),
+        ("node_modules has {}", installed),
+        ("the recorded base_version is {}", recorded),
+    ):
+        major = base_pin_major(value)
+        if major is not None and major < current:
+            behind.append(label.format(value))
+    if not behind:
+        return None
+    return (
+        f"{BASE_PACKAGE} is a major version behind the server's {BASE_VERSION}: "
+        + "; ".join(behind)
+    )
+
+
 def materialize_scaffold(project: AutomationProject) -> Path:
     """Create the directory skeleton and the baseline config files, idempotently.
 
     Existing files are never overwritten — the project accumulates AI-authored
-    code and a user may legitimately have edited ``playwright.config.ts``. The single
-    exception is :func:`migrate_tsconfig`, which repairs a ``moduleResolution`` value
-    that no supported compiler accepts (see its docstring for why that earns an
-    exception and how narrowly it is scoped).
+    code and a user may legitimately have edited ``playwright.config.ts``. The only
+    exceptions are the two targeted migrations, each narrowly scoped to a value that is
+    outright broken rather than merely different: :func:`migrate_tsconfig` (a
+    ``moduleResolution`` no supported compiler accepts) and :func:`migrate_base_pin` (a
+    base-package pin a whole major behind the server).
+
+    Whatever drift survives the migrations is **logged, not blocked** — see
+    :func:`base_version_drift` for why refusing to generate would be the wrong trade.
 
     Returns:
         The project root.
@@ -399,6 +566,15 @@ def materialize_scaffold(project: AutomationProject) -> Path:
         if not path.exists():
             path.write_text(content, encoding="utf-8")
     migrate_tsconfig(root / "tsconfig.json")
+    migrate_base_pin(root / "package.json")
+    drift = base_version_drift(project)
+    if drift:
+        logger.warning(
+            "automation project {} ({}): {} — ensure_deps will reinstall; generation continues",
+            project.id,
+            project.slug,
+            drift,
+        )
     return root
 
 
@@ -455,9 +631,37 @@ def vendored_tarball() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _record_base_version(project: AutomationProject) -> None:
+    """Set ``project.base_version`` from what is really installed on disk.
+
+    Prefers the installed package's own version over :data:`BASE_VERSION` (which is only
+    what the *server* ships) so the column can be trusted by :func:`base_version_drift`.
+    Does not commit — the caller's session owns that, exactly as before.
+    """
+    version = installed_base_version(project) or BASE_VERSION
+    if project.base_version != version:
+        project.base_version = version
+
+
 def deps_installed(project: AutomationProject) -> bool:
-    """True when ``@q-agent/playwright-base`` is already present in the tree."""
-    return (project_dir(project) / "node_modules" / BASE_PACKAGE).exists()
+    """True when a **compatible** ``@q-agent/playwright-base`` is present in the tree.
+
+    Compatible means *the same major* as :data:`BASE_VERSION`. Presence alone is not
+    enough, and this is what makes :func:`migrate_base_pin` more than cosmetic: without
+    the major check, a project holding 1.x under a server on 2.x would get its pin
+    migrated and then :func:`ensure_deps` would still short-circuit to ``"cached"``
+    forever, so the new base would never actually be installed.
+
+    Fails **open**: an install whose own ``package.json`` is unreadable, or carries no
+    parseable version, counts as installed rather than triggering a reinstall on a guess.
+    """
+    if not (project_dir(project) / "node_modules" / BASE_PACKAGE).exists():
+        return False
+    installed = base_pin_major(installed_base_version(project))
+    current = base_pin_major(BASE_VERSION)
+    if installed is None or current is None:
+        return True
+    return installed >= current
 
 
 def ensure_deps(project: AutomationProject, *, runner: NpmRunner | None = None) -> str:
@@ -487,6 +691,10 @@ def ensure_deps(project: AutomationProject, *, runner: NpmRunner | None = None) 
     root.mkdir(parents=True, exist_ok=True)
     with project_lock(project):
         if deps_installed(project):
+            # Refresh the row even on the cheap path: `base_version` is only useful to
+            # `base_version_drift` if it tracks what is really on disk, and a project
+            # installed before #566 has an empty or stale value nothing would ever fix.
+            _record_base_version(project)
             return "cached"
 
         if (root / "package-lock.json").exists():
@@ -494,7 +702,7 @@ def ensure_deps(project: AutomationProject, *, runner: NpmRunner | None = None) 
         else:
             registry_args = ("install", f"{BASE_PACKAGE}@{BASE_VERSION_SPEC}")
         if run(registry_args, root) and deps_installed(project):
-            project.base_version = BASE_VERSION
+            _record_base_version(project)
             return "registry"
 
         tarball = vendored_tarball()
@@ -507,7 +715,7 @@ def ensure_deps(project: AutomationProject, *, runner: NpmRunner | None = None) 
             )
             return "unavailable"
         if run(("install", str(tarball)), root) and deps_installed(project):
-            project.base_version = BASE_VERSION
+            _record_base_version(project)
             logger.info("automation deps for project {} installed from vendored tarball", project.id)
             return "vendored"
         logger.warning("automation deps unavailable for project {}: vendored install failed", project.id)
