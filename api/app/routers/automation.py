@@ -361,6 +361,58 @@ def _ticket_cases(db: Session, run: Run, case: TestCase) -> list[TestCase]:
     return cases
 
 
+def _author_plan_assets(
+    db: Session,
+    run: Run,
+    case: TestCase,
+    context: dict,
+    project: AutomationProject | None,
+    plan: dict | None,
+    plans: dict[str, dict] | None,
+) -> dict | None:
+    """Apply the plan's ``create``/``extend`` actions, then return the REFRESHED plan.
+
+    #545 introduced this on the blind generation branch only; since #569 it runs on
+    **every** branch of :func:`_generate_one` — blind, server live-harness,
+    local-agent live-harness and the agent post-back — because the asset library must
+    grow in whichever authoring mode a workspace happens to be set to, and #548's
+    reuse metric is only comparable across modes if it does.
+
+    It stays **server-side** on purpose (issue #569, option (a)): the paired device
+    has no persistent project (#541), so the canonical tree keeps a single writer and
+    the device simply receives a project whose planned page objects already exist —
+    no wire-protocol change, no agent release.
+
+    All three of #545's defences come along unchanged, because this is literally
+    :func:`page_object_author_service.author_assets`: whole-project
+    ``playwright test --list``, ``diff_is_additive``, and a ``git reset --hard``
+    rollback of any rejection. A reuse-only plan still makes **no** agentic authoring
+    call (the cost control), and a rejected/failed pass returns the plan unchanged so
+    the branch degrades to inline locators exactly as it did before.
+    """
+    if project is None or plan is None:
+        return plan
+    plan, authoring_report = page_object_author_service.author_assets(
+        db,
+        project,
+        run.code,
+        case.ticket_external_id,
+        plan,
+        _ticket_cases(db, run, case),
+        context,
+        run_id=run.id,
+    )
+    if plans is not None:
+        plans[case.ticket_external_id] = plan
+    if authoring_report["ran"] and not authoring_report["ok"]:
+        logger.warning(
+            "Asset authoring for {} did not land ({}) — this spec falls back to "
+            "inline locators",
+            case.ticket_external_id, authoring_report["reason"],
+        )
+    return plan
+
+
 def _plan_rejection(gate: dict, violations: list[str], *, what: str) -> tuple[dict, str]:
     """Turn a plan violation into a gate rejection (#544).
 
@@ -569,7 +621,12 @@ def _merge_authored_discovery(context: dict, run: Run, discovered: dict) -> None
 
 
 def _enqueue_agent_authoring(
-    db: Session, run: Run, case: TestCase, context: dict, heal: dict | None = None
+    db: Session,
+    run: Run,
+    case: TestCase,
+    context: dict,
+    heal: dict | None = None,
+    plan: dict | None = None,
 ) -> AutomationSpec:
     """Queue a live-authoring session for the paired agent and return a pending spec (#403).
 
@@ -582,6 +639,12 @@ def _enqueue_agent_authoring(
     task prompt is framed as a self-heal (#428) — reproduce + fix the failing spec
     live — instead of authoring from scratch. Same job shape, so the agent runs it
     with no changes.
+
+    ``plan`` (#569) is the ticket's Automation Plan, already **acted on** server-side
+    by the caller: the paired device therefore receives a project whose planned page
+    objects exist, and the rendered plan block rides in on the existing
+    ``task_prompt`` field. That is deliberate — nothing about the wire shape changes,
+    so no agent release is needed to make live-harness reuse the library.
     """
     from app.services import agent_authoring_service, agent_capture_service, skills
 
@@ -600,7 +663,7 @@ def _enqueue_agent_authoring(
     spec_filename = spec_service.spec_filename(case.ticket_external_id, case.code)
     system_prompt = skills.load_skill("live-authoring", include_template=True) or ""
     task_prompt = live_authoring_service._build_prompt(
-        case, context, spec_filename, "discovered.json", base_url, heal=heal
+        case, context, spec_filename, "discovered.json", base_url, heal=heal, plan=plan
     )
     model = settings_store.load_settings().get("claudeModel") or settings.claude_model
     agent_authoring_service.request_authoring(
@@ -714,6 +777,14 @@ def _generate_one(
     imports real files instead of inlining locators. A reuse-only plan makes no
     agentic call, which is the slice's cost control.
 
+    Since #569 that happens on **every** branch, not just the blind one:
+    :func:`_author_plan_assets` runs before the mode/target fan-out, so server
+    live-harness gets the rendered plan in its live prompt, the local-agent branch
+    hands the paired device a project whose planned page objects already exist, and the
+    post-back reuses that same cached plan. Authoring stays server-side (the device has
+    no persistent project, #541), which is why this needs no wire change and no agent
+    release.
+
     Args:
         db: Active session (caller commits).
         run: The owning Run (provides run.code for the spec path).
@@ -741,16 +812,23 @@ def _generate_one(
     stored = settings_store.load_settings()
     mode = stored.get("authoringMode", "blind")
     exec_target = stored.get("executionTarget", "server")
-    if mode == "live-harness" and exec_target == "local-agent" and authored is None:
-        # Nothing is generated here (the job is handed to the paired agent and comes
-        # back through `finalize_authored_spec`), so planning would be paid for a pass
-        # that never uses it. The finalize call plans.
-        return _enqueue_agent_authoring(db, run, case, context)
     # Plan BEFORE generating (doc §8/§24) — the plan is an input to generation, not a
     # report on it. Once per ticket; cached on disk for the ticket's other cases.
     plan = _plan_for_case(db, run, case, context, project)
     if plan is not None and plans is not None:
         plans.setdefault(case.ticket_external_id, plan)
+    # (#569) Author the plan's create/extend assets HERE — before any branch hands the
+    # work off — so all four branches get a project whose planned page objects exist
+    # and a refreshed plan whose `importable` names them. Cheap to reach on the
+    # local-agent branch: planning and authoring are both cached per ticket, so the
+    # post-back's own `_generate_one` pass re-uses this pass's work rather than paying
+    # again.
+    plan = _author_plan_assets(db, run, case, context, project, plan, plans)
+    if mode == "live-harness" and exec_target == "local-agent" and authored is None:
+        # Nothing is generated here — the job is handed to the paired agent (with the
+        # rendered plan in its task prompt) and comes back through
+        # `finalize_authored_spec`, which runs the shared gate/write tail.
+        return _enqueue_agent_authoring(db, run, case, context, plan=plan)
     live_discovered: dict | None = None
     if authored is not None:
         # (#403) A paired agent authored this spec live and posted it back; the
@@ -763,37 +841,16 @@ def _generate_one(
         # (#403) On local-agent, browser-harness runs where Claude runs, so this pass
         # was already handed to the paired agent above and never reaches here.
         result = live_authoring_service.author_case(
-            db, case, run, owner_id=run.owner_id, run_id=run.id
+            db, case, run, owner_id=run.owner_id, run_id=run.id, plan=plan
         )
         code = result.code
         live_authoring_service.merge_discovery_to_kb(result)
         live_discovered = result.discovered
     else:
-        # (#545) Author the plan's create/extend assets BEFORE generating the spec,
-        # then hand generation the REFRESHED plan — whose `importable` now includes
-        # the page objects that were just written, which is the entire point of the
-        # slice. Reuse-only plans make no agentic call at all (the cost control), and
-        # a rejected/failed edit returns the plan unchanged, so the pass degrades to
-        # inline locators exactly as it did before this slice.
-        if project is not None and plan is not None:
-            plan, authoring_report = page_object_author_service.author_assets(
-                db,
-                project,
-                run.code,
-                case.ticket_external_id,
-                plan,
-                _ticket_cases(db, run, case),
-                context,
-                run_id=run.id,
-            )
-            if plans is not None:
-                plans[case.ticket_external_id] = plan
-            if authoring_report["ran"] and not authoring_report["ok"]:
-                logger.warning(
-                    "Asset authoring for {} did not land ({}) — this spec falls back to "
-                    "inline locators",
-                    case.ticket_external_id, authoring_report["reason"],
-                )
+        # (#545/#569) The plan's create/extend assets were authored above, before this
+        # branch — generation is handed the REFRESHED plan, whose `importable` includes
+        # the page objects just written, so the spec imports real files instead of
+        # inlining locators.
         examples = _select_examples_for_case(db, case)
         code = spec_service.generate_spec_code(
             case, context, examples=examples, reviewer_comment=reviewer_comment, plan=plan

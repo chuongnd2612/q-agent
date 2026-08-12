@@ -1,7 +1,7 @@
 ---
 name: live-authoring
 description: Author a runnable Playwright + TypeScript spec by FIRST driving the real app live with the browser-harness CLI — performing the test case's steps against a real browser, discovering the real selectors on the live DOM, creating any missing test data — and only then emitting a self-contained spec built from what actually worked. Use for the live-authoring execution mode (#400), instead of generating a spec blind and healing it afterwards.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Live Authoring
@@ -60,6 +60,32 @@ does not silently depend on data that happens to exist today. Prefer values that
 re-create idempotently (e.g. a unique suffix) where the app allows it. Never mutate or delete data
 you did not create.
 
+## Reuse the project's shared library — the AUTOMATION PLAN block
+
+The task prompt may carry a `## Shared library` section holding an **AUTOMATION PLAN for this
+feature**. When it is there, it is the **exhaustive authorization** for what this spec may import,
+and it is accurate: the plan's `create`/`extend` page objects were already authored **server-side**,
+into the real project, *before* you were handed this job — so every path listed as `IMPORTABLE`
+really exists on disk.
+
+- **Import every `IMPORTABLE` file that covers a step you perform, and drive the UI through it**
+  rather than repeating its locators in the spec. Call **only** the method signatures the block
+  lists, at the real spec depth (`../../pages/Foo`, `../../utils/bar` — the spec lands two levels
+  down, in `tests/<TICKET-ID>/`).
+- **Import nothing else** from `../../pages/`, `../../components/`, `../../fixtures/`, `../../data/`
+  or `../../utils/`. An unlisted import either does not resolve (failing the project-wide
+  `playwright test --list` gate) or duplicates an asset the plan says another file owns — both
+  reject the spec.
+- **`NOT ON DISK`** entries were planned but their authoring did not land. For *those* steps only,
+  a live-verified inline locator is the accepted exception.
+- **Never write an asset file yourself.** The plan's `writable` paths belong to the server-side
+  page-object author; your deliverables are exactly the two files the task prompt names. Do not
+  create or edit anything under `pages/`, `components/`, `fixtures/`, `data/` or `utils/`.
+
+With no plan block in the prompt (legacy path, or a project with no library yet), fall back to the
+rule below: import a shared project file only when a reference spec proves it exists, and otherwise
+keep the live-verified locators inline.
+
 ## Emit the spec — same layered contract as automation-generator
 
 After every step and expected result has been confirmed live, **write both files at exactly the paths
@@ -74,11 +100,12 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
      waits (`waitFor`, `retry`, `withTimeout`) and data generators (`uniqueSuffix`, `randomEmail`, …).
      **Never import `@playwright/test` directly**, and never reimplement what the base package gives
      you.
-   - **Do not import a Page Object or project fixture unless you can see that file** — i.e. it appears
-     as an import in a reference spec you were given. `pages/`/`fixtures/` are usually still empty, and
-     an import that does not resolve fails the project-wide `playwright test --list` gate, rejecting
-     the spec. With nothing to reuse, keep the live-verified locators inline in the spec; a later stage
-     extracts them into page objects. When you do import one, use the real depth: `../../pages/Foo`.
+   - **The AUTOMATION PLAN block decides your project imports** (see the section above): import
+     every `IMPORTABLE` asset that covers a step, at the real depth (`../../pages/Foo`), and nothing
+     else. With **no** plan block, do not import a Page Object or project fixture unless you can see
+     that file — i.e. it appears as an import in a reference spec you were given — because an import
+     that does not resolve fails the project-wide `playwright test --list` gate and rejects the spec;
+     keep the live-verified locators inline instead.
    - **One `test()`**, its title a plain quoted string (no `${...}`) prefixed with the **Test Case ID**
      (e.g. `test('TC-01 — …', async ({ page }) => { … })`) so results trace back. A file with only a
      `test.describe(...)` and no `test()` inside is rejected.
@@ -118,7 +145,8 @@ say so clearly in the summary and still write the discovery sidecar with whateve
 ## Quality rules (carry over from automation-generator)
 
 - Layered spec: import from `@q-agent/playwright-base`, never `@playwright/test`; import a shared
-  project file only when a reference spec proves it exists, at the real depth (`../../pages/…`).
+  project file when the AUTOMATION PLAN lists it as `IMPORTABLE` (or, with no plan block, when a
+  reference spec proves it exists), at the real depth (`../../pages/…`) — and never write one.
 - No inline login — the imported `test` supplies the authenticated session.
 - Locator priority `data-testid` → role → label → CSS; never brittle CSS/`:nth-child`.
 - Every assertion maps to a specific Expected Result and is web-first (auto-waiting); no hard waits.
