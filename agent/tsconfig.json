@@ -1,8 +1,24 @@
+// `"moduleResolution": "Node"` (the TS 4.x "node10" algorithm) was REMOVED in TypeScript 7.
+// `npm run build` (tsc) is this package's entire gate, with no fail-open path, so leaving it
+// would hard-block every agent release the moment the TypeScript pin is bumped. See #567
+// (and #562, which fixed the same defect in the scaffolded project + playwright-base configs).
+//
+// `NodeNext`/`NodeNext` was chosen after checking it, not guessing: it typechecks clean on
+// TypeScript 5.9 **and** 7.1-dev here, and needs NO explicit `.js` import extensions, because
+// `agent/package.json` declares no `"type": "module"` — so NodeNext classifies every `.ts`
+// file in this package as CommonJS, and the mandatory-extension rule (which is ESM-only)
+// never applies. `"module": "NodeNext"` likewise emits CommonJS for those files, preserving
+// the previous `"module": "CommonJS"` output that `dist/src/cli.js`, `electron/main.cjs`
+// (which `require()`s into `dist/`), and `node --test dist/test/*.test.js` all depend on.
+//
+// Do not add `"type": "module"` to `agent/package.json` without revisiting this: that would
+// flip these files into ESM mode and *then* every relative import needs an explicit `.js`
+// extension, and the emit stops being `require`-able from the Electron shell.
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": ".",
