@@ -45,6 +45,7 @@ from app.models.run import Run, RunTicket
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
 from app.services import (
+    agent_project_bundle,
     audit_service,
     automation_project_service,
     evidence_analysis,
@@ -437,20 +438,62 @@ def fixtures_specifier(relative: Path) -> str:
     return "./fixtures" if depth == 0 else "../" * depth + "fixtures"
 
 
-# Files under the staged run dir that must NEVER have their '@playwright/test'
-# import rewritten:
-#   * the generated fixtures.ts itself — it IS the re-export site;
-#   * playwright.config.ts (and any *.config.ts) — `defineConfig` lives only in
-#     the real package, and pointing the config at fixtures.ts would make the
-#     config import the fixtures it configures;
-#   * *.d.ts declaration files.
+# Directories that are never walked when rewriting imports: installed packages
+# (huge, and not ours to rewrite) and Playwright's own output dirs, which can be
+# left behind in a staged tree. Matched at ANY depth, not just the top level.
+#
+# **Shared rule.** The Local Agent re-implements this in
+# ``agent/src/playwrightConfig.ts`` (``FIXTURE_SKIP_DIRS``). The two MUST stay
+# identical or the same project passes on server-target and fails collection on
+# local-agent target — see ``contracts/fixture-rewrite-tree.json``, the declared
+# tree both test suites assert against (#557).
+FIXTURE_SKIP_DIRS = frozenset(
+    {"node_modules", "test-results", "playwright-report", "blob-report", ".git"}
+)
+
+
 def _skip_fixture_rewrite(relative: Path) -> bool:
+    """True when the staged file at ``relative`` must keep importing the real package.
+
+    Skipped:
+
+    * anything under :data:`FIXTURE_SKIP_DIRS`, at any depth;
+    * ``*.d.ts`` declaration files — there is nothing to rewrite;
+    * **any** ``*.config.ts``, at any depth. ``defineConfig`` lives only in the
+      real package, pointing a config at ``fixtures.ts`` would make the config
+      import the fixtures it configures, and ``config/`` is one of
+      ``automation_project_service.LIBRARY_DIRS`` — so ``config/foo.config.ts``
+      is scaffolded into every project and must be spared too;
+    * the **root** ``fixtures.ts`` — it IS the generated re-export site.
+
+    The root-only scope of that last rule is load-bearing: a *nested*
+    ``fixtures/authenticated.ts`` is a genuine library file and **must** be
+    rewritten. Do not collapse the two cases.
+    """
     name = relative.name
-    if relative.parts[0] in ("node_modules", ".git"):
+    if any(part in FIXTURE_SKIP_DIRS for part in relative.parts[:-1]):
         return True
-    if len(relative.parts) == 1 and name == "fixtures.ts":
+    if name.endswith(".d.ts") or name.endswith(".config.ts"):
         return True
-    return name.endswith(".config.ts") or name.endswith(".d.ts")
+    return len(relative.parts) == 1 and name == "fixtures.ts"
+
+
+def fixture_targets(spec_dir: Path) -> list[str]:
+    """Every ``.ts`` file under ``spec_dir`` whose Playwright import gets rewritten.
+
+    POSIX paths relative to ``spec_dir``, sorted. Public and split out from
+    :func:`_apply_fixtures` so the parity test can compare this exact set against
+    the agent's ``fixtureTargets`` for the shared declared tree (#557).
+    """
+    targets: list[str] = []
+    for path in sorted(spec_dir.rglob("*.ts")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(spec_dir)
+        if _skip_fixture_rewrite(relative):
+            continue
+        targets.append(relative.as_posix())
+    return sorted(targets)
 
 
 def _apply_fixtures(
@@ -483,12 +526,9 @@ def _apply_fixtures(
         capture_raw: Whether to also capture the raw-HTML DOM attachment (off for
             intermediate heal attempts — #398).
     """
-    for path in sorted(spec_dir.rglob("*.ts")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(spec_dir)
-        if _skip_fixture_rewrite(relative):
-            continue
+    for target in fixture_targets(spec_dir):
+        relative = Path(target)
+        path = spec_dir / relative
         specifier = fixtures_specifier(relative)
         text = path.read_text(encoding="utf-8")
         new_text = text.replace("'@playwright/test'", f"'{specifier}'").replace(
@@ -785,6 +825,43 @@ def _spec_relative_path(spec: AutomationSpec | None, ticket_external_id: str, ca
     return filename or spec_service.spec_filename(ticket_external_id, case_code)
 
 
+def _project_backed_specs(
+    db, cases: list[tuple[int, str, str]]
+) -> list[tuple[AutomationSpec, AutomationProject, str]]:
+    """Resolve ``cases`` to ``(spec, project, project-relative path)``, skipping legacy.
+
+    The single place that maps an execution's cases onto automation projects, so
+    the multi-project guard (:func:`execution_projects`) and the staging that
+    follows it can never disagree about which projects an execution involves.
+    Legacy (``project_id IS NULL``) specs and specs pointing at a vanished project
+    are simply absent from the result.
+    """
+    resolved: list[tuple[AutomationSpec, AutomationProject, str]] = []
+    for case_id, ticket_external_id, case_code in cases:
+        spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+        if spec is None or spec.project_id is None:
+            continue
+        project = db.get(AutomationProject, spec.project_id)
+        if project is None:
+            logger.warning("Spec {} references a missing automation project", spec.id)
+            continue
+        resolved.append((spec, project, _spec_relative_path(spec, ticket_external_id, case_code)))
+    return resolved
+
+
+def execution_projects(db, cases: list[tuple[int, str, str]]) -> list[AutomationProject]:
+    """Every distinct automation project ``cases`` belongs to, in first-seen order.
+
+    Feeds ``agent_project_bundle.multi_project_reason``: more than one means the
+    execution cannot be run as a unit and is refused (#556). Empty for a wholly
+    legacy execution.
+    """
+    distinct: dict[int, AutomationProject] = {}
+    for _spec, project, _relative in _project_backed_specs(db, cases):
+        distinct.setdefault(project.id, project)
+    return list(distinct.values())
+
+
 def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Path:
     """Prepare ``<scoped specs>/<RUN-CODE>/`` for execution and return it.
 
@@ -792,9 +869,11 @@ def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Pat
     ``automation_project_service.stage_for_run``: the **whole** shared library (so
     ``../pages/Foo`` imports resolve) but **only this run's spec files** — staging
     all of ``tests/`` would re-run every test ever generated for that project.
-    A run legitimately spanning two projects (``RunTicket`` is many-per-run, each
-    with its own repo) stages each of them into the same dir; ``stage_for_run``
-    merges with ``dirs_exist_ok``.
+    An execution spanning two projects is **refused upstream** by
+    :func:`execution_projects` + ``agent_project_bundle.multi_project_reason``
+    (#556), so at most one project is ever staged here. It used to merge them into
+    one dir (``stage_for_run`` uses ``dirs_exist_ok``), which silently let one
+    project's ``pages/LoginPage.ts`` overwrite the other's.
 
     Because the staged dir is per run code, two concurrent runs on the same
     project never share a ``playwright.config.ts`` / ``report.json`` / rewritten
@@ -824,17 +903,7 @@ def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Pat
     spec_paths: dict[int, list[str]] = {}
     pending_code: list[tuple[str, str]] = []  # (relative path, code)
 
-    for case_id, ticket_external_id, case_code in cases:
-        spec = (
-            db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
-        )
-        if spec is None or spec.project_id is None:
-            continue
-        project = db.get(AutomationProject, spec.project_id)
-        if project is None:
-            logger.warning("Spec {} references a missing automation project", spec.id)
-            continue
-        relative = _spec_relative_path(spec, ticket_external_id, case_code)
+    for spec, project, relative in _project_backed_specs(db, cases):
         projects[project.id] = project
         spec_paths.setdefault(project.id, []).append(relative)
         pending_code.append((relative, spec.code or ""))
@@ -952,11 +1021,26 @@ def run_execution(execution_id: int) -> None:
             # the project's config (a `results.json` reporter, testDir './tests')
             # would silently produce no report. The project config's job is to make
             # the tree listable by the generation gate, not to run executions.
-            spec_dir = _stage_specs_for_run(
-                db,
-                run,
-                [(r.test_case_id, r.ticket_external_id, r.case_code) for r in results],
+            cases = [(r.test_case_id, r.ticket_external_id, r.case_code) for r in results]
+            # One staged dir means one project library: staging two projects into it
+            # let one project's `pages/LoginPage.ts` silently overwrite the other's,
+            # so an execution spanning two projects is refused with one legible
+            # reason instead — same call the Local Agent claim makes (#556).
+            multi_project = agent_project_bundle.multi_project_reason(
+                execution_projects(db, cases)
             )
+            if multi_project is not None:
+                logger.warning(
+                    "refusing multi-project execution {} for run {}: {}",
+                    execution.id,
+                    run.code,
+                    multi_project,
+                )
+                hub.publish(run_id_str, "exec.error", {"message": multi_project})
+                _fail_all_results(db, run, execution, results, multi_project)
+                return
+
+            spec_dir = _stage_specs_for_run(db, run, cases)
             headless = bool(settings_store.load_settings().get("headless", True))
 
             # Resolve project auth: inject baseURL always (fixes relative goto), and

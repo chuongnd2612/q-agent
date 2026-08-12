@@ -20,6 +20,12 @@ This module owns the two things that makes safe:
   across the whole run, so the server refuses the claim and fails the execution
   with :data:`UPDATE_MESSAGE` instead.
 
+* :func:`multi_project_reason` — the multi-project guard (#556). A run's tickets
+  each carry their own ``repo`` and projects are keyed per repo, so one execution
+  can span two projects — but a claim ships exactly **one** bundle, so the other
+  project's specs would fail collection on unresolvable ``../pages/…`` imports.
+  Both run paths refuse the execution with one legible reason instead.
+
 ``baseVersion`` ships from day one so a later content-hash delta protocol can be
 introduced without another payload change.
 """
@@ -27,6 +33,7 @@ introduced without another payload change.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from app.logging import logger
 from app.models.automation_project import AutomationProject
@@ -36,10 +43,13 @@ __all__ = [
     "BUNDLE_BASE_VERSION",
     "BUNDLE_MAX_BYTES",
     "MIN_AGENT_VERSION",
+    "MULTI_PROJECT_TEMPLATE",
     "OVERSIZE_MESSAGE",
     "UPDATE_MESSAGE",
     "bundle_payload",
+    "multi_project_reason",
     "parse_version",
+    "project_label",
     "version_ok",
 ]
 
@@ -67,6 +77,13 @@ OVERSIZE_MESSAGE = (
     "The automation project is too large to ship to the Local Agent "
     f"(limit {BUNDLE_MAX_BYTES // (1024 * 1024)} MB). Remove large or generated "
     "files from the project and re-run."
+)
+
+MULTI_PROJECT_TEMPLATE = (
+    "This execution spans {count} automation projects ({projects}). One execution "
+    "ships exactly one project library, so the specs belonging to the other "
+    "project(s) could not resolve their imports. Run each repo's tickets as its "
+    "own run."
 )
 
 _VERSION_RE = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
@@ -100,6 +117,42 @@ def version_ok(reported: str | None, minimum: str = MIN_AGENT_VERSION) -> bool:
         return False
     floor = parse_version(minimum) or (0, 0, 0)
     return current >= floor
+
+
+def project_label(project: AutomationProject) -> str:
+    """``"SUR (web)"`` / ``"SUR"`` — how a project is named in a refusal reason."""
+    key = (project.project_key or "").strip() or f"#{project.id}"
+    repo = (project.repo or "").strip()
+    return f"{key} ({repo})" if repo else key
+
+
+def multi_project_reason(projects: Iterable[AutomationProject]) -> str | None:
+    """``None`` when the execution covers at most one project; else why it is refused.
+
+    An ``Execution`` covers **every** approved, non-Manual case of a run
+    (``execution.py`` builds one ``ExecutionResult`` per case, with no repo filter),
+    and each ``RunTicket`` carries its own ``repo`` — while automation projects are
+    keyed ``(owner_id, project_key, repo)``. So one execution can legitimately span
+    two or more projects, and neither run path can serve that: the agent claim
+    ships a *single* ``project`` bundle, and server staging merges every project
+    into one directory where same-named page objects silently overwrite each other
+    (#556).
+
+    Both paths therefore **refuse and report** rather than half-bundle. A loud
+    failure with one legible reason beats a run that half-passes for reasons nobody
+    can see — the same call the version guard and the oversize-bundle guard made.
+
+    **Mixed executions are allowed.** Some specs project-backed and the rest legacy
+    (``project_id IS NULL``) is *not* a refusal: a legacy spec is a self-contained
+    flat file that needs no library, is written into the same staged dir / shipped
+    inline in ``specs[]``, and cannot collide with the one project's tree. Only
+    **two or more distinct** projects are refused.
+    """
+    distinct = {project.id: project for project in projects}
+    if len(distinct) <= 1:
+        return None
+    labels = ", ".join(sorted(project_label(project) for project in distinct.values()))
+    return MULTI_PROJECT_TEMPLATE.format(count=len(distinct), projects=labels)
 
 
 def bundle_payload(project: AutomationProject) -> tuple[dict, int]:
