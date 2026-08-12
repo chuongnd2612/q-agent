@@ -295,36 +295,80 @@ def test_status_reports_none_when_unconfigured(client, db_session):
     r = client.get("/ai/credentials")
     assert r.status_code == 200
     body = r.json()
-    assert body == {"hasOwn": False, "hasShared": False, "mode": "none", "own": None, "shared": None}
+    # Field-wise, not an exact-dict `==`: the payload legitimately gains keys
+    # (see test_upload_and_delete_own_credentials) and this test is about
+    # "nothing is configured", not the endpoint's exact key set.
+    assert body["hasOwn"] is False
+    assert body["hasShared"] is False
+    assert body["mode"] == "none"
+    assert body["own"] is None
+    assert body["shared"] is None
 
 
 def test_upload_and_delete_own_credentials(client, db_session):
-    _make_user(db_session, "own@example.com", "password123")
+    """PUT then DELETE /ai/credentials round-trips, scoped to the caller.
+
+    Asserted field-wise on purpose. This used to compare ``status["own"]``
+    against a whole literal dict with ``==``, which broke the moment the
+    endpoint grew ``status`` / ``accountEmail`` / ``accountOrg`` — a test that
+    fails on *correct* changes. Deletion is verified against the store (the row
+    is gone) and against a second user's row (it is not), so it cannot pass if
+    DELETE silently no-ops or over-deletes.
+    """
+    from app import crypto
+
+    owner = _make_user(db_session, "own@example.com", "password123")
+    other = _make_user(db_session, "other@example.com", "password123")
     token = _login(client, "own@example.com", "password123").json()["accessToken"]
     headers = {"Authorization": f"Bearer {token}"}
+    other_token = _login(client, "other@example.com", "password123").json()["accessToken"]
+    other_headers = {"Authorization": f"Bearer {other_token}"}
 
     r = client.put("/ai/credentials", json={"credentials": OWN_JSON}, headers=headers)
     assert r.status_code == 200
     assert "own-secret-token" not in r.text  # never echoes the plaintext token back
+    # A second user uploads their own, so delete-scoping is observable below.
+    assert (
+        client.put("/ai/credentials", json={"credentials": SHARED_JSON}, headers=other_headers).status_code
+        == 200
+    )
 
     status = client.get("/ai/credentials", headers=headers).json()
     assert status["hasOwn"] is True
-    assert status["hasShared"] is False
+    assert status["hasShared"] is False  # nobody uploaded an admin/shared credential
     assert status["mode"] == "own"
-    assert status["own"] == {
-        "subscriptionType": None,
-        "expiresAt": None,
-        "scopes": [],
-        "lastRefreshed": status["own"]["lastRefreshed"],
-        "assignedUsers": None,
-    }
+    assert "own-secret-token" not in json.dumps(status)  # nor on the status read
+    own = status["own"]
+    assert own is not None
+    # OWN_JSON carries no OAuth metadata, so every extracted field is empty...
+    assert own["subscriptionType"] is None
+    assert own["expiresAt"] is None
+    assert own["scopes"] == []
+    # ...``assignedUsers`` is a shared-credential-only count...
+    assert own["assignedUsers"] is None
+    # ...and the upload stamped a refresh time.
+    assert own["lastRefreshed"]
     assert status["shared"] is None
+
+    # Owner scoping of the *write*: each user's row holds their own payload.
+    db_session.expire_all()
+    assert json.loads(crypto.decrypt(claude_credentials.get_own(db_session, owner.id).credentials)) == json.loads(OWN_JSON)
+    assert json.loads(crypto.decrypt(claude_credentials.get_own(db_session, other.id).credentials)) == json.loads(SHARED_JSON)
 
     r = client.delete("/ai/credentials", headers=headers)
     assert r.status_code == 200
 
     status = client.get("/ai/credentials", headers=headers).json()
     assert status["hasOwn"] is False
+    assert status["own"] is None
+    assert status["mode"] == "none"  # nothing left to fall back to
+    # Really deleted from the store, not merely omitted from the summary...
+    db_session.expire_all()
+    assert claude_credentials.get_own(db_session, owner.id) is None
+    assert claude_credentials.resolve_effective_config_dir(db_session, owner.id) is None
+    # ...and owner-scoped: the other user's credential is untouched.
+    assert claude_credentials.get_own(db_session, other.id) is not None
+    assert client.get("/ai/credentials", headers=other_headers).json()["hasOwn"] is True
 
 
 def test_switch_credential_mode_endpoint(client, db_session):
