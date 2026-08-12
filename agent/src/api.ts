@@ -7,7 +7,7 @@
 
 import * as fs from "fs";
 import { AgentConfig } from "./config";
-import { ProjectBundle } from "./projectBundle";
+import { ProjectBundle, ProjectFile } from "./projectBundle";
 import { agentVersion } from "./version";
 
 /** Raised for any non-2xx/204 response; carries the HTTP status for callers that care (e.g. 409). */
@@ -251,6 +251,17 @@ export interface HealFixResult {
   reason?: string;
   failureClass?: string;
   gate?: string;
+  /** Shared-library files the server repaired for this failure (#547): the defect
+   * was a stale locator inside a page object the spec imports, so the fix is
+   * there and `code` comes back UNCHANGED. The agent is stateless and has no
+   * read-file channel to the project, so the only way it can run the repair is
+   * for the server to ship the new sources — same reasoning as the claim's
+   * project bundle. Merged into `job.project.files` so the next attempt's
+   * re-stage writes them. Absent on older servers, which simply re-run the
+   * unchanged spec. */
+  libraryFiles?: ProjectFile[];
+  /** Plain-text summary of what the library repair changed, for the log. */
+  librarySummary?: string;
 }
 
 /** Heal-fix polling: the server generates the fix (~3 min Claude call) in the

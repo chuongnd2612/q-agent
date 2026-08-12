@@ -547,7 +547,8 @@ _heal_fix_lock = threading.Lock()
 
 
 def _run_heal_fix_job(
-    job_id: str, case_id: int, current_code: str, error: str, output: str, dom: dict | None
+    job_id: str, case_id: int, current_code: str, error: str, output: str, dom: dict | None,
+    attempt: int = 1,
 ) -> None:
     """Background worker: run :func:`heal_service.plan_fix` off the request thread.
 
@@ -562,7 +563,9 @@ def _run_heal_fix_job(
         if case is None or run is None:
             result = {"action": "rejected", "reason": "Case/run not found for heal fix."}
         else:
-            result = heal_service.plan_fix(db, case, run, current_code, error, output, dom)
+            result = heal_service.plan_fix(
+                db, case, run, current_code, error, output, dom, attempt
+            )
         with _heal_fix_lock:
             _heal_fix_jobs[job_id] = {"status": "done", "result": result}
     except Exception as exc:  # noqa: BLE001 - surface to the agent, never crash the thread
@@ -599,6 +602,9 @@ def agent_heal_fix(
             body.get("error") or "",
             body.get("output") or "",
             body.get("domDistilled"),
+            # #547: the library heal is tried once per heal pass, on the FIRST failed
+            # attempt only, so a bounded agentic call cannot be paid for per attempt.
+            int(body.get("attempt") or 1),
         ),
         daemon=True,
     ).start()

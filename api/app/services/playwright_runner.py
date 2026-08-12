@@ -53,6 +53,7 @@ from app.services import (
     execution_service,
     failure_classifier,
     knowledge_service,
+    page_object_healer_service,
     placeholder_gate,
     project_config_service,
     run_context,
@@ -923,7 +924,7 @@ def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Pat
 
 
 def _persist_spec_code(
-    db, run: Run, case: TestCase, spec: AutomationSpec, code: str, spec_dir: Path
+    db, run: Run, case: TestCase, spec: AutomationSpec, code: str, spec_dir: Path | None = None
 ) -> str:
     """Write an accepted spec revision to its authoritative home + the staged dir.
 
@@ -932,6 +933,12 @@ def _persist_spec_code(
     snapshot/rollback mechanism, and an AI-authored fix deserves history), then
     mirrored into ``spec_dir`` so the next heal attempt runs the new code.
     Legacy: unchanged — ``spec_service.write_spec_file`` into the run's spec dir.
+
+    Args:
+        spec_dir: The staged run dir to mirror into, or None when there is none to
+            mirror — the agent-executed heal (#547) finalizes on a request thread
+            with no staged dir of its own, and still has to land its healed code in
+            the project tree rather than only in the legacy per-run dir.
 
     Returns:
         The authoritative absolute path, for ``AutomationSpec.path``.
@@ -958,10 +965,11 @@ def _persist_spec_code(
             project, f"fix({case.ticket_external_id}): heal {case.code}"
         )
     automation_project_service.sync_files_to_db(db, project)
-    relative = _spec_relative_path(spec, case.ticket_external_id, case.code)
-    staged = spec_dir / relative
-    staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_text(code, encoding="utf-8")
+    if spec_dir is not None:
+        relative = _spec_relative_path(spec, case.ticket_external_id, case.code)
+        staged = spec_dir / relative
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(code, encoding="utf-8")
     return str(path)
 
 
@@ -1316,6 +1324,45 @@ def _propose_healed_selector_to_kb(
         logger.warning("Heal->KB selector feedback skipped: {}", exc)
 
 
+def _propose_healed_library_selector_to_kb(
+    project_key: str | None,
+    repo: str,
+    edits: dict[str, tuple[str, str]],
+    owner_id: int | None,
+) -> None:
+    """Same 1->1 selector feedback as :func:`_propose_healed_selector_to_kb`, for
+    a heal that corrected the selector inside a **page object** (#547).
+
+    Before project-aware heal, a corrected selector could only ever appear in the
+    spec, so the KB proposal read one file. Now the healed selector usually lives
+    in ``pages/LoginPage.ts`` — the page object is where the fix is *applied* (that
+    is the point of the slice, so the next generation inherits it), and the KB
+    proposal is the complement, not the substitute: without this the KB would keep
+    handing the next generation the stale value the page object no longer uses.
+
+    Args:
+        edits: ``{project-relative path: (before source, after source)}``.
+
+    Aggregated across the touched files, so the "exactly one unambiguous swap"
+    rule is applied to the heal as a whole rather than per file — two files each
+    swapping a different selector stays ambiguous and is skipped, as before.
+    """
+    if not project_key or not edits:
+        return
+    try:
+        removed: set[str] = set()
+        added: set[str] = set()
+        for before, after in edits.values():
+            removed |= _selector_literals(before) - _selector_literals(after)
+            added |= _selector_literals(after) - _selector_literals(before)
+        if len(removed) == 1 and len(added) == 1:
+            knowledge_service.propose_selector_fix(
+                project_key, repo, next(iter(removed)), next(iter(added)), owner_id
+            )
+    except Exception as exc:  # noqa: BLE001 - heal->KB feedback must never break the heal loop
+        logger.warning("Heal->KB page-object selector feedback skipped: {}", exc)
+
+
 def _merge_discovered_dom_to_kb(
     project_key: str | None,
     repo: str,
@@ -1470,6 +1517,15 @@ def heal_spec(case_id: int) -> None:
     Persists each improved spec to disk + AutomationSpec, updates the case's
     latest ExecutionResult, and publishes ``heal.progress`` WS events with phase
     running | fixing | passed | failed.
+
+    Project-aware since #547: for a layered spec (one that imports page objects)
+    the first failing attempt tries
+    :func:`page_object_healer_service.heal_library` **before** the spec fixer, so a
+    stale locator gets fixed in ``pages/LoginPage.ts`` where it lives rather than
+    inlined back into the spec. At most one such agentic call per heal pass; if it
+    changes nothing or is rejected, the loop falls through to the spec fixer
+    exactly as before. A product defect is classified first and never reaches
+    either — the app being wrong is not healed by editing the test.
     """
     db = db_module.SessionLocal()
     try:
@@ -1579,6 +1635,27 @@ def heal_spec(case_id: int) -> None:
         # (before, after) code of the most recently accepted fix — used for
         # heal->KB selector feedback (#182) if that fix goes on to pass.
         last_fix_pair: tuple[str, str] | None = None
+        # The project this spec belongs to, if any — the confined workspace a
+        # library heal (#547) may edit. None for a legacy spec, which is why the
+        # whole project-aware path is inert for one.
+        heal_project = (
+            db.get(AutomationProject, spec.project_id) if spec.project_id else None
+        )
+        # One agentic library-heal call per heal pass, max (cost control), and the
+        # touched files' (before, after) sources if it was accepted — for KB feedback
+        # once/if the heal goes on to pass.
+        library_heal_tried = False
+        library_edits: dict[str, tuple[str, str]] = {}
+        # Assertions in the imported library as it stood before any library edit in
+        # this pass. THIS is what makes "move an assertion into the page object" a
+        # net-zero change: the anti-cheat below compares
+        #   (previous spec + library BEFORE the edit)  vs  (fixed spec + library NOW)
+        # so a gain in the page object offsets exactly the loss in the spec. Held at
+        # the pre-edit value on purpose — count the gain on both sides of the
+        # comparison and it cancels out, and the move reads as a deletion again.
+        library_floor = page_object_healer_service.library_assertion_count(
+            heal_project, relative, spec.code or ""
+        )
 
         for attempt in range(1, max_attempts + 1):
             # A run cancel should stop the heal loop rather than burn further
@@ -1696,11 +1773,61 @@ def heal_spec(case_id: int) -> None:
                 emit("failed", attempt, "Still failing after max attempts", error=final_error)
                 break
 
-            emit("fixing", attempt, "Asking Claude to fix the spec", error=final_error)
             # Ground the fix on the real page: the distilled DOM captured for this
             # failing attempt gives Claude actual selectors, which is the only
             # grounding a blocked spec (empty KB) has to work with.
             dom_snapshot = _load_distilled_dom(attachments)
+
+            # #547 — try the LIBRARY first for a layered spec. The failure is most
+            # often a stale locator inside an imported page object, and the spec
+            # fixer's only route to green there is to inline the locator back into
+            # the spec, undoing the epic's architecture. Once per heal pass; a skip
+            # ("imports nothing"), a no-op ("nothing wrong in the library") or a
+            # rejection all fall straight through to the spec fixer below.
+            if heal_project is not None and not library_heal_tried:
+                library_heal_tried = True
+                emit(
+                    "fixing",
+                    attempt,
+                    "Checking the imported page objects for the defect",
+                    error=final_error,
+                )
+                library = page_object_healer_service.heal_library(
+                    db, heal_project, run.code, case.ticket_external_id, case.code,
+                    relative, spec.code or "", final_error, final_output, dom_snapshot,
+                    run_id=run.id,
+                )
+                rec["library"] = {
+                    k: v for k, v in library.items() if k not in ("before", "after")
+                }
+                if library["ran"] and library["ok"] and library["files"]:
+                    # The page object was repaired. Re-stage so the next attempt runs
+                    # the healed library, and re-run WITHOUT touching the spec — that
+                    # is the whole point: the architecture stays layered.
+                    library_edits = {
+                        path: (
+                            (library.get("before") or {}).get(path, ""),
+                            (library.get("after") or {}).get(path, ""),
+                        )
+                        for path in library["files"]
+                    }
+                    _stage_specs_for_run(
+                        db, run, [(case.id, case.ticket_external_id, case.code)]
+                    )
+                    rec["libraryHealed"] = list(library["files"])
+                    attempts_log.append(rec)
+                    emit(
+                        "fixing",
+                        attempt,
+                        "Repaired the page object(s): " + ", ".join(library["files"]),
+                        error=final_error,
+                    )
+                    continue
+                logger.info(
+                    "library heal did not apply for case {}: {}", case_id, library["reason"]
+                )
+
+            emit("fixing", attempt, "Asking Claude to fix the spec", error=final_error)
             try:
                 fixed = spec_service.generate_fixed_spec_code(
                     case, spec.code, final_error, final_output, context, examples, dom_snapshot
@@ -1715,10 +1842,23 @@ def heal_spec(case_id: int) -> None:
             # Anti-cheat: a fix that removes/weakens assertions is NEVER valid — it
             # only "passes" by checking less. Reject it, keep the previous good spec
             # (do not overwrite code/path/file), and stop (mark failed).
+            #
+            # The count SPANS THE SPEC PLUS ITS IMPORTED PAGE OBJECTS (#547). Counting
+            # the spec alone made a legitimate layered heal impossible: once a page
+            # object may hold page-level UI assertions (doc §14), moving one out of
+            # the spec and into the page object that owns the screen read as
+            # "assertions removed" and was rejected. Spanning the imports makes that
+            # move net-zero while a genuine deletion is still a strict decrease —
+            # wherever in the layers it happened. `heal_project` is None for a legacy
+            # spec, for which this is bit-for-bit the old single-file count.
             previous_code = spec.code or ""
-            if placeholder_gate.count_assertions(fixed) < placeholder_gate.count_assertions(
-                previous_code
-            ):
+            scope_before = (
+                placeholder_gate.count_assertions(previous_code) + library_floor
+            )
+            scope_after = page_object_healer_service.assertion_scope_count(
+                heal_project, relative, fixed
+            )
+            if scope_after < scope_before:
                 final_status = "fail"
                 final_error = "Rejected fix: it removed/weakened assertions (anti-cheat)."
                 rec["error"] = final_error
@@ -1778,6 +1918,12 @@ def heal_spec(case_id: int) -> None:
             spec.path = _persist_spec_code(db, run, case, spec, fixed, spec_dir)
             spec.code = fixed
             db.commit()
+            # Rebase the floor onto the tree as it now is: the headroom a library
+            # gain created has been spent by this accepted fix and must not be
+            # spendable a second time on the next attempt.
+            library_floor = page_object_healer_service.library_assertion_count(
+                heal_project, relative, fixed
+            )
 
         # Reflect the heal outcome on the spec lifecycle. Terminal states set
         # inside the loop (product_defect / blocked) win and are left intact; every
@@ -1792,6 +1938,14 @@ def heal_spec(case_id: int) -> None:
         if final_status == "pass" and last_fix_pair is not None:
             _propose_healed_selector_to_kb(
                 project_key, heal_repo, last_fix_pair[0], last_fix_pair[1], run.owner_id
+            )
+        # ...and the same feedback for a heal whose corrected selector lived in a
+        # PAGE OBJECT (#547). The page object is already updated on disk — that is
+        # where the fix belongs and how the next generation inherits it (doc §22);
+        # this keeps the KB from continuing to hand that generation the stale value.
+        if final_status == "pass" and library_edits:
+            _propose_healed_library_selector_to_kb(
+                project_key, heal_repo, library_edits, run.owner_id
             )
         # Heal->KB DOM enrichment (#249): a DOM-grounded pass discovered a real
         # route + selectors -> ADD any the KB doesn't know yet. Runs on ANY pass

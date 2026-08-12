@@ -852,7 +852,9 @@ def signature_map(entries: Sequence[dict]) -> dict[str, str]:
     return out
 
 
-def diff_is_additive(project: AutomationProject, before: Sequence[dict]) -> bool:
+def diff_is_additive(
+    project: AutomationProject, before: Sequence[dict], *, allow_body_edits: bool = False
+) -> bool:
     """True only when the project's reusable surface grew, never shrank.
 
     Extending the shared library must never break specs that already import
@@ -863,9 +865,21 @@ def diff_is_additive(project: AutomationProject, before: Sequence[dict]) -> bool
     Args:
         project: The project, scanned as it is *now*.
         before: The :func:`inventory` result captured before the edit.
+        allow_body_edits: When True, a pre-existing method's **body** may change
+            while its signature must still exist unchanged. This is the *heal*
+            mode (#547): a stale locator lives inside a page object's body, so
+            fixing it necessarily rewrites that body — refusing the rewrite is
+            exactly what forced the heal loop to re-inline locators into the
+            spec instead. The half of the guarantee other specs actually depend
+            on — "every signature I import still exists, with the same
+            parameters" — is unchanged; the body edit is additionally fenced by
+            the whole-project ``--list`` + ``tsc`` gates and by the
+            import-spanning assertion anti-cheat. Authoring (#545) leaves this
+            False, so an *authoring* pass still may not touch a body at all.
 
     Returns:
-        False if any pre-existing signature disappeared or its body changed.
+        False if any pre-existing signature disappeared, or (unless
+        ``allow_body_edits``) if its body changed.
     """
     old = signature_map(before)
     new = signature_map(inventory(project))
@@ -873,7 +887,7 @@ def diff_is_additive(project: AutomationProject, before: Sequence[dict]) -> bool
         if key not in new:
             logger.info("automation diff not additive: {} was removed", key)
             return False
-        if body_hash and new[key] != body_hash:
+        if not allow_body_edits and body_hash and new[key] != body_hash:
             logger.info("automation diff not additive: body of {} was rewritten", key)
             return False
     return True

@@ -103,11 +103,20 @@ _SPEC_ARCHITECTURE = (
     "keep the body a thin, readable sequence of steps."
 )
 
-# Heal / edit guard (#542). Until the heal loop becomes project-aware (#547) it
-# rewrites ONLY `spec.code`, so a fixer told merely to "make it pass" will happily
+# Heal / edit guard (#542). A fixer told merely to "make it pass" will happily
 # flatten the layering — re-inline a page object's locators, drop the base-package
 # import, or paste the login flow back in — and the spec would still pass the
 # gate. State the rejection explicitly instead.
+#
+# #547 removed the trailing "note the suspected file in one brief comment"
+# instruction, which was a stopgap for the era when this fixer was the ONLY thing
+# that could edit anything: a comment was all it could do about a defect it could
+# not reach. The heal loop now repairs the page object for real
+# (`page_object_healer_service.heal_library`) BEFORE this fixer is asked for
+# anything, so by the time the fixer runs the library has either been repaired or
+# been found sound. Leaving the instruction in would invite a cosmetic comment
+# about a file that was already fixed, and — worse — keep implying the spec is the
+# only writable file.
 _ARCHITECTURE_GUARD = (
     "Preserve the spec's architecture — fix the defect, not the design. Keep the "
     "imports from '@q-agent/playwright-base' (never swap them back to "
@@ -116,9 +125,8 @@ _ARCHITECTURE_GUARD = (
     "object's locators, a fixture's setup, or a login flow back into the spec to "
     "route around it, and do NOT delete an import to make the file "
     "self-contained: a fix that flattens the layering is REJECTED even if it "
-    "would pass. If the real defect is inside an imported page object, correct the "
-    "spec's use of it and note the suspected file in one brief comment rather "
-    "than re-inlining its locators."
+    "would pass. Repairing an imported page object is a different stage's job and "
+    "not yours: fix the spec's own use of it."
 )
 
 # Robustness rules shared by generation and self-heal prompts (#178 promotes
