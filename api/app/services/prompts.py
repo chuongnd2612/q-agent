@@ -223,11 +223,18 @@ def render_project_context(
             f"storageState: {auth.get('storage_state', '—')})"
         )
 
+    # NAMES ONLY, and labelled as such (#542): these come from indexing the
+    # customer's own repo, not from the automation project this spec is generated
+    # into. #178 died because they read like importable modules — a spec that turns
+    # one of these names into `import … from '../../pages/X'` fails collection.
     for label, key in (("Page objects", "pageObjectNames"), ("Fixtures", "fixtureNames"),
                        ("Utilities", "utilities")):
         vals = context.get(key) or []
         if vals:
-            lines.append(f"- {label} to reuse: {', '.join(vals)}")
+            lines.append(
+                f"- {label} that exist in the product repo (names only — reuse the "
+                f"naming/vocabulary; these are NOT importable modules): {', '.join(vals)}"
+            )
 
     accounts = context.get("testAccounts") or []
     if accounts:
@@ -245,6 +252,53 @@ def render_project_context(
             lines.append(f"- Test-account roles available: {rendered}")
 
     return "\n".join(lines)
+
+
+def render_base_framework_api() -> str:
+    """Render the public surface of ``@q-agent/playwright-base`` for a spec prompt (#542).
+
+    Layer 2 of the architecture in
+    ``docs/QAgent_Playwright_Automation_Architecture_Update.md`` is a real npm
+    package (published by #539) that every automation project depends on. The
+    model can only *reuse* it if it knows what is in it — otherwise it reinvents
+    an inline login flow and its own wait helpers, which is exactly the generated
+    bulk this slice removes (doc §17).
+
+    Kept deliberately as a hand-maintained list of **names only**, not signatures:
+    it must stay small enough to sit in every generation prompt. The authoritative
+    surface is ``playwright-base/src/index.ts``; when that changes, change this.
+
+    Returns:
+        A markdown block naming the exports a generated spec is expected to use.
+    """
+    return "\n".join(
+        [
+            "Base framework — `@q-agent/playwright-base` (Layer 2; already a "
+            "dependency of this automation project). Reuse these instead of "
+            "reimplementing them, and do NOT import `@playwright/test` directly:",
+            "- `import { test, expect } from '@q-agent/playwright-base';` — `test` is "
+            "Playwright's `test` extended with always-on evidence capture (distilled "
+            "DOM, console, network) and replay of the run's saved session. It is a "
+            "drop-in replacement: `test('…', async ({ page }) => { … })` still works.",
+            "- Auth (doc §17): `createAuthenticatedTest({ login, isAuthenticated?, "
+            "entryUrl? })` (adds an `authenticatedPage` fixture), `formLoginFlow({ "
+            "loginUrl, credentials, fields })`, `performFormLogin`, `ensureLoggedIn`, "
+            "`hasStorageState`, `saveAuthState`, `applySessionStorage`.",
+            "- Web-first assertion helpers: `expectVisible`, `expectHidden`, "
+            "`expectText`, `expectContainsText`, `expectValue`, `expectChecked`, "
+            "`expectEnabled`, `expectDisabled`, `expectCount`, `expectAttribute`, "
+            "`expectClass`, `expectUrl`, `expectTitle`, `expectRowVisible`, "
+            "`expectAllVisible`, `expectEventuallyGone` (plus plain `expect`).",
+            "- Waiting/retry — never a hard sleep: `waitFor`, `retry`, `withTimeout` "
+            "(`sleep` exists for setup only; never use it to wait for the UI).",
+            "- Dynamic test data: `uniqueId`, `uniqueSuffix`, `randomEmail`, "
+            "`randomString`, `randomInt`, `randomDigits`, `randomPick`, `isoDate`, "
+            "`today`, `addDays`, `daysFromNow`, `formatDate`, `timestampSlug`.",
+            "- Files / API / logging / config: `uploadFiles`, `downloadTo`, `readJson`, "
+            "`writeJson`, `createApiClient`, `logger`, `createLogger`, `env`, "
+            "`envBool`, `envInt`, `resolveUrl`.",
+        ]
+    )
 
 
 def render_dom_snapshot(dom_snapshot: dict[str, Any] | None, *, max_elements: int = 60) -> str:

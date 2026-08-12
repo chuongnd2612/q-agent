@@ -45,13 +45,53 @@ PLACEHOLDER_PATTERNS: list[re.Pattern[str]] = [
 
 # Assertion fragments used to gauge how much a spec actually verifies. Counting
 # these lets a later slice reject a "fix" that passes only by deleting assertions.
+#
+# ``expectVisible(...)``/``expectText(...)``/… are the web-first assertion helpers
+# re-exported by ``@q-agent/playwright-base`` (#539). A layered spec (#542) may
+# assert exclusively through them, and ``\bexpect\(`` does NOT match
+# ``expectVisible(`` — without the helper pattern such a spec counts ZERO
+# assertions and ``find_flaky_patterns`` rejects it as "verifies nothing". That is
+# a real rejection of the new legitimate shape, so the helper form is counted too.
 _ASSERTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bexpect\("),
+    re.compile(r"\bexpect[A-Z]\w*\("),  # base-package helpers: expectVisible(...)
     re.compile(r"\.toHave"),
     re.compile(r"\.toBe"),
     re.compile(r"\.toContain"),
     re.compile(r"await\s+expect\b"),
 ]
+
+# ---------------------------------------------------------------- imports
+# Module specifiers a generated spec is ALLOWED to import (#542). Everything the
+# layered architecture asks for is here; anything else in a spec's import list is
+# left to the project-aware ``--list`` gate, which resolves imports for real.
+#
+# The allow-list exists because the invented-reference scan below is regex-based
+# over the whole source: import lines are stripped before that scan so a path like
+# ``'../../pages/LoginPage'`` can never be mistaken for a selector/route the
+# Knowledge Base does not know, and so this file states in one place which imports
+# are legitimate now that specs are layered.
+ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
+    "@q-agent/playwright-base",  # Layer 2 — the shared base framework (#539)
+    "@playwright/test",  # still legal: legacy/no-project specs
+    "../../pages",  # Layer 3 shared assets, from tests/<TICKET>/<spec>
+    "../../components",
+    "../../fixtures",
+    "../../data",
+    "../../utils",
+    "../../config",
+    "../pages",  # tolerated depth variants; the --list gate decides
+    "../components",
+    "../fixtures",
+    "../data",
+    "../utils",
+    "../config",
+)
+
+# `import … from 'x'`, `import 'x'`, `require('x')`, `await import('x')`.
+_IMPORT_RE = re.compile(
+    r"""(?:\bimport\b[^'"\n]*?from\s*|\bimport\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]"""
+)
 
 # Route + selector extraction from spec source.
 _GOTO_RE = re.compile(r"\.goto\(\s*[\"'`]([^\"'`]+)[\"'`]")
@@ -269,6 +309,51 @@ def _known_selectors(known: dict) -> set[str]:
     return out
 
 
+def import_specifiers(code: str) -> list[str]:
+    """The module specifiers a spec imports, in source order, de-duped.
+
+    Args:
+        code: The spec's TypeScript source.
+
+    Returns:
+        e.g. ``["@q-agent/playwright-base", "../../pages/LoginPage"]``.
+    """
+    out: list[str] = []
+    for spec in _IMPORT_RE.findall(code or ""):
+        value = (spec or "").strip()
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def is_allowed_import(specifier: str) -> bool:
+    """Whether ``specifier`` is one of the imports a layered spec may legitimately use.
+
+    See :data:`ALLOWED_IMPORT_PREFIXES`. Whether an allowed path actually *exists*
+    is not this gate's business — ``automation_gate.list_ok_in_project`` resolves
+    imports for real, against the whole project.
+    """
+    value = (specifier or "").strip()
+    return any(value == prefix or value.startswith(prefix) for prefix in ALLOWED_IMPORT_PREFIXES)
+
+
+def _without_allowed_imports(code: str) -> str:
+    """``code`` with every allow-listed import statement removed.
+
+    The invented-reference scan below is regex-based over the whole source, so an
+    import path is otherwise just more text for it to mine: a page-object path
+    could be read as a route/selector the Knowledge Base does not know and the
+    layered spec would come back ``rejected`` for importing exactly what the
+    architecture asks it to import (#542). Anything NOT allow-listed is left in
+    place, so behavior for legacy/unknown imports is byte-for-byte unchanged.
+    """
+
+    def _drop(match: re.Match[str]) -> str:
+        return "" if is_allowed_import(match.group(1)) else match.group(0)
+
+    return _IMPORT_RE.sub(_drop, code or "")
+
+
 def _find_invented(code: str, known: dict) -> list[str]:
     """Collect routes/selectors used by the spec that the KB does not know.
 
@@ -278,7 +363,13 @@ def _find_invented(code: str, known: dict) -> list[str]:
     Comparison is defensive: with no known routes/selectors at all nothing is
     flagged as invented here (that empty-KB case is handled by the caller as a
     BLOCKED missing-input, not a rejection).
+
+    Imports the layered architecture legitimises — ``@q-agent/playwright-base``
+    and the project's ``../../pages``/``../../fixtures``/… assets — are stripped
+    first (:func:`_without_allowed_imports`) so they can never be mined as
+    invented routes/selectors.
     """
+    code = _without_allowed_imports(code)
     invented: list[str] = []
     seen: set[str] = set()
 

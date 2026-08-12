@@ -5,8 +5,9 @@ the failures afterwards, this drives the *real* application first: it launches a
 dedicated, already-authenticated Chrome, points the ``browser-harness`` CLI at it,
 and lets an agentic Claude (see :func:`claude_cli.run_agentic`) perform the test
 case's steps live — discovering the real selectors on the real DOM, creating any
-missing test data — then write a clean, self-contained ``*.spec.ts`` built from
-what actually worked, plus a ``discovered.json`` sidecar of runtime-verified
+missing test data — then write a clean ``*.spec.ts`` built from what actually
+worked (layered on ``@q-agent/playwright-base`` per #542, not self-contained:
+see ``skills/live-authoring/SKILL.md``), plus a ``discovered.json`` sidecar of runtime-verified
 routes/selectors for the KB.
 
 This runs server-side (the API host has ``browser-harness`` + a Chrome), mirroring
@@ -180,8 +181,9 @@ def _build_prompt(
             f"A Playwright spec for this test case FAILED. Repair it by driving the REAL app live "
             f"with browser-harness (already wired to a signed-in Chrome via BU_CDP_URL — just run it): "
             f"reproduce the failing step, find the REAL cause (wrong/stale selector, changed flow, "
-            f"missing test data, timing), and emit a CORRECTED, self-contained spec built from what "
-            f"actually works on the live DOM. Keep the test intent + assertions; do NOT weaken them "
+            f"missing test data, timing), and emit a CORRECTED spec built from what "
+            f"actually works on the live DOM. Keep the test intent + assertions, and keep the spec's "
+            f"existing imports/layering (never re-inline a page object or a login flow); do NOT weaken them "
             f"to make it pass.\n\n"
             f"## Failing spec (repair this)\n```ts\n{failing_code}\n```\n\n"
             f"## Failure\n{error}\n\n"
@@ -207,7 +209,8 @@ def _build_prompt(
         f"Known routes: {routes}\n"
         f"Known selectors: {selectors}\n\n"
         f"## Deliverables — write BOTH files into the current working directory\n"
-        f"1. `{spec_filename}` — the self-contained Playwright spec (contract in the skill).\n"
+        f"1. `{spec_filename}` — the Playwright spec (layered contract in the skill: import from "
+        f"`@q-agent/playwright-base`, no inline login).\n"
         f"2. `{sidecar}` — the runtime-verified routes/selectors sidecar (shape in the skill).\n\n"
         f"Perform every step live and confirm every expected result before writing the spec. "
         f"Create any missing test data through the UI first and bake it into the spec. "

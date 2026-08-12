@@ -104,7 +104,7 @@ def test_build_fix_prompt_includes_discovered_selector():
     from app.services.spec_service import _build_fix_prompt
 
     case = SimpleNamespace(
-        title="Sign in", precondition=None, steps=[],
+        title="Sign in", precondition=None, steps=[], test_data=[],
         ticket_external_id="TCK-1", code="TC-01",
     )
     snapshot = {"path": "/login", "elements": [{"tag": "input", "testId": "username"}]}
@@ -117,11 +117,16 @@ def test_build_fix_prompt_includes_discovered_selector():
 
 
 def _auth_policy_case():
-    """A minimal TestCase stand-in for the auth-policy prompt assertions (#291)."""
+    """A minimal TestCase stand-in for the auth-policy prompt assertions (#291).
+
+    ``test_data=[]`` is required: every spec prompt renders it (``_render_test_data``),
+    so a stand-in without the attribute makes the builder raise ``AttributeError``
+    before any prompt text exists to assert on (part of the #469 red baseline).
+    """
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        title="Sign in", precondition=None, steps=[],
+        title="Sign in", precondition=None, steps=[], test_data=[],
         ticket_external_id="TCK-1", code="TC-01",
     )
 
@@ -134,6 +139,9 @@ def _assert_auth_policy(prompt: str):
     assert "VITE_BYPASS_AUTH" in prompt
     assert "saved manual-login session" in prompt
     assert '"Auth note"' in prompt
+    # #542: the policy no longer offers "log in inline" as an equal option — the
+    # spec consumes the shared authenticated session (doc §17).
+    assert "Do NOT re-implement login" in prompt
 
 
 def test_build_prompt_forbids_mocking_auth_and_narration():
@@ -162,3 +170,70 @@ def test_build_chat_edit_prompt_forbids_mocking_auth_and_narration():
         "add an assertion", context=None,
     )
     _assert_auth_policy(prompt)
+
+
+# ------------------------------------------------- layered spec contract (#542)
+
+
+def test_render_base_framework_api_names_the_reusable_surface():
+    """The prompt must tell the model what `@q-agent/playwright-base` exports, or it
+    reinvents login/waits/assertions instead of reusing them."""
+    from app.services.prompts import render_base_framework_api
+
+    block = render_base_framework_api()
+    assert "@q-agent/playwright-base" in block
+    for export in (
+        "test", "expect", "createAuthenticatedTest", "formLoginFlow",
+        "expectVisible", "expectUrl", "waitFor", "uniqueSuffix",
+    ):
+        assert export in block
+
+
+def test_build_prompt_asks_for_the_layered_shape():
+    """Generation must ask for the base-package import, one `test()`, and the real
+    two-levels-deep asset paths — the #178 contradiction resolved the other way."""
+    from app.services.spec_service import _build_prompt
+
+    prompt = _build_prompt(_auth_policy_case())
+    assert "import { test, expect } from '@q-agent/playwright-base';" in prompt
+    assert "Never import '@playwright/test' directly" in prompt
+    assert "../../pages/Foo" in prompt
+    assert "Emit exactly ONE `test(...)` block" in prompt
+    # The base-package surface is injected so reuse is possible, not just asked for.
+    assert "expectVisible" in prompt
+
+
+def test_build_prompt_forbids_inventing_page_object_imports():
+    """Page objects don't exist yet (#544/#545): the prompt must allow imports only
+    where a reference spec proves the file exists, or the gate rejects every spec."""
+    from app.services.spec_service import _build_prompt
+
+    prompt = _build_prompt(_auth_policy_case())
+    assert "only import a project file you can actually SEE" in prompt
+    assert "REFERENCE SPEC" in prompt
+    assert "Knowledge-Base metadata, not files in this project" in prompt
+    assert "keep the locators inline" in prompt
+
+
+def test_build_fix_prompt_forbids_flattening_the_architecture():
+    """Heal rewrites only `spec.code` until #547, so it must be told that re-inlining
+    locators/login is a rejection — otherwise it "fixes" specs by undoing the layering."""
+    from app.services.spec_service import _build_fix_prompt
+
+    prompt = _build_fix_prompt(
+        _auth_policy_case(), "test('Sign in', async () => {});", "assertion failed"
+    )
+    assert "Preserve the spec's architecture" in prompt
+    assert "never swap them back to '@playwright/test'" in prompt
+    assert "flattens the layering is REJECTED" in prompt
+
+
+def test_build_chat_edit_prompt_forbids_flattening_the_architecture():
+    """The AI chat editor rewrites the whole spec too — same guard (#542)."""
+    from app.services.spec_service import _build_chat_edit_prompt
+
+    prompt = _build_chat_edit_prompt(
+        _auth_policy_case(), "test('Sign in', async () => {});",
+        "add an assertion", context=None,
+    )
+    assert "Preserve the spec's architecture" in prompt

@@ -4,31 +4,33 @@
  * Source ticket : <ADO/Jira ID>
  * Test Case ID  : <TC-NN>
  *
- * Standalone spec: this file is self-contained. Real base URL, credentials,
- * routes and selectors come from the Project Knowledge Base and are baked in
- * directly below — the ONLY import is '@playwright/test'. Do not import a
- * Page Object, fixture, or helper module; it does not exist in this file's
- * directory and the spec must compile and run on its own.
+ * Layered spec. It lives in the project's automation project at
+ * tests/<TICKET-ID>/<TICKET-ID>-<TC-NN>.spec.ts — TWO levels below the project
+ * root — and sits on the shared base framework:
+ *
+ *   - Always import test/expect/helpers from '@q-agent/playwright-base'
+ *     (never '@playwright/test'). That `test` carries evidence capture and the
+ *     run's saved session, so the spec starts AUTHENTICATED — no inline login.
+ *   - A shared project file is imported as '../../pages/Foo', but ONLY when a
+ *     reference spec proves that file exists. Never invent such an import: the
+ *     project-wide `playwright test --list` gate rejects the spec if it does not
+ *     resolve. With no page object available, keep the locators inline here.
  * ---------------------------------------------------------------------------
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '@q-agent/playwright-base';
 
 test('<TC-NN> — <test case title>', async ({ page }) => {
-  // --- Arrange / login ---
-  // Use the real login URL and the real test-account credentials supplied in
-  // the project context. Inline the login steps here; do not assume an
-  // importable auth fixture exists.
-  await page.goto('<real base URL / login route from context>');
-  await page.getByLabel('Username').fill('<real test-account username>');
-  await page.getByLabel('Password').fill('<real test-account password>');
-  await page.getByRole('button', { name: 'Log in' }).click();
-
-  // --- Act --- (map each test-case step to a page action, using KB-known
-  // selectors — prefer data-testid / getByRole / getByLabel over raw CSS)
+  // --- Arrange --- the session is already authenticated: go straight to the
+  // route the case starts on (real route from the project context). Do NOT
+  // generate a login preamble unless the case's subject IS authentication.
   await page.goto('<real route from context>');
+
+  // --- Act --- one business step per test-case step, using KB-known selectors
+  // (prefer data-testid / getByRole / getByLabel over raw CSS). Locators belong
+  // in a page object once one exists for this screen.
   await page.getByRole('button', { name: '<real action from the case step>' }).click();
 
   // --- Assert --- one web-first assertion per Expected Result. Rely on
-  // Playwright's built-in auto-waiting — never page.waitForTimeout(...).
+  // Playwright's auto-waiting — never page.waitForTimeout(...).
   await expect(page.getByText('<expected result text>')).toBeVisible();
 });

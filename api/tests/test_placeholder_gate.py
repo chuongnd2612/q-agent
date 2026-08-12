@@ -155,3 +155,76 @@ def test_gate_spec_rejects_invented_static_segment_in_template():
 def test_gate_spec_rejects_wrong_shape_parameterized_route():
     code = _param_spec("`${BASE_URL}/vendors/${EMPLOYER_ID}`")
     assert placeholder_gate.gate_spec(code, _PARAM_KNOWN)["outcome"] == "rejected"
+
+
+# --------------------------------------------------------------- layered specs (#542)
+
+_LAYERED_KNOWN = {
+    "routes": [{"path": "/invoices/INV-1001"}],
+    "selectors": [{"selector": "pay-now"}, {"selector": "confirmation-banner"}],
+    "base_url": "https://app.example.com",
+}
+
+
+def _layered_spec(extra_imports: str = "") -> str:
+    """A spec in the shape #542 asks for: base-package import, no inline login."""
+    return (
+        "import { test, expect } from '@q-agent/playwright-base';\n"
+        f"{extra_imports}"
+        "\ntest('TC-01 — Pay an open invoice', async ({ page }) => {\n"
+        "  await page.goto('/invoices/INV-1001');\n"
+        "  await page.getByTestId('pay-now').click();\n"
+        "  await expect(page.getByTestId('confirmation-banner')).toBeVisible();\n"
+        "});\n"
+    )
+
+
+def test_gate_spec_passes_base_package_import():
+    """The now-mandatory import must not read as an invented reference."""
+    assert placeholder_gate.gate_spec(_layered_spec(), _LAYERED_KNOWN)["outcome"] == "passed"
+
+
+def test_gate_spec_passes_project_asset_imports():
+    """`../../pages` / `../../fixtures` / `../../data` are legitimate in a layered spec."""
+    extra = (
+        "import { InvoiceListPage } from '../../pages/InvoiceListPage';\n"
+        "import { appTest } from '../../fixtures/app.fixture';\n"
+        "import { validUser } from '../../data/users';\n"
+    )
+    assert placeholder_gate.gate_spec(_layered_spec(extra), _LAYERED_KNOWN)["outcome"] == "passed"
+
+
+def test_allowed_imports_cover_the_layered_shape():
+    assert placeholder_gate.is_allowed_import("@q-agent/playwright-base")
+    assert placeholder_gate.is_allowed_import("@playwright/test")
+    assert placeholder_gate.is_allowed_import("../../pages/LoginPage")
+    assert placeholder_gate.is_allowed_import("../../fixtures/app.fixture")
+    assert not placeholder_gate.is_allowed_import("@faker-js/faker")
+
+
+def test_import_specifiers_extracts_every_form():
+    code = (
+        "import { test } from '@q-agent/playwright-base';\n"
+        "import '../../config/setup';\n"
+        "const p = require('../../utils/paths');\n"
+    )
+    assert placeholder_gate.import_specifiers(code) == [
+        "@q-agent/playwright-base",
+        "../../config/setup",
+        "../../utils/paths",
+    ]
+
+
+def test_base_assertion_helpers_count_as_assertions():
+    """A spec asserting only via the base package's helpers is not "zero assertions"."""
+    code = (
+        "import { test, expectVisible, expectUrl } from '@q-agent/playwright-base';\n\n"
+        "test('TC-01 — Pay an open invoice', async ({ page }) => {\n"
+        "  await page.goto('/invoices/INV-1001');\n"
+        "  await expectVisible(page.getByTestId('confirmation-banner'));\n"
+        "  await expectUrl(page, '/invoices/INV-1001');\n"
+        "});\n"
+    )
+    assert placeholder_gate.count_assertions(code) >= 2
+    assert placeholder_gate.find_flaky_patterns(code) == []
+    assert placeholder_gate.gate_spec(code, _LAYERED_KNOWN)["outcome"] == "passed"
