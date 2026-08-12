@@ -251,7 +251,9 @@ def test_claim_next_job_atomic_and_wont_double_claim(client, db_session):
     assert body["runCode"] == run.code
     assert body["specs"] == [
         {
-            "filename": "1428-TC-01.spec.ts",
+            # #540: the job payload filename comes from `spec_service.spec_filename`,
+            # which now carries the full ticket id.
+            "filename": "SUR-1428-TC-01.spec.ts",
             "code": "// spec code",
             "ticketExternalId": "SUR-1428",
             "caseCode": "TC-01",

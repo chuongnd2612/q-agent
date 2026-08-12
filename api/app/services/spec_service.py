@@ -494,19 +494,43 @@ def generate_spec_code(
     return _extract_code(raw)
 
 
+_UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 def spec_filename(ticket_external_id: str, case_code: str) -> str:
-    """Build the on-disk spec filename for a case.
+    """Build the on-disk spec filename for a case, from the **full** ticket id.
+
+    This used to strip the ticket to its last segment (``"SUR-1428"`` ->
+    ``"1428"``), which made ``SUR-1428/TC-01`` and ``OPS-1428/TC-01`` produce the
+    *same* filename. In the old per-run throwaway dirs that was the "Minor —
+    filename collision" of ``docs/ARCHITECTURE-REVIEW.md:289-291``. In the
+    persistent ``tests/`` tree of #537 — which accumulates across every ticket
+    forever — one ticket's spec would silently overwrite another's and
+    ``execution_service.match_result`` would misattribute results, so #540 emits
+    the full id instead. ``match_result`` still accepts the old short form so
+    in-flight legacy runs keep matching (see :func:`legacy_spec_filename`).
 
     Args:
         ticket_external_id: e.g. "SUR-1428".
         case_code: e.g. "TC-01".
 
     Returns:
-        A filename like "1428-TC-01.spec.ts" (ticket prefix stripped to the
-        numeric/short suffix after the last '-', kept simple and unique per run).
+        A filename like "SUR-1428-TC-01.spec.ts". Characters that are not
+        filesystem-safe are collapsed to ``-``; an empty ticket/case degrades to
+        ``"unknown"`` rather than producing a hidden or empty filename.
     """
-    short_ticket = ticket_external_id.rsplit("-", 1)[-1]
-    return f"{short_ticket}-{case_code}.spec.ts"
+    ticket = _UNSAFE_NAME_RE.sub("-", (ticket_external_id or "").strip()).strip("-") or "unknown"
+    case = _UNSAFE_NAME_RE.sub("-", (case_code or "").strip()).strip("-") or "unknown"
+    return f"{ticket}-{case}.spec.ts"
+
+
+def legacy_spec_filename(ticket_external_id: str, case_code: str) -> str:
+    """The pre-#540 short-ticket filename, e.g. ``"1428-TC-01.spec.ts"``.
+
+    Kept only so ``execution_service.match_result`` can still attribute results
+    from runs whose specs were written before #540. Never used for new writes.
+    """
+    return f"{(ticket_external_id or '').rsplit('-', 1)[-1]}-{case_code}.spec.ts"
 
 
 def write_spec_file(
@@ -552,7 +576,18 @@ def _resolve_list_bin() -> str | None:
 
 
 def playwright_list_ok(code: str, owner_id: int | None = None) -> bool:
-    """Best-effort ``playwright test --list`` parse gate for a generated spec.
+    """**Legacy** best-effort ``playwright test --list`` parse gate for one spec.
+
+    Superseded by ``automation_gate.list_ok_in_project`` (#540), which lists the
+    whole persistent automation project. This function is kept **only** for
+    ``project_id IS NULL`` specs — every spec that existed before #540 — and must
+    keep behaving exactly as it always has for the lifetime of those runs. Do not
+    extend it; new work belongs in :mod:`app.services.automation_gate`.
+
+    Because it collects the spec **alone in an empty temp dir**, any import of a
+    shared page object or of ``@q-agent/playwright-base`` fails collection here.
+    That is the blocker the project-aware gate dissolves, and the reason this
+    path must never be used for a project-backed spec.
 
     Writes ``code`` to a throwaway spec in a temp dir under the caller's scoped
     specs workspace and runs ``playwright test --list`` against it.
