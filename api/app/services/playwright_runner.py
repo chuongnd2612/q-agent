@@ -45,6 +45,7 @@ from app.models.run import Run, RunTicket
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
 from app.services import (
+    agent_project_bundle,
     audit_service,
     automation_project_service,
     evidence_analysis,
@@ -824,6 +825,43 @@ def _spec_relative_path(spec: AutomationSpec | None, ticket_external_id: str, ca
     return filename or spec_service.spec_filename(ticket_external_id, case_code)
 
 
+def _project_backed_specs(
+    db, cases: list[tuple[int, str, str]]
+) -> list[tuple[AutomationSpec, AutomationProject, str]]:
+    """Resolve ``cases`` to ``(spec, project, project-relative path)``, skipping legacy.
+
+    The single place that maps an execution's cases onto automation projects, so
+    the multi-project guard (:func:`execution_projects`) and the staging that
+    follows it can never disagree about which projects an execution involves.
+    Legacy (``project_id IS NULL``) specs and specs pointing at a vanished project
+    are simply absent from the result.
+    """
+    resolved: list[tuple[AutomationSpec, AutomationProject, str]] = []
+    for case_id, ticket_external_id, case_code in cases:
+        spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+        if spec is None or spec.project_id is None:
+            continue
+        project = db.get(AutomationProject, spec.project_id)
+        if project is None:
+            logger.warning("Spec {} references a missing automation project", spec.id)
+            continue
+        resolved.append((spec, project, _spec_relative_path(spec, ticket_external_id, case_code)))
+    return resolved
+
+
+def execution_projects(db, cases: list[tuple[int, str, str]]) -> list[AutomationProject]:
+    """Every distinct automation project ``cases`` belongs to, in first-seen order.
+
+    Feeds ``agent_project_bundle.multi_project_reason``: more than one means the
+    execution cannot be run as a unit and is refused (#556). Empty for a wholly
+    legacy execution.
+    """
+    distinct: dict[int, AutomationProject] = {}
+    for _spec, project, _relative in _project_backed_specs(db, cases):
+        distinct.setdefault(project.id, project)
+    return list(distinct.values())
+
+
 def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Path:
     """Prepare ``<scoped specs>/<RUN-CODE>/`` for execution and return it.
 
@@ -831,9 +869,11 @@ def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Pat
     ``automation_project_service.stage_for_run``: the **whole** shared library (so
     ``../pages/Foo`` imports resolve) but **only this run's spec files** — staging
     all of ``tests/`` would re-run every test ever generated for that project.
-    A run legitimately spanning two projects (``RunTicket`` is many-per-run, each
-    with its own repo) stages each of them into the same dir; ``stage_for_run``
-    merges with ``dirs_exist_ok``.
+    An execution spanning two projects is **refused upstream** by
+    :func:`execution_projects` + ``agent_project_bundle.multi_project_reason``
+    (#556), so at most one project is ever staged here. It used to merge them into
+    one dir (``stage_for_run`` uses ``dirs_exist_ok``), which silently let one
+    project's ``pages/LoginPage.ts`` overwrite the other's.
 
     Because the staged dir is per run code, two concurrent runs on the same
     project never share a ``playwright.config.ts`` / ``report.json`` / rewritten
@@ -863,17 +903,7 @@ def _stage_specs_for_run(db, run: Run, cases: list[tuple[int, str, str]]) -> Pat
     spec_paths: dict[int, list[str]] = {}
     pending_code: list[tuple[str, str]] = []  # (relative path, code)
 
-    for case_id, ticket_external_id, case_code in cases:
-        spec = (
-            db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
-        )
-        if spec is None or spec.project_id is None:
-            continue
-        project = db.get(AutomationProject, spec.project_id)
-        if project is None:
-            logger.warning("Spec {} references a missing automation project", spec.id)
-            continue
-        relative = _spec_relative_path(spec, ticket_external_id, case_code)
+    for spec, project, relative in _project_backed_specs(db, cases):
         projects[project.id] = project
         spec_paths.setdefault(project.id, []).append(relative)
         pending_code.append((relative, spec.code or ""))
@@ -991,11 +1021,26 @@ def run_execution(execution_id: int) -> None:
             # the project's config (a `results.json` reporter, testDir './tests')
             # would silently produce no report. The project config's job is to make
             # the tree listable by the generation gate, not to run executions.
-            spec_dir = _stage_specs_for_run(
-                db,
-                run,
-                [(r.test_case_id, r.ticket_external_id, r.case_code) for r in results],
+            cases = [(r.test_case_id, r.ticket_external_id, r.case_code) for r in results]
+            # One staged dir means one project library: staging two projects into it
+            # let one project's `pages/LoginPage.ts` silently overwrite the other's,
+            # so an execution spanning two projects is refused with one legible
+            # reason instead — same call the Local Agent claim makes (#556).
+            multi_project = agent_project_bundle.multi_project_reason(
+                execution_projects(db, cases)
             )
+            if multi_project is not None:
+                logger.warning(
+                    "refusing multi-project execution {} for run {}: {}",
+                    execution.id,
+                    run.code,
+                    multi_project,
+                )
+                hub.publish(run_id_str, "exec.error", {"message": multi_project})
+                _fail_all_results(db, run, execution, results, multi_project)
+                return
+
+            spec_dir = _stage_specs_for_run(db, run, cases)
             headless = bool(settings_store.load_settings().get("headless", True))
 
             # Resolve project auth: inject baseURL always (fixes relative goto), and

@@ -272,7 +272,11 @@ def claim_next_job(
     # `project_id IS NULL` specs keep the exact pre-#541 payload and keep working
     # on every agent build, forever.
     specs: list[dict] = []
-    project: AutomationProject | None = None
+    # EVERY distinct project the execution's specs belong to, not just the last one
+    # seen: a run's tickets can each carry their own repo, and projects are keyed
+    # per repo, so this legitimately holds more than one — which the single-bundle
+    # payload cannot serve and must refuse (#556, guarded right below the loop).
+    claim_projects: dict[int, AutomationProject] = {}
     for r in results:
         spec = (
             db.query(AutomationSpec)
@@ -285,7 +289,7 @@ def claim_next_job(
         if spec.project_id is not None:
             candidate_project = db.get(AutomationProject, spec.project_id)
             if candidate_project is not None:
-                project = candidate_project
+                claim_projects[candidate_project.id] = candidate_project
                 filename = _spec_relpath(candidate_project, spec, r.ticket_external_id, filename)
         specs.append(
             {
@@ -299,6 +303,23 @@ def claim_next_job(
             }
         )
 
+    # A claim ships exactly ONE project bundle, so an execution spanning two
+    # projects would hand the device one library and leave the other project's
+    # specs with unresolvable `../pages/…` imports — the same silent mass-failure
+    # the version guard exists to prevent, arriving by another route. Refuse it,
+    # loudly, before the device ever sees the job. A mixed project-backed/legacy
+    # execution is deliberately NOT refused (see `multi_project_reason`).
+    multi_project = agent_project_bundle.multi_project_reason(claim_projects.values())
+    if multi_project is not None:
+        logger.warning(
+            "refusing multi-project claim for execution {}: projects {}",
+            execution.id,
+            sorted(claim_projects),
+        )
+        _fail_claimed_execution(db, execution, run, results, multi_project)
+        raise HTTPException(status_code=409, detail=multi_project)
+
+    project: AutomationProject | None = next(iter(claim_projects.values()), None)
     project_bundle: dict | None = None
     if project is not None:
         # Version skew is a SILENT mass-failure mode: an old agent flattens the
