@@ -384,3 +384,50 @@ def test_a_ticket_referenced_by_a_run_is_kept(hub_on, db_session, sso_user):
 
     kept = db_session.query(Ticket).filter_by(owner_id=sso_user.id).one()
     assert kept.external_id == "1442"
+
+
+# ---------------------------------------------------------------- #591
+# The mirror runs on GET /projects, but the SPA sent no X-Hub-Token on that call,
+# so it declined and a hub user saw "No connected projects" forever. The API was
+# always correct — the client never asked. Pinned here because a scripted check
+# that sets the header by hand cannot catch it.
+@respx.mock
+def test_projects_endpoint_mirrors_when_a_hub_token_is_sent(hub_on, client, db_session, monkeypatch):
+    import app.config as config_module
+    from app.models.user import User as UserModel
+    from app.services import auth_service
+
+    monkeypatch.setattr(config_module.settings, "auth_required", True)
+    user = UserModel(email="hubproj@example.com", password_hash="x", hub_user_id="42")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    _mock_hub()
+
+    token = auth_service.create_access_token(user, sid=f"sid-{user.id}")
+    body = client.get(
+        "/projects", headers={"Authorization": f"Bearer {token}", "X-Hub-Token": "tok"}
+    ).json()
+
+    assert [p["name"] for p in body] == ["Surency"]
+
+
+@respx.mock
+def test_projects_endpoint_without_a_hub_token_mirrors_nothing(hub_on, client, db_session, monkeypatch):
+    """The failing case, stated explicitly: no token -> no mirror -> empty screen."""
+    import app.config as config_module
+    from app.models.user import User as UserModel
+    from app.services import auth_service
+
+    monkeypatch.setattr(config_module.settings, "auth_required", True)
+    user = UserModel(email="notoken@example.com", password_hash="x", hub_user_id="43")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    route = _mock_hub()
+
+    token = auth_service.create_access_token(user, sid=f"sid-{user.id}")
+    body = client.get("/projects", headers={"Authorization": f"Bearer {token}"}).json()
+
+    assert body == []
+    assert not route.called
