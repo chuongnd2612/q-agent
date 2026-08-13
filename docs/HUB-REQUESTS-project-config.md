@@ -3,6 +3,87 @@
 **Date:** 2026-08-13 · **From:** Q-Agent · **Subject:** what the hub must change so Q-Agent can show
 hub-owned project configuration (repos, environments, connections, test accounts).
 
+> ## ✅ ANSWERED — EmeHub, 2026-08-13
+>
+> **All four are resolved. Two shipped, two answered, and one answer is not what we assumed.**
+>
+> | # | Outcome |
+> |---|---|
+> | 1 · change detection | **Shipped.** `updatedAt` on the config payload **and** `ETag` + `If-None-Match` → `304`. emehub#148, emehub#149 |
+> | 2 · test-account passwords | **Answered — our assumption was wrong.** An agent token *can* receive them. See below. |
+> | 3 · agent writes knowledge | **Answered: yes.** Already the intended, tested path. |
+> | 4 · project GUID | **Shipped.** `guid` on the payloads, accepted anywhere `{key}` is. emehub#151 |
+>
+> ### 1 — change detection *(shipped, live)*
+>
+> `ProjectConfig.updated_at` already existed with `onupdate=utcnow`; it was only ever a serialisation
+> gap. Both of our top two options landed, since they come from the same value:
+>
+> - `updatedAt` on `GET /projects/{key}/config` — `null` means never configured.
+> - `ETag` + `If-None-Match` → `304 Not Modified`, no body. The `304` is declared in the OpenAPI schema.
+>
+> It is the **config row's** timestamp, not the project's — a project row does not change when its
+> configuration does, so polling `GET /projects/{key}` would miss exactly the edits we care about.
+>
+> Note the ETag **varies with password visibility**: one row has two representations, so a validator
+> obtained as the owner will not match a masked read. Do not share one cached validator across
+> identities.
+>
+> ### 2 — test-account passwords: we were wrong, and it matters
+>
+> Our understanding was "never to an agent, so we cannot use them". **Not so.** `GET
+> /projects/{key}/config` is `require_principal`, so an agent token is accepted and resolves to the hub
+> user it acts for. Passwords are revealed when `config.owner_id == caller.id` — and that caller can be
+> an agent.
+>
+> So the rule is about **ownership, not audience**:
+>
+> - **Personal (owner-owned) config → we DO get the plaintext password**, including via our
+>   `aud: qagent` token.
+> - **Shared config (`owner_id IS NULL`) → masked for everyone**, admins included. A shared credential
+>   everyone can read is a credential that has left the hub.
+>
+> One trap they found while testing: **a shared *project* does not imply a shared *config***. `shared`
+> is set on the config `PUT`; a config saved without it is owner-owned even on a shared project.
+>
+> **What this changes for us:** we can run a test that logs in with a hub-configured test account, for
+> personal projects. The settings screen must therefore distinguish *"masked because this config is
+> shared"* from *"none configured"* — those are different states and we were about to render both as an
+> empty list.
+>
+> ### 3 — may an agent write knowledge? *Yes.*
+>
+> `PUT` and `PATCH /projects/{key}/repos/{repo}/knowledge` are both `require_principal`; the handlers
+> are named `report_repo_knowledge` / `contribute_repo_knowledge`, and `test_the_full_status_lifecycle`
+> drives the whole write lifecycle with an agent token. It is the intended path, not a side effect.
+>
+> Contrast: `PUT /projects/{key}/config` is `require_user` (hub audience only) and 401s for us — so
+> knowledge is ours to report, configuration is not ours to rewrite. `POST …/knowledge/build` is also
+> hub-only: it clones, runs Claude for minutes and spends money.
+>
+> ### 4 — project GUID *(shipped, live)*
+>
+> `guid` (uuid4) on `GET /projects` and `GET /projects/{key}`, and **accepted anywhere `{key}` is** —
+> including `/config` and `/knowledge`, since a GUID we could not use for those would have been half a
+> migration. `key` and `id` are unchanged and stay working permanently; there is no transition to run
+> out of.
+>
+> Resolution is **by shape**, never key-then-GUID fallback: otherwise a project keyed like someone
+> else's GUID could capture that identifier. There is a test that attempts it.
+>
+> Two corrections to our reasoning, recorded so we do not re-derive them as hub bugs:
+>
+> - **"Keys are not unique per user"** is not true of the hub — its keys are namespaced per owner and a
+>   test pins it. Our collision (#583) was ours.
+> - **"A rename orphans everything"** was already handled: we persist their numeric `id`, which a rename
+>   does not change.
+>
+> The GUID's real value is a non-enumerable external reference and one identity vocabulary. Live data
+> makes the point: the hub currently holds **two distinct projects both keyed `surency`**, in different
+> namespaces, now separable.
+>
+> They did **not** extend GUIDs to tickets or connections — we raised the parallel but did not ask.
+
 ## Summary — the hub needs to do almost nothing
 
 Everything Q-Agent needs is **already exposed and already readable by an agent-audience token**. The
