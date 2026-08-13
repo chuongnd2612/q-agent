@@ -47,6 +47,10 @@ class AutomationProject(Base):
     # Per-user ownership (#91) — nullable so the shared/auth-disabled namespace
     # ("workspace/shared/...") has a home too, matching workspace_scope.scope_for.
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    #: The owning project's GUID (#585). Nullable during the G1 bridge.
+    project_guid: Mapped[str | None] = mapped_column(
+        String(36), index=True, nullable=True, default=None
+    )
     project_key: Mapped[str] = mapped_column(String(128), index=True)
     # The repo this asset library belongs to. "" means "the project's only repo".
     repo: Mapped[str] = mapped_column(String(200), default="")

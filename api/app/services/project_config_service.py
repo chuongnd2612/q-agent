@@ -18,6 +18,8 @@ falling back to the sole configured project when only one exists.
 
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app import crypto
 from app.models.knowledge import ProjectKnowledge, compose_key
+from app.models.project import Project
 from app.models.project_config import ProjectConfig
 from app.models.user import User
 from app.models.provider_connection import ProviderConnection
@@ -76,6 +79,46 @@ def get_config_for_owner(db: Session, key: str, owner_id: int | None) -> Project
     row never match a different owner's same-keyed row.
     """
     return db.query(ProjectConfig).filter(ProjectConfig.key == key, ProjectConfig.owner_id == owner_id).first()
+
+
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def looks_like_guid(value: str) -> bool:
+    """True when ``value`` has the shape of a project GUID.
+
+    Shape only. A name *could* in principle be a UUID string, so this decides
+    which lookup to try first, never whether the project exists.
+    """
+    return bool(value and _GUID_RE.match(value))
+
+
+def resolve_project_identifier(db: Session, identifier: str, user: "User | None") -> str:
+    """Translate a project identifier — GUID **or** name — into the project name.
+
+    Named ``…_identifier``, not ``…_key``: this module already has a
+    :func:`resolve_project_key` that maps a *work-item connection* to a project
+    key (ADR 0006). Defining a second one silently shadowed it — Python keeps the
+    last definition — and every call site bound to the wrong function.
+
+    The G1 bridge for #585. Storage and routes still key off the name, so this is
+    the single place that understands both, letting GUID URLs work before the 288
+    call sites move. G4 deletes it, once nothing addresses a project by name.
+
+    Owner-scoped: a GUID resolves only to a project the caller may see, so it
+    cannot be used to discover another user's project name. An unknown or
+    non-GUID identifier is returned unchanged, which keeps every existing
+    name-based caller working exactly as before.
+    """
+    if not looks_like_guid(identifier):
+        return identifier
+    query = db.query(Project).filter(Project.guid == identifier)
+    if user is not None:
+        # Own rows or shared/legacy ones (owner_id NULL), matching
+        # `_ownership_mismatch` — never someone else's.
+        query = query.filter((Project.owner_id == user.id) | (Project.owner_id.is_(None)))
+    project = query.first()
+    return project.name if project is not None else identifier
 
 
 def get_config_visible_to(db: Session, key: str, user: "User | None") -> ProjectConfig | None:

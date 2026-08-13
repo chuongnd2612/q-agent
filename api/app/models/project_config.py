@@ -30,6 +30,11 @@ class ProjectConfig(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Keyed by project name (the UI's project identifier), matching ProjectKnowledge.key.
+    #: The owning project's GUID (#585). Nullable during the G1 bridge; ``key``
+    #: (the project NAME) is still written so nothing breaks mid-refactor.
+    project_guid: Mapped[str | None] = mapped_column(
+        String(36), index=True, nullable=True, default=None
+    )
     key: Mapped[str] = mapped_column(String(200), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
 

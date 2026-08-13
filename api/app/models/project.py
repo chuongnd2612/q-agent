@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from datetime import datetime
 
 from sqlalchemy import JSON, ForeignKey, Integer, String
@@ -14,6 +16,17 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    #: Stable public identifier (#585). Generated once and never reused.
+    #:
+    #: Everything about a project used to hang off its **name**: routes were
+    #: ``/projects/{name}/…`` and ``project_config`` / ``project_knowledge`` /
+    #: ``automation_projects`` all keyed by that string. Two users with the same
+    #: project name therefore collided (#583), and renaming a project orphaned its
+    #: config, knowledge and automation. The name is display text; this is
+    #: identity, and the two are now separate.
+    guid: Mapped[str] = mapped_column(
+        String(36), unique=True, index=True, default=lambda: str(uuid.uuid4())
+    )
     provider_kind: Mapped[str] = mapped_column(String(16), index=True)
     external_id: Mapped[str] = mapped_column(String(128), index=True)  # ADO/Jira project id/key
     name: Mapped[str] = mapped_column(String(200))
