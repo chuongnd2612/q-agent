@@ -98,6 +98,12 @@
     "saved": "Đã lưu cài đặt dự án",
     "saveError": "Lưu thất bại"
   },
+  "hubManaged": {
+    "title": "Được quản lý bởi EmeHub",
+    "body": "EmeHub sở hữu cấu hình của dự án này. Q-Agent chỉ hiển thị ở chế độ chỉ đọc — hãy mở dự án trong EmeHub để thay đổi.",
+    "bodyNoLink": "EmeHub sở hữu cấu hình dự án ở đây, nên Q-Agent chỉ hiển thị ở chế độ chỉ đọc. Dự án này chưa được liên kết với dự án nào trên EmeHub; hãy quản lý trong EmeHub.",
+    "openInHub": "Mở trong EmeHub"
+  },
   "manualLogin": {
     "captureFailed": "Không thể chụp phiên đăng nhập",
     "cleared": "Đã xóa phiên đăng nhập đã lưu",

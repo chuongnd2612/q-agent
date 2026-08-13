@@ -4,6 +4,9 @@ import { useBuildKnowledge } from "@/hooks/queries";
 import { useUI } from "@/store/ui";
 
 export interface BuildTarget {
+  /** The project's GUID (#587). Optional: a caller that only has a name still
+   *  works — the API resolves either — it just lands on the legacy URL shape. */
+  guid?: string | null;
   name: string;
   provider: string;
   repo: string;
@@ -23,7 +26,7 @@ export function useKnowledgeBuilder() {
     ui.startKnowledgeBuild(project.name);
     build.mutate(
       {
-        key: project.name,
+        key: project.guid || project.name,
         body: {
           name: project.name,
           provider: project.provider,
@@ -34,7 +37,9 @@ export function useKnowledgeBuilder() {
       {
         onSuccess: () => {
           useUI.getState().endKnowledgeBuild();
-          navigate(`/projects/${encodeURIComponent(project.name)}?tab=knowledge`);
+          navigate(
+            `/projects/${encodeURIComponent(project.guid || project.name)}?tab=knowledge`,
+          );
           toast.success(`Project Knowledge built for ${project.name}`);
         },
         onError: (err) => {

@@ -82,6 +82,11 @@ class ProjectOut(ApiModel):
     #: Display text. Not an identifier.
     name: str
     active: bool
+    #: The EmeHub project this row mirrors, when it mirrors one (#587). The SPA
+    #: deep-links to `<hub web origin>/app/projects/{hubProjectId}` from the
+    #: read-only settings tab; `None` means "no link we can complete", and the UI
+    #: shows a generic hint instead of a broken one.
+    hub_project_id: str | None = None
     meta: dict = Field(default_factory=dict)
 
 

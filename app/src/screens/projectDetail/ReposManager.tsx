@@ -18,11 +18,15 @@ export function ReposManager({
   repoConnectionName,
   repos,
   setRepos,
+  readOnly = false,
 }: {
   repoConnectionId: number | null;
   repoConnectionName: string;
   repos: ProjectRepo[];
   setRepos: (updater: (r: ProjectRepo[]) => ProjectRepo[]) => void;
+  /** EmeHub owns this project's configuration (#587): show the repos, offer no
+   *  way to change them. The API refuses the write regardless. */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation("projects");
   const [discovering, setDiscovering] = useState(false);
@@ -52,6 +56,8 @@ export function ReposManager({
     <GlassCard className="p-5">
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <div className="flex-1 text-[14px] font-bold">{t("repos.repositories")}</div>
+        {readOnly ? null : (
+        <>
         <Button
           variant="glass"
           onClick={() => setDiscovering(true)}
@@ -69,6 +75,8 @@ export function ReposManager({
         >
           <Plus size={14} strokeWidth={2.4} /> {t("repos.addManually")}
         </Button>
+        </>
+        )}
       </div>
       <p className="mb-4 text-[12.5px] leading-relaxed text-ink-dim">
         {t("repos.blurb1")}{" "}
@@ -84,7 +92,7 @@ export function ReposManager({
         </div>
       )}
 
-      {discovered.length > 0 && (
+      {!readOnly && discovered.length > 0 && (
         <div className="mb-3.5 rounded-[12px] border border-white/[0.08] bg-white/[0.03] p-2.5">
           <div className="mb-1.5 px-1 text-[11px] font-semibold tracking-wider text-faint">
             {t("repos.discoveredHint")}
@@ -122,7 +130,8 @@ export function ReposManager({
             >
               <div className="mb-2 flex items-center gap-2.5">
                 <button
-                  onClick={() => setDefault(i)}
+                  onClick={() => (readOnly ? undefined : setDefault(i))}
+                  disabled={readOnly}
                   title={r.default ? t("repos.defaultTarget") : t("repos.setDefault")}
                   className="flex h-6 w-6 items-center justify-center rounded-[7px]"
                   style={{ background: r.default ? "rgba(251,191,36,.16)" : "rgba(255,255,255,.05)" }}
@@ -133,6 +142,7 @@ export function ReposManager({
                   className={`${inputCls} max-w-[220px] font-mono`}
                   placeholder={t("repos.namePlaceholder")}
                   value={r.name}
+                  disabled={readOnly}
                   onChange={(e) => updateRepo(i, { name: e.target.value })}
                 />
                 {r.default && (
@@ -141,6 +151,7 @@ export function ReposManager({
                   </span>
                 )}
                 <div className="flex-1" />
+                {readOnly ? null : (
                 <button
                   onClick={() => removeRepo(i)}
                   className="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-white/[0.08] bg-white/[0.03] text-[#e06c75] hover:bg-white/[0.06]"
@@ -148,18 +159,21 @@ export function ReposManager({
                 >
                   <Trash2 size={14} strokeWidth={2.1} />
                 </button>
+                )}
               </div>
               <div className="grid grid-cols-1 gap-2.5 md:grid-cols-[2fr_1fr]">
                 <input
                   className={inputCls}
                   placeholder={t("repos.cloneUrlPlaceholder")}
                   value={r.repoUrl}
+                  disabled={readOnly}
                   onChange={(e) => updateRepo(i, { repoUrl: e.target.value })}
                 />
                 <input
                   className={inputCls}
                   placeholder={t("repos.localPathPlaceholder")}
                   value={r.localRepoPath}
+                  disabled={readOnly}
                   onChange={(e) => updateRepo(i, { localRepoPath: e.target.value })}
                 />
               </div>

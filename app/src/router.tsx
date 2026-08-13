@@ -84,7 +84,11 @@ const ROUTES = [
           { index: true, element: <Dashboard /> },
           { path: "getting-started", element: <GettingStarted /> },
           { path: "projects", element: <Projects /> },
-          { path: "projects/:projectName", element: <ProjectDetail /> },
+          // Addressed by GUID (#585/#587), not by name: names collide across
+          // users (#583) and change on rename. An older name-based deep link
+          // still lands here and resolves — `ProjectDetail` rewrites it to the
+          // canonical GUID URL rather than 404ing.
+          { path: "projects/:projectGuid", element: <ProjectDetail /> },
           { path: "tickets", element: <Tickets /> },
           { path: "tickets/:externalId", element: <TicketDetail /> },
           { path: "runs", element: <Runs /> },

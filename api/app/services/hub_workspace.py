@@ -257,6 +257,13 @@ def ensure_projects(
             owner_id=user.id, external_id=key, provider_kind=kind, active=False
         )
         project.name = name[:200]
+        # The hub's NUMERIC id, kept so the read-only settings tab can deep-link
+        # to where the configuration is actually editable (#587). The hub's own
+        # project screen routes by id, not by key. Only overwritten when the hub
+        # supplies one, so a re-mirror that omits it doesn't blank the link.
+        hub_id = _str(row.get("id"))
+        if hub_id:
+            project.hub_project_id = hub_id[:64]
         if conn is not None:
             project.connection_id = conn.id
             if not project.provider_kind:
