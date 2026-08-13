@@ -218,7 +218,12 @@ export const useUpdateSettings = () => {
 
 // -------------------------------------------------------------- projects
 export const useProjects = () =>
-  useQuery({ queryKey: queryKeys.projects, queryFn: api.listProjects });
+  useQuery({
+    queryKey: queryKeys.projects,
+    // The token is deliberately NOT in the key: it changes on every mint, so
+    // keying on it would make each fetch a cache miss.
+    queryFn: async () => api.listProjects(await hubTokenForRead()),
+  });
 
 export const useRefreshProjects = () => {
   const qc = useQueryClient();

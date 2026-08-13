@@ -611,7 +611,12 @@ export const api = {
   updateSettings: (body: SettingsUpdate) => put<SettingsOut>("/settings", body),
 
   // projects
-  listProjects: () => get<ProjectOut[]>("/projects"),
+  // Carries the hub token so the backend can mirror EmeHub's projects into this
+  // user's workspace before answering (#591). Without it the mirror declines and
+  // a hub user sees "No connected projects" forever — the config/repos reads got
+  // the token, this one never did.
+  listProjects: (hubToken: string | null = null) =>
+    getWithHubToken<ProjectOut[]>("/projects", hubToken),
   refreshProjects: () => post<ProjectOut[]>("/projects/refresh"),
 
   // shared namespace (ADR 0009): admin-curated catalog members clone from.
