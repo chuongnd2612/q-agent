@@ -73,8 +73,13 @@ class TestConnectionResult(ApiModel):
 # ---------------------------------------------------------------- Projects
 class ProjectOut(ApiModel):
     id: int
+    #: Stable public identifier (#585) — address a project by this, not by `name`.
+    #: Names collide across users and change when a project is renamed; this does
+    #: neither. Optional only while the G1 bridge is in place.
+    guid: str | None = None
     provider_kind: str
     external_id: str
+    #: Display text. Not an identifier.
     name: str
     active: bool
     meta: dict = Field(default_factory=dict)

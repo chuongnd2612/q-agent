@@ -37,6 +37,10 @@ class ProjectKnowledge(Base):
     # legacy project-level rows use just "<project>". See ``compose_key``.
     key: Mapped[str] = mapped_column(String(320), index=True)
     # The owning project (the UI's project identifier). Many repos → many rows.
+    #: The owning project's GUID (#585). See ProjectConfig.project_guid.
+    project_guid: Mapped[str | None] = mapped_column(
+        String(36), index=True, nullable=True, default=None
+    )
     project_key: Mapped[str] = mapped_column(String(200), default="", index=True)
     name: Mapped[str] = mapped_column(String(200))
     provider: Mapped[str] = mapped_column(String(64), default="")
