@@ -168,7 +168,9 @@ export function Projects() {
               project={p}
               summary={byProject.get(p.name)}
               index={i}
-              onOpen={() => navigate(`/projects/${encodeURIComponent(p.name)}`)}
+              // By GUID (#587). `p.name` only as a fallback for a row the G1
+              // backfill hasn't reached — the detail screen resolves either.
+              onOpen={() => navigate(`/projects/${encodeURIComponent(p.guid || p.name)}`)}
             />
           ))}
         </div>

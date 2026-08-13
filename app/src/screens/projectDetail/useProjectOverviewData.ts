@@ -18,7 +18,9 @@ import type { ProjectMeta } from "./types";
  * the {@link ProjectMeta} record. Pure relocation of the derivations previously
  * inline in `ProjectDetail`.
  *
- * @param key The decoded project name (route param).
+ * @param key The project identifier from the route — a GUID (#587), or a name
+ *   for an older deep link. Passed to the API unchanged: the backend resolves
+ *   either through `resolve_project_identifier`.
  */
 export function useProjectOverviewData(key: string) {
   const { t } = useTranslation("projects");
@@ -28,12 +30,16 @@ export function useProjectOverviewData(key: string) {
   const tickets = ticketsPage?.items;
   const { data: runs } = useRuns();
 
-  const project = projects?.find((p) => p.name === key);
+  // GUID first — that is the identity. Falling back to the name keeps a
+  // pre-#587 bookmark working; it is a *display* match, and the reason it can no
+  // longer be the primary one is that two users may each have a "Surency" (#583).
+  const project =
+    projects?.find((p) => p.guid === key) ?? projects?.find((p) => p.name === key);
   const providerKind: ProviderKind = project?.providerKind ?? "ado";
   const repoList = repos ?? [];
   const indexedRepos = repoList.filter((r) => r.status === "indexed");
   const meta: ProjectMeta = {
-    name: key,
+    name: project?.name ?? key,
     repo: repoList.length ? t("header.repoCount", { count: repoList.length }) : "",
     framework: "Playwright",
     provider: providerLabel[providerKind],
@@ -56,6 +62,8 @@ export function useProjectOverviewData(key: string) {
   const glyphColor = meta.providerKind === "github" ? "#12121a" : "#fff";
 
   return {
+    /** The matched project row, or `undefined` while the list is still loading. */
+    project,
     meta,
     providerKind,
     repoList,

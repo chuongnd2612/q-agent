@@ -98,6 +98,12 @@
     "saved": "Project settings saved",
     "saveError": "Save failed"
   },
+  "hubManaged": {
+    "title": "Managed by EmeHub",
+    "body": "EmeHub owns this project's configuration. Q-Agent shows it read-only — open the project in EmeHub to change it.",
+    "bodyNoLink": "EmeHub owns project configuration here, so Q-Agent shows it read-only. This project isn't linked to an EmeHub project yet; manage it in EmeHub.",
+    "openInHub": "Open in EmeHub"
+  },
   "manualLogin": {
     "captureFailed": "Failed to capture login",
     "cleared": "Saved login cleared",

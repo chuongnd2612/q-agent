@@ -14,9 +14,18 @@ export function ProjectStatusButton() {
   const { data: projects } = useProjects();
 
   // Active project: from the URL on a project route, else the first project.
+  //
+  // The URL segment is the project's GUID (#587), so it is looked up rather than
+  // printed — printing it put a raw UUID in the top bar. Falling back to the
+  // segment keeps an older name-based link readable while the list loads.
   const projMatch = pathname.match(/^\/projects\/([^/]+)/);
-  const activeProject = projMatch
-    ? decodeURIComponent(projMatch[1])
+  const routeIdentifier = projMatch ? decodeURIComponent(projMatch[1]) : "";
+  const routeProject = routeIdentifier
+    ? (projects?.find((p) => p.guid === routeIdentifier) ??
+      projects?.find((p) => p.name === routeIdentifier))
+    : undefined;
+  const activeProject = routeIdentifier
+    ? (routeProject?.name ?? routeIdentifier)
     : (projects?.[0]?.name ?? "");
   const connected = Boolean(activeProject);
   const label = activeProject || "No project";

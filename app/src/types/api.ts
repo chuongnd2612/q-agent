@@ -52,10 +52,19 @@ export interface TestConnectionResult {
 
 export interface ProjectOut {
   id: number;
+  /** Stable public identifier (#585). Address a project by this — routes, links
+   *  and API calls — never by `name`, which collides across users (#583) and
+   *  changes on rename. Optional only while the G1 name bridge is in place. */
+  guid?: string | null;
   providerKind: ProviderKind;
   externalId: string;
+  /** Display text. Not an identifier. */
   name: string;
   active: boolean;
+  /** The EmeHub project this row mirrors, when it mirrors one (#587) — the hub's
+   *  numeric id, used to deep-link its project screen. `null` when there is none,
+   *  in which case the UI shows a generic hint rather than a broken link. */
+  hubProjectId?: string | null;
   meta: Record<string, unknown>;
 }
 

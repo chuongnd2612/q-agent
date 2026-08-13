@@ -161,6 +161,9 @@ def list_knowledge(
 def get_knowledge(
     key: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
 ) -> ProjectKnowledge:
+    # The SPA addresses projects by GUID (#587); knowledge rows are still keyed by
+    # the name, so translate here (a non-GUID passes through unchanged).
+    key = project_config_service.resolve_project_identifier(db, key, user)
     row = db.query(ProjectKnowledge).filter(ProjectKnowledge.key == key).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"No knowledge base for project '{key}'")
@@ -180,6 +183,9 @@ def build_knowledge(
     Scoped to ``user`` (#93): rebuilding another user's existing knowledge base
     404s; a new row is stamped with the current user's ownership.
     """
+    # GUID -> name (#587): a build started from the SPA arrives keyed by GUID, and
+    # a row created here must carry the name the rest of the pipeline uses.
+    key = project_config_service.resolve_project_identifier(db, key, user)
     row = db.query(ProjectKnowledge).filter(ProjectKnowledge.key == key).first()
     check_owned_or_404(row, user, not_found=f"No knowledge base for project '{key}'")
     if not row:
@@ -208,6 +214,32 @@ def build_knowledge(
 
 
 # --------------------------------------------------------------- Project Config
+#: Refusal message for a project-config write while EmeHub owns project data.
+#: Names EmeHub explicitly — "read-only" alone tells the caller nothing about
+#: where the change can actually be made.
+HUB_OWNS_PROJECTS_DETAIL = (
+    "Project configuration is managed by EmeHub. Edit this project in EmeHub; "
+    "Q-Agent shows it read-only."
+)
+
+
+def _reject_if_hub_owns_projects() -> None:
+    """409 when ``QAGENT_HUB_DATA_ENABLED`` is on, so the API agrees with the UI.
+
+    Hiding the Save button while the endpoint still accepts a ``PUT`` is the #512
+    defect in a new place: the screen says one thing and the API does another, and
+    anything that isn't the screen (a stale tab, the docs page, a script) writes
+    into a store EmeHub is about to overwrite.
+
+    Gated on exactly the flag the SPA reads from ``/health``
+    (``settings.hub_data_enabled``), not on :func:`hub_client.enabled`, so the two
+    surfaces can never disagree about whether the control should be there.
+
+    409 rather than 403: nothing is wrong with the caller or their token — the
+    deployment's mode conflicts with the write.
+    """
+    if settings.hub_data_enabled:
+        raise HTTPException(status_code=409, detail=HUB_OWNS_PROJECTS_DETAIL)
 @router.get("/{key}/config", response_model=ProjectConfigOut)
 def get_project_config(
     key: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
@@ -236,7 +268,10 @@ def save_project_config(
 
     Scoped to ``user`` (#93): updating another user's config 404s; a newly
     created config is stamped with the current user's ownership.
+
+    Refused outright when EmeHub owns project data (#587).
     """
+    _reject_if_hub_owns_projects()
     key = project_config_service.resolve_project_identifier(db, key, user)
     existing = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(existing, user, not_found=f"Project config '{key}' not found")
@@ -449,6 +484,9 @@ def get_repo_knowledge(
     key: str, repo: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
 ) -> ProjectKnowledge:
     """Scoped to ``user`` (#93): another user's per-repo knowledge base 404s."""
+    # GUID -> name (#587): `compose_key` builds the stored row key from the
+    # project name, so the GUID has to be translated before composing.
+    key = project_config_service.resolve_project_identifier(db, key, user)
     row = (
         db.query(ProjectKnowledge)
         .filter(ProjectKnowledge.key == compose_key(key, repo))
@@ -526,12 +564,18 @@ _exploring: dict[tuple[str, str], str] = {}
 _explore_results: dict[tuple[str, str], dict] = {}
 
 
-def _resolve_repo_or_404(db: Session, key: str, repo: str, user: User | None) -> None:
+def _resolve_repo_or_404(db: Session, key: str, repo: str, user: User | None) -> str:
     """Resolve + authorize a project config and assert ``repo`` is configured.
 
     Mirrors :func:`build_repo_knowledge`'s resolve pattern: another user's config
-    404s (ownership), and an unconfigured repo name 404s. Raises ``HTTPException``;
-    returns nothing on success.
+    404s (ownership), and an unconfigured repo name 404s. Raises ``HTTPException``
+    on failure.
+
+    **Returns the resolved project name** (#587). It used to return nothing, which
+    left callers holding whatever the URL carried — now a GUID from the SPA — and
+    the in-flight/result maps below are keyed by that value. A session started
+    under a GUID and polled under a name (or vice versa, from the agent side)
+    would then look like two different sessions.
     """
     key = project_config_service.resolve_project_identifier(db, key, user)
     config = project_config_service.get_config_visible_to(db, key, user)
@@ -541,6 +585,7 @@ def _resolve_repo_or_404(db: Session, key: str, repo: str, user: User | None) ->
         raise HTTPException(
             status_code=404, detail=f"Repo '{repo}' is not configured for project '{key}'"
         )
+    return key
 
 
 def _run_code_for(db: Session, run_id: int | None) -> str | None:
@@ -641,7 +686,8 @@ def start_exploration(
     ``explore.progress`` on the run WebSocket when ``runId`` is set; poll
     :func:`exploration_status` for navigation-survival status.
     """
-    _resolve_repo_or_404(db, key, repo, user)
+    # The route param may be a GUID (#587); everything below keys off the name.
+    key = _resolve_repo_or_404(db, key, repo, user)
     session_id = uuid.uuid4().hex
     owner_id = user.id if user else None
     target = body.target.model_dump()
@@ -711,7 +757,8 @@ def exploration_status(
     and a session has completed, returns a summary of the latest terminal result
     (stop reason, steps, whether the KB was written, discovered counts).
     """
-    _resolve_repo_or_404(db, key, repo, user)
+    # The route param may be a GUID (#587); everything below keys off the name.
+    key = _resolve_repo_or_404(db, key, repo, user)
     with _explore_lock:
         in_flight = _exploring.get((key, repo))
         last = _explore_results.get((key, repo))

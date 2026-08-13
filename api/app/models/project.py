@@ -27,6 +27,16 @@ class Project(Base):
     guid: Mapped[str] = mapped_column(
         String(36), unique=True, index=True, default=lambda: str(uuid.uuid4())
     )
+    # Set when this row MIRRORS a project EmeHub owns (#587), following the
+    # ``hub_connection_id`` / ``hub_ticket_id`` convention. It is the hub's
+    # **numeric id**, not its key: the hub's project screen deep-links by id
+    # (``<hub web origin>/app/projects/{id}``, verified in the hub's
+    # `screens/Projects/index.tsx`). NULL for a project discovered locally, which
+    # is why the UI must degrade to a generic "manage in EmeHub" hint rather than
+    # building a link it cannot complete.
+    hub_project_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True, default=None
+    )
     provider_kind: Mapped[str] = mapped_column(String(16), index=True)
     external_id: Mapped[str] = mapped_column(String(128), index=True)  # ADO/Jira project id/key
     name: Mapped[str] = mapped_column(String(200))

@@ -27,20 +27,34 @@ import { ReposManager } from "./ReposManager";
  * loaded `config`, the `onSave` handler, and (optionally) the manual-login
  * widget via `renderManualLogin`, so it serves both a user's own project and the
  * admin shared-workspace settings page.
+ *
+ * `readOnly` renders the same values with no way to change them (#587): every
+ * field disabled, every add/remove control and Save gone. It presents a decision
+ * made elsewhere; it does not enforce it. The API refuses the write under the
+ * same flag, because a read-only screen over a writable endpoint is the #512
+ * defect in a new place.
  */
 export function ProjectSettingsForm({
   config,
   saving,
   onSave,
   renderManualLogin,
+  readOnly = false,
 }: {
   config: ProjectConfigOut;
   saving: boolean;
   onSave: (patch: ProjectConfigUpdate) => void;
   renderManualLogin?: (hasBaseUrl: boolean) => ReactNode;
+  /** Show the configuration, offer no way to change it (#587). */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation("projects");
   const { data: providers } = useProviders();
+  // `Select` and `ToggleRow` are div-based and take no `disabled` prop, so a
+  // non-interactive shell is the complete block for them: with no focusable
+  // element inside, there is no keyboard path around `pointer-events: none`.
+  // Native inputs get a real `disabled` instead — that one has a keyboard path.
+  const roShell = readOnly ? "pointer-events-none opacity-60" : "";
 
   const [baseUrl, setBaseUrl] = useState("");
   const [repos, setRepos] = useState<ProjectRepo[]>([]);
@@ -109,7 +123,7 @@ export function ProjectSettingsForm({
           {t("settingsForm.providerConnectionsDesc")}
         </p>
         <div className="grid max-w-[560px] grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
+          <div className={roShell}>
             <label className={labelCls}>{t("settingsForm.workItemProvider")}</label>
             <Select
               value={workItemConnectionId != null ? String(workItemConnectionId) : null}
@@ -119,7 +133,7 @@ export function ProjectSettingsForm({
               emptyLabel={t("settingsForm.noWorkItemConnections")}
             />
           </div>
-          <div>
+          <div className={roShell}>
             <label className={labelCls}>{t("settingsForm.repositoryProvider")}</label>
             <Select
               value={repositoryConnectionId != null ? String(repositoryConnectionId) : null}
@@ -143,12 +157,14 @@ export function ProjectSettingsForm({
             className={inputCls}
             placeholder="https://staging.example.com"
             value={baseUrl}
+            disabled={readOnly}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
         </div>
       </GlassCard>
 
       <GlassCard className="p-5">
+        <div className={roShell}>
         <ToggleRow
           title={t("settingsForm.manualLoginTitle")}
           description={t("settingsForm.manualLoginDesc")}
@@ -156,6 +172,7 @@ export function ProjectSettingsForm({
           onChange={setManualAuth}
           bordered={false}
         />
+        </div>
         <p className="mt-1 text-[12.5px] leading-relaxed text-ink-dim">
           {t("settingsForm.manualLoginNote")}
         </p>
@@ -167,19 +184,22 @@ export function ProjectSettingsForm({
         repoConnectionName={repoConn?.name ?? ""}
         repos={repos}
         setRepos={setRepos}
+        readOnly={readOnly}
       />
 
       <GlassCard className="p-5">
         <div className="mb-1 flex items-center gap-2">
           <div className="flex-1 text-[14px] font-bold">{t("settingsForm.testAccounts")}</div>
-          <Button
-            variant="glass"
-            onClick={() =>
-              setAccounts((a) => [...a, { role: "", username: "", password: "", notes: "", hasPassword: false }])
-            }
-          >
-            <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addAccount")}
-          </Button>
+          {readOnly ? null : (
+            <Button
+              variant="glass"
+              onClick={() =>
+                setAccounts((a) => [...a, { role: "", username: "", password: "", notes: "", hasPassword: false }])
+              }
+            >
+              <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addAccount")}
+            </Button>
+          )}
         </div>
         <p className="mb-4 text-[12.5px] leading-relaxed text-ink-dim">
           {t("settingsForm.testAccountsDesc")}
@@ -196,6 +216,7 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder={t("settingsForm.rolePlaceholder")}
                   value={acct.role}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setAccounts((a) => a.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))
                   }
@@ -207,6 +228,7 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder="qa@example.com"
                   value={acct.username}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setAccounts((a) => a.map((x, j) => (j === i ? { ...x, username: e.target.value } : x)))
                   }
@@ -219,6 +241,7 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder={acct.hasPassword ? t("settingsForm.passwordUnchanged") : t("settingsForm.passwordNew")}
                   value={acct.password}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setAccounts((a) => a.map((x, j) => (j === i ? { ...x, password: e.target.value } : x)))
                   }
@@ -230,11 +253,13 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder={t("settingsForm.optional")}
                   value={acct.notes}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setAccounts((a) => a.map((x, j) => (j === i ? { ...x, notes: e.target.value } : x)))
                   }
                 />
               </div>
+              {readOnly ? null : (
               <button
                 onClick={() => setAccounts((a) => a.filter((_, j) => j !== i))}
                 className="mb-0.5 flex h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-white/[0.08] bg-white/[0.03] text-[#e06c75] hover:bg-white/[0.06]"
@@ -242,6 +267,7 @@ export function ProjectSettingsForm({
               >
                 <Trash2 size={15} strokeWidth={2.1} />
               </button>
+              )}
             </div>
           ))}
         </div>
@@ -250,12 +276,14 @@ export function ProjectSettingsForm({
       <GlassCard className="p-5">
         <div className="mb-1 flex items-center gap-2">
           <div className="flex-1 text-[14px] font-bold">{t("settingsForm.environments")}</div>
-          <Button
-            variant="glass"
-            onClick={() => setEnvironments((e) => [...e, { name: "", baseUrl: "", notes: "" }])}
-          >
-            <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addEnvironment")}
-          </Button>
+          {readOnly ? null : (
+            <Button
+              variant="glass"
+              onClick={() => setEnvironments((e) => [...e, { name: "", baseUrl: "", notes: "" }])}
+            >
+              <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addEnvironment")}
+            </Button>
+          )}
         </div>
         <p className="mb-4 text-[12.5px] leading-relaxed text-ink-dim">
           {t("settingsForm.environmentsDesc")}
@@ -272,6 +300,7 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder={t("settingsForm.namePlaceholder")}
                   value={env.name}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setEnvironments((v) => v.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
                   }
@@ -283,6 +312,7 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder="https://staging.example.com"
                   value={env.baseUrl}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setEnvironments((v) => v.map((x, j) => (j === i ? { ...x, baseUrl: e.target.value } : x)))
                   }
@@ -294,11 +324,13 @@ export function ProjectSettingsForm({
                   className={inputCls}
                   placeholder={t("settingsForm.optional")}
                   value={env.notes}
+                  disabled={readOnly}
                   onChange={(e) =>
                     setEnvironments((v) => v.map((x, j) => (j === i ? { ...x, notes: e.target.value } : x)))
                   }
                 />
               </div>
+              {readOnly ? null : (
               <button
                 onClick={() => setEnvironments((v) => v.filter((_, j) => j !== i))}
                 className="mb-0.5 flex h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-white/[0.08] bg-white/[0.03] text-[#e06c75] hover:bg-white/[0.06]"
@@ -306,6 +338,7 @@ export function ProjectSettingsForm({
               >
                 <Trash2 size={15} strokeWidth={2.1} />
               </button>
+              )}
             </div>
           ))}
         </div>
@@ -314,9 +347,11 @@ export function ProjectSettingsForm({
       <GlassCard className="p-5">
         <div className="mb-1 flex items-center gap-2">
           <div className="flex-1 text-[14px] font-bold">{t("settingsForm.additionalSettings")}</div>
-          <Button variant="glass" onClick={() => setExtra((x) => [...x, { k: "", v: "" }])}>
-            <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addValue")}
-          </Button>
+          {readOnly ? null : (
+            <Button variant="glass" onClick={() => setExtra((x) => [...x, { k: "", v: "" }])}>
+              <Plus size={14} strokeWidth={2.4} /> {t("settingsForm.addValue")}
+            </Button>
+          )}
         </div>
         <p className="mb-4 text-[12.5px] leading-relaxed text-ink-dim">
           {t("settingsForm.additionalSettingsDesc")}
@@ -328,14 +363,17 @@ export function ProjectSettingsForm({
                 className={inputCls}
                 placeholder={t("settingsForm.keyPlaceholder")}
                 value={row.k}
+                disabled={readOnly}
                 onChange={(e) => setExtra((x) => x.map((r, j) => (j === i ? { ...r, k: e.target.value } : r)))}
               />
               <input
                 className={inputCls}
                 placeholder={t("settingsForm.valuePlaceholder")}
                 value={row.v}
+                disabled={readOnly}
                 onChange={(e) => setExtra((x) => x.map((r, j) => (j === i ? { ...r, v: e.target.value } : r)))}
               />
+              {readOnly ? null : (
               <button
                 onClick={() => setExtra((x) => x.filter((_, j) => j !== i))}
                 className="flex h-[38px] w-[38px] items-center justify-center rounded-[10px] border border-white/[0.08] bg-white/[0.03] text-[#e06c75] hover:bg-white/[0.06]"
@@ -343,22 +381,25 @@ export function ProjectSettingsForm({
               >
                 <Trash2 size={15} strokeWidth={2.1} />
               </button>
+              )}
             </div>
           ))}
         </div>
       </GlassCard>
 
-      <div className="flex justify-end">
-        <Button
-          variant="primary"
-          size="lg"
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full md:w-auto"
-        >
-          {saving ? t("settingsForm.saving") : t("settingsForm.save")}
-        </Button>
-      </div>
+      {readOnly ? null : (
+        <div className="flex justify-end">
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={handleSave}
+            disabled={saving}
+            className="w-full md:w-auto"
+          >
+            {saving ? t("settingsForm.saving") : t("settingsForm.save")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

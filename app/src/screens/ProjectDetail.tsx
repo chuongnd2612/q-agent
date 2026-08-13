@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { type ProjectTab } from "@/store/ui";
@@ -16,13 +17,17 @@ export { ManualLoginStatusView } from "./projectDetail/ManualLogin";
 
 export function ProjectDetail() {
   const navigate = useNavigate();
-  const { projectName } = useParams();
-  const key = decodeURIComponent(projectName ?? "");
+  const { projectGuid } = useParams();
+  // The route param is the project's GUID (#587). It may still be a *name* when
+  // someone follows a pre-#587 bookmark, so it is passed through as an opaque
+  // identifier — the API resolves either — and the URL is rewritten below.
+  const key = decodeURIComponent(projectGuid ?? "");
   const [searchParams, setSearchParams] = useSearchParams();
   const projectTab = (searchParams.get("tab") as ProjectTab) ?? "overview";
   const setProjectTab = (t: ProjectTab) => setSearchParams({ tab: t });
 
   const {
+    project,
     meta,
     providerKind,
     repoList,
@@ -35,6 +40,19 @@ export function ProjectDetail() {
     glyphBg,
     glyphColor,
   } = useProjectOverviewData(key);
+
+  // Canonicalise a name-based deep link to its GUID, in place. The screen works
+  // either way (the API resolves both), so this is not a fix for a broken link —
+  // it stops a copied URL from spreading the identifier we are retiring.
+  const canonicalGuid = project?.guid;
+  useEffect(() => {
+    if (canonicalGuid && canonicalGuid !== key) {
+      navigate(
+        { pathname: `/projects/${encodeURIComponent(canonicalGuid)}`, search: searchParams.toString() },
+        { replace: true },
+      );
+    }
+  }, [canonicalGuid, key, navigate, searchParams]);
 
   const onTab = (id: ProjectTab) => {
     if (id === "tickets") navigate("/tickets");
@@ -69,7 +87,7 @@ export function ProjectDetail() {
           {projectTab === "overview" ? (
             <Overview meta={meta} confidence={confidence} onView={() => setProjectTab("knowledge")} />
           ) : projectTab === "settings" ? (
-            <ProjectSettingsTab projectKey={key} />
+            <ProjectSettingsTab projectKey={key} hubProjectId={project?.hubProjectId ?? null} />
           ) : (
             <KnowledgeTab
               projectKey={key}
