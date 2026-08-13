@@ -243,6 +243,8 @@ def _reject_if_hub_owns_projects() -> None:
 @router.get("/{key}/config", response_model=ProjectConfigOut)
 def get_project_config(
     key: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+,
+    hub: str | None = Depends(hub_token_header),
 ) -> dict:
     """Return a project's runtime config (test accounts masked).
 
@@ -252,6 +254,11 @@ def get_project_config(
     # storage and the remaining call sites still key off the name, so this is
     # the one place that understands both. A non-GUID is returned unchanged.
     key = project_config_service.resolve_project_identifier(db, key, user)
+    # Pull the hub's configuration for a hub-sourced project before reading
+    # (#590): the project mirror creates the row, this fills in the repos,
+    # environments and connection bindings that hang off it. Idempotent, and
+    # silent when the hub is unreachable.
+    hub_workspace.ensure_project_config(db, user, key, hub)
     row = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(row, user, not_found=f"Project config '{key}' not found")
     return project_config_service.public_config(row, key)
@@ -444,12 +451,19 @@ def list_available_repos(
 @router.get("/{key}/repos", response_model=list[RepoKnowledgeOut])
 def list_project_repos(
     key: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+,
+    hub: str | None = Depends(hub_token_header),
 ) -> list[dict]:
     """The project's configured repos, each annotated with its knowledge-base status.
 
     Scoped to ``user`` (#93): another user's project config 404s.
     """
     key = project_config_service.resolve_project_identifier(db, key, user)
+    # Pull the hub's configuration for a hub-sourced project before reading
+    # (#590): the project mirror creates the row, this fills in the repos,
+    # environments and connection bindings that hang off it. Idempotent, and
+    # silent when the hub is unreachable.
+    hub_workspace.ensure_project_config(db, user, key, hub)
     config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
     repos = project_config_service.get_repos(config)
