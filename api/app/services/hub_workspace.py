@@ -37,7 +37,7 @@ from app.models.provider_connection import ProviderConnection
 from app.models.run import RunTicket
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.services import hub_client
+from app.services import hub_client, project_config_service
 
 # The hub spells Azure DevOps `azure_devops`; we spell it `ado` (#507). Shared
 # with the ticket read-through's join key so both sides agree.
@@ -349,3 +349,90 @@ def fill_ticket_detail(db: Session, ticket: Ticket, hub_token: str | None) -> Ti
     db.commit()
     db.refresh(ticket)
     return ticket
+
+
+def _local_connection_id(db: Session, user: User, hub_connection_id: Any) -> int | None:
+    """Map a **hub** connection id onto the caller's mirrored local connection.
+
+    The hub's config names its own connection ids. Copying one straight into
+    ``work_item_connection_id`` would point at whatever local row happens to hold
+    that primary key — a different provider, or another user's — so it is
+    translated through ``hub_connection_id``, the mapping the connection mirror
+    already records. Unmapped means ``None``: no binding is better than a wrong
+    one, and this is the same class of mistake as the `azure_devops`/`ado` join
+    that silently matched nothing (#507).
+    """
+    hub_id = _str(hub_connection_id)
+    if not hub_id:
+        return None
+    conn = db.scalar(
+        select(ProviderConnection).where(
+            ProviderConnection.hub_connection_id == hub_id,
+            ProviderConnection.owner_id == user.id,
+        )
+    )
+    return conn.id if conn is not None else None
+
+
+def ensure_project_config(db: Session, user: User | None, key: str, hub_token: str | None) -> bool:
+    """Mirror a hub project's configuration into the caller's own config row.
+
+    Q-Agent showed an empty Settings tab for a hub project — no repos, no
+    environments — because the project mirror created a bare ``projects`` row and
+    never copied the configuration that hangs off it. The hub had it all along
+    (``GET /projects/{key}/config`` is agent-readable); we simply never asked.
+
+    Called from the config/repos reads rather than from the bulk project mirror,
+    because the bulk path runs on every ticket-list load and this would make it
+    one hub round trip **per project** on a screen that shows none of it.
+
+    Returns True when a mirror happened. Never raises: a hub outage leaves
+    whatever is already local, so Settings still renders (#491).
+
+    Only mirrors onto projects that came from the hub — a purely local project's
+    config is never overwritten by hub data.
+    """
+    if user is None or not hub_token or not hub_client.enabled():
+        return False
+
+    project = db.scalar(
+        select(Project).where(Project.name == key, Project.owner_id == user.id)
+    ) or db.scalar(
+        select(Project).where(Project.external_id == key, Project.owner_id == user.id)
+    )
+    if project is None or not project.hub_project_id:
+        return False  # not a hub-sourced project — leave local config alone
+
+    try:
+        cfg = hub_client.get_project_config(project.external_id or key, hub_token)
+    except hub_client.HubClientError as exc:
+        logger.info("hub project config unavailable for {}: {}", key, exc)
+        return False
+    if not isinstance(cfg, dict):
+        return False
+
+    repos = cfg.get("repos")
+    patch: dict[str, Any] = {
+        "name": _str(cfg.get("name")) or key,
+        "base_url": _str(cfg.get("baseUrl")),
+        # Already our shape (name/repo_url/default_branch/local_repo_path/default).
+        "repos": repos if isinstance(repos, list) else [],
+        "environments": cfg.get("environments") if isinstance(cfg.get("environments"), list) else [],
+        "extra": cfg.get("extra") if isinstance(cfg.get("extra"), dict) else {},
+        "manual_auth": bool(cfg.get("manualAuth")),
+        "work_item_connection_id": _local_connection_id(db, user, cfg.get("workItemConnectionId")),
+        "repository_connection_id": _local_connection_id(db, user, cfg.get("repositoryConnectionId")),
+    }
+
+    # Test accounts only when the hub actually has some. Passing an empty list
+    # would delete locally-held accounts — and their passwords, which the hub
+    # never sends — so an absent list means "nothing to say", not "none".
+    accounts = cfg.get("testAccounts")
+    if isinstance(accounts, list) and accounts:
+        patch["test_accounts"] = accounts
+
+    row = project_config_service.upsert_config_for_owner(db, key, patch, user.id)
+    row.project_guid = project.guid
+    db.commit()
+    logger.info("mirrored hub project config for {} ({} repos)", key, len(patch["repos"]))
+    return True

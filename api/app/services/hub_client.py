@@ -412,3 +412,18 @@ def list_saved_queries(hub_token: str) -> list[dict[str, Any]]:
     saved queries instead of Q-Agent keeping a private browser-local copy.
     """
     return get_json("/ticket-queries", hub_token)
+
+
+def get_project_config(project_key: str, hub_token: str) -> dict[str, Any]:
+    """A hub project's configuration — repos, environments, connection bindings.
+
+    Agent-readable (measured): ``baseUrl``, ``environments``, ``repos``,
+    ``testAccounts``, ``manualAuth``, ``workItemConnectionId``,
+    ``repositoryConnectionId``, ``extra``.
+
+    ``repos`` already arrives in our own shape — ``name``, ``repo_url``,
+    ``default_branch``, ``local_repo_path``, ``default`` — so it needs no
+    translation. The two connection ids are **the hub's**, and do need it:
+    see :func:`app.services.hub_workspace.ensure_project_config`.
+    """
+    return get_json(f"/projects/{project_key}/config", hub_token)
