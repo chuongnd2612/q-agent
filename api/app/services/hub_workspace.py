@@ -392,7 +392,19 @@ def ensure_project_config(db: Session, user: User | None, key: str, hub_token: s
     Only mirrors onto projects that came from the hub — a purely local project's
     config is never overwritten by hub data.
     """
-    if user is None or not hub_token or not hub_client.enabled():
+    if user is None or not hub_client.enabled():
+        return False
+    if not hub_token:
+        # A missing token here is a WIRING bug, not an outage: the caller reached a
+        # read that mirrors hub config without attaching `X-Hub-Token`, so we ask
+        # the hub for nothing and the screen shows the bare mirrored row. That is
+        # #592, and it was invisible precisely because this function is silent by
+        # design (so a hub outage cannot break Settings). Say something.
+        logger.info(
+            "hub project config not mirrored for {}: no X-Hub-Token on the request "
+            "(the caller must attach one for a hub-owned project)",
+            key,
+        )
         return False
 
     project = db.scalar(

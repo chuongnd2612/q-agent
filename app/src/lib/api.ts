@@ -655,8 +655,18 @@ export const api = {
     ),
 
   // project config (test account, base URL, environments, repos)
-  getProjectConfig: (key: string) =>
-    get<ProjectConfigOut>(`/projects/${encodeURIComponent(key)}/config`),
+  //
+  // `hubToken` is what lets the backend mirror a HUB-owned project's config before
+  // reading it (#592). Without the header `ensure_project_config` returns on its
+  // first line and the Settings tab renders the bare mirrored row -- no repos, no
+  // environments -- with nothing logged, because that path is deliberately silent
+  // so a hub outage cannot break the screen. Optional and purely additive: a null
+  // token still serves local config.
+  getProjectConfig: (key: string, hubToken: string | null = null) =>
+    getWithHubToken<ProjectConfigOut>(
+      `/projects/${encodeURIComponent(key)}/config`,
+      hubToken,
+    ),
   saveProjectConfig: (key: string, body: ProjectConfigUpdate) =>
     put<ProjectConfigOut>(`/projects/${encodeURIComponent(key)}/config`, body),
 
@@ -669,8 +679,13 @@ export const api = {
     post<AuthState>(`/projects/${encodeURIComponent(key)}/auth/capture`),
 
   // project repos + per-repo knowledge
-  listProjectRepos: (key: string) =>
-    get<RepoKnowledgeOut[]>(`/projects/${encodeURIComponent(key)}/repos`),
+  // Same hub mirror as `getProjectConfig` (#592): repos come from the hub's project
+  // config, so this read needs the token for the same reason.
+  listProjectRepos: (key: string, hubToken: string | null = null) =>
+    getWithHubToken<RepoKnowledgeOut[]>(
+      `/projects/${encodeURIComponent(key)}/repos`,
+      hubToken,
+    ),
   getRepoKnowledge: (key: string, repo: string) =>
     get<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge`,
@@ -839,13 +854,21 @@ export const api = {
   // Export the automation project to a customer-owned git remote (#549). Both are
   // user-triggered: the GET only prefills the panel (it pushes nothing) and the POST
   // is the explicit action, with the remote and branch chosen by the user.
-  automationExportPreflight: (runId: number | string, projectId?: number | null) =>
+  automationExportPreflight: (
+    runId: number | string,
+    projectId?: number | null,
+  ) =>
     get<AutomationExportPreflight>(
       `/runs/${runId}/automation/export${projectId ? `?projectId=${projectId}` : ""}`,
     ),
   exportAutomationProject: (
     runId: number | string,
-    body: { remoteUrl: string; branch: string; projectId?: number | null; message?: string },
+    body: {
+      remoteUrl: string;
+      branch: string;
+      projectId?: number | null;
+      message?: string;
+    },
   ) => post<AutomationExportResult>(`/runs/${runId}/automation/export`, body),
 
   exploreStatus: (projectKey: string, repo: string) =>
