@@ -11,7 +11,11 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { ApiError, api } from "@/lib/api";
-import { fetchHubSsoConfig, mintHubDataToken, type HubSsoConfig } from "@/lib/hubSso";
+import {
+  fetchHubSsoConfig,
+  mintHubDataToken,
+  type HubSsoConfig,
+} from "@/lib/hubSso";
 import { queryKeys } from "@/lib/queryKeys";
 import type {
   AnnotationShape,
@@ -47,7 +51,8 @@ export const useAiStats = () =>
     queryKey: queryKeys.aiStats,
     // Wrap so react-query's fetch context isn't passed as the `force` arg.
     queryFn: () => api.aiStats(),
-    refetchInterval: (q) => (q.state.data?.limitsStatus === "loading" ? 3_000 : 30_000),
+    refetchInterval: (q) =>
+      q.state.data?.limitsStatus === "loading" ? 3_000 : 30_000,
   });
 
 // Manual reload for the stats panel: forces the server to bypass its caches and
@@ -63,23 +68,30 @@ export const useRefreshAiStats = () => {
 
 // Claude CLI credentials (#95) — own (per-user) + shared (admin-only) status.
 export const useClaudeCredentialsStatus = () =>
-  useQuery({ queryKey: queryKeys.claudeCredentialsStatus, queryFn: api.claudeCredentials.status });
+  useQuery({
+    queryKey: queryKeys.claudeCredentialsStatus,
+    queryFn: api.claudeCredentials.status,
+  });
 
 // On-demand credential test (real minimal Claude call). Refresh the status
 // afterwards so the passive expired/active indicator reflects the outcome.
 export const useTestClaudeCredentials = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (scope?: "effective" | "shared" | "own") => api.claudeCredentials.test(scope),
-    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    mutationFn: (scope?: "effective" | "shared" | "own") =>
+      api.claudeCredentials.test(scope),
+    onSettled: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
 export const useUploadOwnClaudeCredentials = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: ClaudeCredentialsUpload) => api.claudeCredentials.uploadOwn(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    mutationFn: (body: ClaudeCredentialsUpload) =>
+      api.claudeCredentials.uploadOwn(body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
@@ -87,7 +99,8 @@ export const useSetClaudeCredentialMode = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (mode: "own" | "shared") => api.claudeCredentials.setMode(mode),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
@@ -95,15 +108,18 @@ export const useDeleteOwnClaudeCredentials = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.claudeCredentials.deleteOwn(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
 export const useUploadSharedClaudeCredentials = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: ClaudeCredentialsUpload) => api.claudeCredentials.uploadShared(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    mutationFn: (body: ClaudeCredentialsUpload) =>
+      api.claudeCredentials.uploadShared(body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
@@ -111,7 +127,8 @@ export const useDeleteSharedClaudeCredentials = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.claudeCredentials.deleteShared(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.claudeCredentialsStatus }),
   });
 };
 
@@ -222,7 +239,11 @@ export const useSharedProjects = () =>
     // the Build-knowledge button clear once the background build finishes
     // (mirrors useProjectRepos).
     refetchInterval: (q) =>
-      q.state.data?.some((p) => p.knowledge.some((k) => k.status === "indexing")) ? 2000 : false,
+      q.state.data?.some((p) =>
+        p.knowledge.some((k) => k.status === "indexing"),
+      )
+        ? 2000
+        : false,
   });
 
 // Clone a shared project into the caller's own scope. On success, the
@@ -257,7 +278,8 @@ export const useCreateSharedProject = () => {
   return useMutation({
     mutationFn: ({ key, body }: { key: string; body: SharedProjectCreate }) =>
       api.createSharedProject(key, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
   });
 };
 
@@ -267,7 +289,8 @@ export const useBuildSharedKnowledge = () => {
   return useMutation({
     mutationFn: ({ key, body }: { key: string; body: KnowledgeBuildRequest }) =>
       api.buildSharedKnowledge(key, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
   });
 };
 
@@ -284,7 +307,8 @@ export const useBuildSharedRepoKnowledge = () => {
       repo: string;
       body: KnowledgeBuildRequest;
     }) => api.buildSharedRepoKnowledge(key, repo, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.sharedProjects }),
   });
 };
 
@@ -311,7 +335,8 @@ export const useClearSharedProjectAuth = (key: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.clearSharedProjectAuth(key),
-    onSuccess: (data) => qc.setQueryData(queryKeys.sharedProjectAuth(key), data),
+    onSuccess: (data) =>
+      qc.setQueryData(queryKeys.sharedProjectAuth(key), data),
   });
 };
 
@@ -319,7 +344,8 @@ export const useCaptureSharedProjectAuth = (key: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.captureSharedProjectAuth(key),
-    onSuccess: (data) => qc.setQueryData(queryKeys.sharedProjectAuth(key), data),
+    onSuccess: (data) =>
+      qc.setQueryData(queryKeys.sharedProjectAuth(key), data),
   });
 };
 
@@ -349,7 +375,8 @@ export const useBuildKnowledge = () => {
 export const useProjectConfig = (key: string | null) =>
   useQuery({
     queryKey: queryKeys.projectConfig(key ?? ""),
-    queryFn: () => api.getProjectConfig(key as string),
+    queryFn: async () =>
+      api.getProjectConfig(key as string, await hubTokenForRead()),
     enabled: !!key,
     retry: false,
   });
@@ -402,9 +429,11 @@ export const useCaptureProjectAuth = (key: string) => {
 export const useProjectRepos = (key: string | null) =>
   useQuery({
     queryKey: queryKeys.projectRepos(key ?? ""),
-    queryFn: () => api.listProjectRepos(key as string),
+    queryFn: async () =>
+      api.listProjectRepos(key as string, await hubTokenForRead()),
     enabled: !!key,
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status === "indexing") ? 2000 : false),
+    refetchInterval: (q) =>
+      q.state.data?.some((r) => r.status === "indexing") ? 2000 : false,
   });
 
 export const useRepoKnowledge = (key: string | null, repo: string | null) =>
@@ -418,8 +447,13 @@ export const useRepoKnowledge = (key: string | null, repo: string | null) =>
 export const useBuildRepoKnowledge = (key: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ repo, body }: { repo: string; body: KnowledgeBuildRequest }) =>
-      api.buildRepoKnowledge(key, repo, body),
+    mutationFn: ({
+      repo,
+      body,
+    }: {
+      repo: string;
+      body: KnowledgeBuildRequest;
+    }) => api.buildRepoKnowledge(key, repo, body),
     onSuccess: (data, vars) => {
       qc.setQueryData(queryKeys.repoKnowledge(key, vars.repo), data);
       qc.invalidateQueries({ queryKey: queryKeys.projectRepos(key) });
@@ -447,9 +481,11 @@ let hubConfigProbe: Promise<HubSsoConfig> | null = null;
  * rejects — an unreachable backend resolves to "no hub", which is the safe read
  * for both the token path below and the read-only-UI switch (#528). */
 function hubConfig(): Promise<HubSsoConfig> {
-  hubConfigProbe ??= fetchHubSsoConfig().catch(
-    (): HubSsoConfig => ({ hubSsoEnabled: false, hubDataEnabled: false, hubBaseUrl: "" }),
-  );
+  hubConfigProbe ??= fetchHubSsoConfig().catch((): HubSsoConfig => ({
+    hubSsoEnabled: false,
+    hubDataEnabled: false,
+    hubBaseUrl: "",
+  }));
   return hubConfigProbe;
 }
 
@@ -489,7 +525,10 @@ export function useHubDataEnabled(): { enabled: boolean; resolved: boolean } {
 export function useHubWebUrl(): string | null {
   const { data } = useQuery({
     queryKey: ["hub", "webUrl"] as const,
-    queryFn: () => hubConfig().then((cfg) => cfg.hubBaseUrl.replace(/\/api\/?$/, "") || null),
+    queryFn: () =>
+      hubConfig().then(
+        (cfg) => cfg.hubBaseUrl.replace(/\/api\/?$/, "") || null,
+      ),
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
@@ -531,7 +570,9 @@ export const useTickets = (filters: TicketFilters = {}) =>
   useQuery({
     // The token is deliberately NOT part of the key: it changes every mint, and
     // keying on it would make every fetch a cache miss.
-    queryKey: queryKeys.tickets(filters as Record<string, string | number | undefined>),
+    queryKey: queryKeys.tickets(
+      filters as Record<string, string | number | undefined>,
+    ),
     queryFn: async () => api.listTickets(filters, await hubTokenForRead()),
   });
 
@@ -595,7 +636,8 @@ export const useDeleteTickets = () => {
 };
 
 // -------------------------------------------------------------- runs
-export const useRuns = () => useQuery({ queryKey: queryKeys.runs, queryFn: api.listRuns });
+export const useRuns = () =>
+  useQuery({ queryKey: queryKeys.runs, queryFn: api.listRuns });
 
 // Statuses where the backend is actively advancing the run (not waiting on the
 // user and not terminal). The run WebSocket drives refreshes, but its events are
@@ -610,13 +652,20 @@ const PROGRESSING_RUN_STATUSES = new Set([
   "comment",
 ]);
 
-export const useRun = (runId: number | string | null, opts?: Partial<UseQueryOptions>) =>
+export const useRun = (
+  runId: number | string | null,
+  opts?: Partial<UseQueryOptions>,
+) =>
   useQuery({
     queryKey: queryKeys.run(runId ?? 0),
     queryFn: () => api.getRun(runId as number),
     enabled: runId != null,
     refetchInterval: (q) =>
-      PROGRESSING_RUN_STATUSES.has((q.state.data as RunOut | undefined)?.status ?? "") ? 2500 : false,
+      PROGRESSING_RUN_STATUSES.has(
+        (q.state.data as RunOut | undefined)?.status ?? "",
+      )
+        ? 2500
+        : false,
     ...(opts as object),
   });
 
@@ -627,7 +676,8 @@ export const useCreateRun = () => {
     // credential from EmeHub at run start (#499/#505). `null` -> no header, and
     // the run starts on the local credential exactly as before: a run must never
     // be blocked because the hub is unreachable or there is no hub session.
-    mutationFn: async (body: RunCreate) => api.createRun(body, await hubTokenForRead()),
+    mutationFn: async (body: RunCreate) =>
+      api.createRun(body, await hubTokenForRead()),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: queryKeys.runs });
       qc.setQueryData(queryKeys.run(run.id), run);
@@ -684,7 +734,8 @@ export const useStopRun = () => {
 export const useRetryRun = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (runId: number | string) => api.retryRun(runId, await hubTokenForRead()),
+    mutationFn: async (runId: number | string) =>
+      api.retryRun(runId, await hubTokenForRead()),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: queryKeys.runs });
       qc.invalidateQueries({ queryKey: queryKeys.run(run.id) });
@@ -754,20 +805,33 @@ export const useCaseMutations = (runId: number | string) => {
       onSuccess: invalidate,
     }),
     updateCase: useMutation({
-      mutationFn: ({ caseId, body }: { caseId: number; body: TestCaseUpdate }) =>
-        api.updateCase(caseId, body),
+      mutationFn: ({
+        caseId,
+        body,
+      }: {
+        caseId: number;
+        body: TestCaseUpdate;
+      }) => api.updateCase(caseId, body),
       onSuccess: invalidate,
     }),
     setApproval: useMutation({
-      mutationFn: ({ caseId, approval }: { caseId: number; approval: "approved" | "rejected" | "pending" }) =>
-        api.setApproval(caseId, approval),
+      mutationFn: ({
+        caseId,
+        approval,
+      }: {
+        caseId: number;
+        approval: "approved" | "rejected" | "pending";
+      }) => api.setApproval(caseId, approval),
       onSuccess: invalidate,
     }),
     regenerateCase: useMutation({
       mutationFn: (caseId: number) => api.regenerateCase(caseId),
       onSuccess: invalidate,
     }),
-    approveAll: useMutation({ mutationFn: () => api.approveAll(runId), onSuccess: invalidate }),
+    approveAll: useMutation({
+      mutationFn: () => api.approveAll(runId),
+      onSuccess: invalidate,
+    }),
     approveTicket: useMutation({
       mutationFn: (tid: string) => api.approveTicket(runId, tid),
       onSuccess: invalidate,
@@ -787,8 +851,11 @@ export const useLinkStatus = (runId: number | string | null) =>
 export const useCreateAndLink = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { link?: boolean; ticketIds?: string[]; dryRun?: boolean }) =>
-      api.createAndLink(runId, body),
+    mutationFn: (body: {
+      link?: boolean;
+      ticketIds?: string[];
+      dryRun?: boolean;
+    }) => api.createAndLink(runId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.linkStatus(runId) });
       qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
@@ -815,7 +882,8 @@ export const useAutomationStatus = (runId: number | string | null) =>
 export const useGenerateAutomation = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (force?: boolean) => api.generateAutomation(runId, force ?? false),
+    mutationFn: (force?: boolean) =>
+      api.generateAutomation(runId, force ?? false),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.specs(runId) });
       qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
@@ -857,7 +925,8 @@ export const useSendSpecChat = (_runId: number | string) =>
 export const useUpdateSpec = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ caseId, code }: { caseId: number; code: string }) => api.updateSpec(caseId, code),
+    mutationFn: ({ caseId, code }: { caseId: number; code: string }) =>
+      api.updateSpec(caseId, code),
     onSuccess: (spec) => {
       qc.setQueryData<AutomationSpecOut[]>(queryKeys.specs(runId), (prev) =>
         prev ? prev.map((s) => (s.id === spec.id ? spec : s)) : prev,
@@ -904,7 +973,11 @@ export const useExploreSpec = () =>
 
 // Poll exploration status so the "Exploring…" state (and the discovered summary)
 // survives navigating away and back. Repo-scoped — one session per repo at a time.
-export const useExploreStatus = (projectKey: string, repo: string, enabled: boolean) =>
+export const useExploreStatus = (
+  projectKey: string,
+  repo: string,
+  enabled: boolean,
+) =>
   useQuery({
     queryKey: queryKeys.exploreStatus(projectKey, repo),
     queryFn: () => api.exploreStatus(projectKey, repo),
@@ -963,7 +1036,8 @@ export const useRunSpec = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (caseId: number) => api.runSpec(caseId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.execution(runId) }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.execution(runId) }),
   });
 };
 
@@ -982,8 +1056,9 @@ export const useExecution = (runId: number | string | null) =>
 export const useStartExecution = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { workers?: number; env?: string; target?: ExecutionTarget } = {}) =>
-      api.startExecution(runId, body),
+    mutationFn: (
+      body: { workers?: number; env?: string; target?: ExecutionTarget } = {},
+    ) => api.startExecution(runId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.execution(runId) });
       qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
@@ -1005,7 +1080,8 @@ export const useAgentDevices = () =>
   });
 
 /** Issue a short-lived pairing code for `npx @q-agent/agent pair <code>`. */
-export const usePairCode = () => useMutation({ mutationFn: api.agentDevices.pairCode });
+export const usePairCode = () =>
+  useMutation({ mutationFn: api.agentDevices.pairCode });
 
 /** Revoke a paired device; refreshes the device list on success. */
 export const useRevokeDevice = () => {
@@ -1028,9 +1104,15 @@ export const useEvidence = (runId: number | string | null) =>
 export const useAnnotate = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ evidenceId, shapes }: { evidenceId: number; shapes: AnnotationShape[] }) =>
-      api.annotate(evidenceId, shapes),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.evidence(runId) }),
+    mutationFn: ({
+      evidenceId,
+      shapes,
+    }: {
+      evidenceId: number;
+      shapes: AnnotationShape[];
+    }) => api.annotate(evidenceId, shapes),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.evidence(runId) }),
   });
 };
 
@@ -1039,7 +1121,8 @@ export const useAutoAnnotate = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (evidenceId: number) => api.autoAnnotateEvidence(evidenceId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.evidence(runId) }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.evidence(runId) }),
   });
 };
 
@@ -1056,7 +1139,12 @@ export const useReports = () =>
   useQuery({ queryKey: queryKeys.reports, queryFn: api.listReports });
 
 // -------------------------------------------------------------- audit log
-export const useAuditEvents = (filters: { category?: string; actor?: string; q?: string; run?: string }) =>
+export const useAuditEvents = (filters: {
+  category?: string;
+  actor?: string;
+  q?: string;
+  run?: string;
+}) =>
   useQuery({
     queryKey: queryKeys.auditEvents(filters),
     queryFn: () => api.auditEvents(filters),
@@ -1122,16 +1210,34 @@ export const useComments = (runId: number | string | null) =>
 
 export const useCommentMutations = (runId: number | string) => {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.comments(runId) });
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: queryKeys.comments(runId) });
   return {
-    prepare: useMutation({ mutationFn: () => api.prepareComments(runId), onSuccess: invalidate }),
-    edit: useMutation({
-      mutationFn: ({ commentId, body }: { commentId: number; body: { body?: string; targetStatus?: string } }) =>
-        api.editComment(commentId, body),
+    prepare: useMutation({
+      mutationFn: () => api.prepareComments(runId),
       onSuccess: invalidate,
     }),
-    publishOne: useMutation({ mutationFn: (commentId: number) => api.publishComment(commentId), onSuccess: invalidate }),
-    publishAll: useMutation({ mutationFn: (ticketIds: string[]) => api.publishAll(runId, ticketIds), onSuccess: invalidate }),
-    retry: useMutation({ mutationFn: () => api.retryComments(runId), onSuccess: invalidate }),
+    edit: useMutation({
+      mutationFn: ({
+        commentId,
+        body,
+      }: {
+        commentId: number;
+        body: { body?: string; targetStatus?: string };
+      }) => api.editComment(commentId, body),
+      onSuccess: invalidate,
+    }),
+    publishOne: useMutation({
+      mutationFn: (commentId: number) => api.publishComment(commentId),
+      onSuccess: invalidate,
+    }),
+    publishAll: useMutation({
+      mutationFn: (ticketIds: string[]) => api.publishAll(runId, ticketIds),
+      onSuccess: invalidate,
+    }),
+    retry: useMutation({
+      mutationFn: () => api.retryComments(runId),
+      onSuccess: invalidate,
+    }),
   };
 };
