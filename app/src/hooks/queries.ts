@@ -360,7 +360,8 @@ export const useKnowledgeList = () =>
 export const useProjectKnowledge = (key: string | null) =>
   useQuery({
     queryKey: queryKeys.projectKnowledge(key ?? ""),
-    queryFn: () => api.getProjectKnowledge(key as string),
+    queryFn: async () =>
+      api.getProjectKnowledge(key as string, await hubTokenForRead()),
     enabled: !!key,
     retry: false,
   });
@@ -444,7 +445,12 @@ export const useProjectRepos = (key: string | null) =>
 export const useRepoKnowledge = (key: string | null, repo: string | null) =>
   useQuery({
     queryKey: queryKeys.repoKnowledge(key ?? "", repo ?? ""),
-    queryFn: () => api.getRepoKnowledge(key as string, repo as string),
+    queryFn: async () =>
+      api.getRepoKnowledge(
+        key as string,
+        repo as string,
+        await hubTokenForRead(),
+      ),
     enabled: !!key && !!repo,
     retry: false,
   });

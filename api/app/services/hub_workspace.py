@@ -26,18 +26,20 @@ user who already has their own connections is unaffected.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.logging import logger
+from app.models.knowledge import KNOWLEDGE_STATUSES, ProjectKnowledge, compose_key
 from app.models.project import Project
 from app.models.provider_connection import ProviderConnection
 from app.models.run import RunTicket
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.services import hub_client, project_config_service
+from app.services import hub_client, knowledge_service, project_config_service
 
 # The hub spells Azure DevOps `azure_devops`; we spell it `ado` (#507). Shared
 # with the ticket read-through's join key so both sides agree.
@@ -407,12 +409,8 @@ def ensure_project_config(db: Session, user: User | None, key: str, hub_token: s
         )
         return False
 
-    project = db.scalar(
-        select(Project).where(Project.name == key, Project.owner_id == user.id)
-    ) or db.scalar(
-        select(Project).where(Project.external_id == key, Project.owner_id == user.id)
-    )
-    if project is None or not project.hub_project_id:
+    project = _hub_project(db, user, key)
+    if project is None:
         return False  # not a hub-sourced project — leave local config alone
 
     try:
@@ -448,3 +446,266 @@ def ensure_project_config(db: Session, user: User | None, key: str, hub_token: s
     db.commit()
     logger.info("mirrored hub project config for {} ({} repos)", key, len(patch["repos"]))
     return True
+
+
+def _hub_project(db: Session, user: User, key: str) -> Project | None:
+    """The caller's own **hub-sourced** project for ``key``, or None.
+
+    ``key`` may be the project's name (what knowledge/config rows are keyed by) or
+    its provider external id. A project without ``hub_project_id`` never came from
+    the hub, so nothing hanging off it is ours to overwrite.
+    """
+    project = db.scalar(
+        select(Project).where(Project.name == key, Project.owner_id == user.id)
+    ) or db.scalar(
+        select(Project).where(Project.external_id == key, Project.owner_id == user.id)
+    )
+    if project is None or not project.hub_project_id:
+        return None
+    return project
+
+
+# ------------------------------------------------------------------ knowledge
+# Q-Agent had **no** hub knowledge endpoint and no knowledge mirror at all
+# (#598): the hub showed a project as `Knowledge: Indexed` with every section
+# populated while Q-Agent showed the same project as having none. Config was
+# mirrored (so the repos appeared) and knowledge was not, which is the recurring
+# EmeHub failure shape — the call succeeds, nothing errors, and the data is
+# quietly incomplete.
+#
+# Mirror, don't read through. Generation reads the KB off the **local** row
+# (`project_config_service.build_context` -> `prompts.render_project_context`), so
+# a read-through would make the UI look right while generation still ran blind.
+
+
+def _parse_hub_dt(value: Any) -> datetime | None:
+    """Parse the hub's ISO timestamp into an aware UTC datetime, or None.
+
+    The hub serialises ``lastIndexed`` from its own UTC column, usually with a
+    ``+00:00`` offset but not always: a naive value is read as UTC rather than
+    dropped, because dropping it would make every hub row look "older than local"
+    and the mirror would silently never fire.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = _str(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
+def _pick(payload: dict[str, Any], camel: str, snake: str) -> Any:
+    """Read a hub field by either casing.
+
+    The hub serialises camelCase (``lastIndexed``) but accepts and, in places,
+    echoes snake_case — so read both rather than betting on one and mirroring a
+    row full of defaults.
+    """
+    return payload.get(camel, payload.get(snake))
+
+
+def _hub_supersedes_local(
+    payload: dict[str, Any], existing: ProjectKnowledge, label: str
+) -> bool:
+    """Whether the hub's row may overwrite ``existing``. Never destroys a newer build.
+
+    Two rules, both learned the hard way and both asserted with a negative control
+    in ``tests/test_hub_knowledge.py``:
+
+    * a hub row that is **not indexed** never overwrites a local indexed row — a
+      project whose hub build has not run yet must not wipe the KB this machine
+      built;
+    * otherwise the hub wins only when its ``lastIndexed`` is **strictly newer**
+      than the local row's. Equal timestamps mean the same build, so nothing to
+      do; a hub row with no timestamp at all can never win against a local one.
+    """
+    hub_status = _str(_pick(payload, "status", "status"), "not_indexed")
+    if hub_status != "indexed" and existing.status == "indexed":
+        logger.info(
+            "kept the local indexed knowledge for {}: the hub's row is '{}'", label, hub_status
+        )
+        return False
+
+    hub_at = _parse_hub_dt(_pick(payload, "lastIndexed", "last_indexed"))
+    local_at = _aware(existing.last_indexed)
+    if hub_at is None:
+        return local_at is None and existing.status not in ("indexed", "indexing")
+    if local_at is None:
+        return True
+    if hub_at <= local_at:
+        logger.info(
+            "kept the newer local knowledge for {} (local {} >= hub {})", label, local_at, hub_at
+        )
+        return False
+    return True
+
+
+def _mirror_knowledge(
+    db: Session, user: User | None, key: str, repo: str, hub_token: str | None
+) -> tuple[bool, bool]:
+    """Mirror one knowledge row. Returns ``(payload_seen, row_written)``.
+
+    Split from :func:`ensure_knowledge` so the multi-repo caller can tell "the hub
+    had nothing" from "the hub answered and we wrote nothing" — the one line that
+    separates an empty hub from a mirror that failed to understand it (#598).
+    """
+    if user is None or not hub_client.enabled():
+        return (False, False)
+    if not hub_token:
+        # A wiring bug, not an outage — the caller reached a hub-mirroring read
+        # without attaching `X-Hub-Token` (the #592 shape). Say so; this function
+        # is otherwise silent by design so a hub outage cannot break the screen.
+        logger.info(
+            "hub knowledge not mirrored for {}: no X-Hub-Token on the request", compose_key(key, repo)
+        )
+        return (False, False)
+
+    project = _hub_project(db, user, key)
+    if project is None:
+        return (False, False)
+
+    label = compose_key(key, repo)
+    hub_key = project.external_id or key
+    try:
+        payload = (
+            hub_client.get_repo_knowledge(hub_key, repo, hub_token)
+            if repo
+            else hub_client.get_project_knowledge(hub_key, hub_token)
+        )
+    except hub_client.HubClientError as exc:
+        logger.info("hub knowledge unavailable for {}: {}", label, exc)
+        return (False, False)
+    if payload is None:
+        # 404 — the hub has no knowledge for this repo yet. Not an error, and the
+        # local row (if any) is left exactly as it was.
+        return (False, False)
+
+    blob = _pick(payload, "knowledge", "knowledge")
+    blob = dict(blob) if isinstance(blob, dict) else {}
+    status = _str(_pick(payload, "status", "status"), "not_indexed")
+    if status not in KNOWLEDGE_STATUSES:
+        status = "not_indexed"
+
+    existing = db.scalar(
+        select(ProjectKnowledge).where(
+            ProjectKnowledge.key == label, ProjectKnowledge.owner_id == user.id
+        )
+    )
+    if existing is not None and not _hub_supersedes_local(payload, existing, label):
+        return (True, False)
+    if existing is None and status != "indexed" and not blob:
+        logger.info("hub has no knowledge to mirror for {} (status '{}')", label, status)
+        return (True, False)
+
+    row = existing or ProjectKnowledge(key=label, owner_id=user.id)
+    row.project_key = key
+    row.project_guid = project.guid
+    row.name = _str(_pick(payload, "name", "name")) or key
+    # The hub says `azure_devops`; we say `ado`. #507 joined on the untranslated
+    # value and matched zero rows while every test passed.
+    row.provider = _local_kind(_pick(payload, "provider", "provider")) or (
+        project.provider_kind or ""
+    )
+    # The requested repo, NOT the payload's: the hub falls back to its
+    # project-level row (`repo: ""`) when a repo has none of its own, and this row
+    # is the per-repo slot every downstream lookup addresses.
+    row.repo = repo
+    row.framework = _str(_pick(payload, "framework", "framework"), "Playwright")
+    row.status = status
+    confidence = _pick(payload, "confidence", "confidence")
+    row.confidence = int(confidence) if isinstance(confidence, (int, float)) else 0
+    row.version = _str(_pick(payload, "version", "version"), "v1")
+    row.needs_refresh = bool(_pick(payload, "needsRefresh", "needs_refresh"))
+    row.last_indexed = _parse_hub_dt(_pick(payload, "lastIndexed", "last_indexed"))
+    row.knowledge = blob
+    row.last_error = _str(_pick(payload, "lastError", "last_error"))[:1000]
+    if existing is None:
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    # `docPath` is deliberately NOT copied. The hub documents it as the
+    # *agent-host* directory, "opaque to the hub … which the hub stores and never
+    # resolves" — a mirrored value points at a path that may not exist here. We
+    # re-render knowledge.md/.json from the blob into THIS owner's own scoped
+    # knowledge dir instead, and leave doc_path empty if that cannot be done.
+    row.doc_path = ""
+    try:
+        config = project_config_service.get_config_for_owner(db, key, user.id)
+        row.doc_path = knowledge_service.write_knowledge_files(row, config)
+    except Exception as exc:  # noqa: BLE001 - artifacts are a convenience, not the mirror
+        logger.warning("could not re-render local knowledge artifacts for {}: {}", label, exc)
+    db.commit()
+
+    if status == "indexed" and not blob:
+        logger.warning(
+            "hub reports {} indexed but sent an empty knowledge blob — mirrored a row with "
+            "nothing in it, so generation will still run blind",
+            label,
+        )
+    logger.info(
+        "mirrored hub knowledge for {} (status {}, {} sections, confidence {})",
+        label, row.status, len(blob), row.confidence,
+    )
+    return (True, True)
+
+
+def ensure_knowledge(
+    db: Session, user: User | None, key: str, repo: str = "", hub_token: str | None = None
+) -> bool:
+    """Mirror a hub project's knowledge base into the caller's own row.
+
+    Idempotent and additive: re-running updates the one row in place, and a local
+    build that is newer (or indexed while the hub's is not) is never destroyed —
+    see :func:`_hub_supersedes_local`.
+
+    ``repo`` empty means the project-level row (``compose_key`` yields the bare
+    key). Returns True when a row was written. Never raises: a hub outage leaves
+    whatever is already local, so the screen still renders (#491).
+    """
+    try:
+        _, written = _mirror_knowledge(db, user, key, repo, hub_token)
+    except Exception as exc:  # noqa: BLE001 - a mirror must never break a read
+        logger.warning("hub knowledge mirror failed unexpectedly for {}: {}", key, exc)
+        db.rollback()
+        return False
+    return written
+
+
+def ensure_knowledge_for_repos(
+    db: Session, user: User | None, key: str, repos: list[str], hub_token: str | None = None
+) -> int:
+    """Mirror every configured repo's knowledge (the repos listing). Returns rows written.
+
+    Warns when the hub answered for at least one repo and **nothing** was written:
+    that single line is what separates "the hub had nothing" from "we failed to
+    understand what it sent", which are indistinguishable from the UI.
+    """
+    seen = 0
+    written = 0
+    for repo in repos:
+        try:
+            payload_seen, row_written = _mirror_knowledge(db, user, key, repo, hub_token)
+        except Exception as exc:  # noqa: BLE001 - a mirror must never break a read
+            logger.warning("hub knowledge mirror failed unexpectedly for {}: {}", key, exc)
+            db.rollback()
+            continue
+        seen += int(payload_seen)
+        written += int(row_written)
+    if seen and not written:
+        logger.warning(
+            "the hub answered with knowledge for {} of {}'s repos but no local row was written "
+            "— the project will still show as not indexed",
+            seen, key,
+        )
+    return written

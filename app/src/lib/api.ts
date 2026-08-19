@@ -651,8 +651,15 @@ export const api = {
 
   // project knowledge
   listKnowledge: () => get<ProjectKnowledgeOut[]>("/projects/knowledge"),
-  getProjectKnowledge: (key: string) =>
-    get<ProjectKnowledgeOut>(`/projects/${encodeURIComponent(key)}/knowledge`),
+  // `hubToken` mirrors a HUB-indexed knowledge base before the read (#598) — the
+  // same reason `getProjectConfig` needs it (#592). Without the header the backend
+  // serves whatever is already local, which for a hub project is nothing at all:
+  // that is exactly the bug, a project shown as `Indexed` on the hub and empty here.
+  getProjectKnowledge: (key: string, hubToken: string | null = null) =>
+    getWithHubToken<ProjectKnowledgeOut>(
+      `/projects/${encodeURIComponent(key)}/knowledge`,
+      hubToken,
+    ),
   buildKnowledge: (key: string, body: KnowledgeBuildRequest) =>
     post<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/knowledge/build`,
@@ -691,9 +698,15 @@ export const api = {
       `/projects/${encodeURIComponent(key)}/repos`,
       hubToken,
     ),
-  getRepoKnowledge: (key: string, repo: string) =>
-    get<ProjectKnowledgeOut>(
+  // Same hub knowledge mirror as `getProjectKnowledge` (#598).
+  getRepoKnowledge: (
+    key: string,
+    repo: string,
+    hubToken: string | null = null,
+  ) =>
+    getWithHubToken<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge`,
+      hubToken,
     ),
   buildRepoKnowledge: (
     key: string,

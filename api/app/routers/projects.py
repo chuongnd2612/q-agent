@@ -159,11 +159,18 @@ def list_knowledge(
 
 @router.get("/{key}/knowledge", response_model=ProjectKnowledgeOut)
 def get_knowledge(
-    key: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    key: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub: str | None = Depends(hub_token_header),
 ) -> ProjectKnowledge:
     # The SPA addresses projects by GUID (#587); knowledge rows are still keyed by
     # the name, so translate here (a non-GUID passes through unchanged).
     key = project_config_service.resolve_project_identifier(db, key, user)
+    # A hub-indexed project had knowledge on the hub and none here (#598) — mirror
+    # it before reading. Idempotent, silent when the hub is unreachable, and it
+    # never overwrites a newer local build.
+    hub_workspace.ensure_knowledge(db, user, key, "", hub)
     row = db.query(ProjectKnowledge).filter(ProjectKnowledge.key == key).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"No knowledge base for project '{key}'")
@@ -467,6 +474,12 @@ def list_project_repos(
     config = project_config_service.get_config_visible_to(db, key, user)
     check_owned_or_404(config, user, not_found=f"Project config '{key}' not found")
     repos = project_config_service.get_repos(config)
+    # …and the knowledge that hangs off those repos (#598). Without this the hub's
+    # repos appeared while every one of them read "not indexed", because the
+    # annotation below is a purely local lookup.
+    hub_workspace.ensure_knowledge_for_repos(
+        db, user, key, [r["name"] for r in repos if r.get("name")], hub
+    )
     out: list[dict] = []
     for repo in repos:
         kn = (
@@ -495,12 +508,19 @@ def list_project_repos(
 
 @router.get("/{key}/repos/{repo}/knowledge", response_model=ProjectKnowledgeOut)
 def get_repo_knowledge(
-    key: str, repo: str, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    key: str,
+    repo: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub: str | None = Depends(hub_token_header),
 ) -> ProjectKnowledge:
     """Scoped to ``user`` (#93): another user's per-repo knowledge base 404s."""
     # GUID -> name (#587): `compose_key` builds the stored row key from the
     # project name, so the GUID has to be translated before composing.
     key = project_config_service.resolve_project_identifier(db, key, user)
+    # Mirror the hub's row for this repo first (#598); a no-op for a local project
+    # and when the hub has nothing.
+    hub_workspace.ensure_knowledge(db, user, key, repo, hub)
     row = (
         db.query(ProjectKnowledge)
         .filter(ProjectKnowledge.key == compose_key(key, repo))

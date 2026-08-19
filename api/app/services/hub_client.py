@@ -427,3 +427,38 @@ def get_project_config(project_key: str, hub_token: str) -> dict[str, Any]:
     see :func:`app.services.hub_workspace.ensure_project_config`.
     """
     return get_json(f"/projects/{project_key}/config", hub_token)
+
+
+def get_project_knowledge(project_key: str, hub_token: str) -> dict[str, Any] | None:
+    """A hub project's project-level knowledge base, or ``None`` when it has none.
+
+    ``None`` rather than an exception for **404**: "this project has no knowledge
+    yet" is an ordinary answer, and the mirror must leave local state untouched
+    when it arrives (#598). Every other failure still raises, so "the hub is
+    down" stays distinguishable from "the hub has nothing" — the #491 rule.
+    """
+    return _knowledge_or_none(f"/projects/{project_key}/knowledge", hub_token)
+
+
+def get_repo_knowledge(project_key: str, repo: str, hub_token: str) -> dict[str, Any] | None:
+    """One repo's knowledge base on the hub, or ``None`` when there is none.
+
+    The hub **falls back to the project-level row** when a repo has none of its
+    own, so a payload here may carry ``repo: ""``.
+
+    Two translations are the caller's job, not this module's: field names arrive
+    camelCase (``lastIndexed``, ``needsRefresh``, ``docPath``, ``projectKey``)
+    and ``provider`` speaks the hub's vocabulary (``azure_devops``, not ``ado``).
+    See :func:`app.services.hub_workspace.ensure_knowledge`.
+    """
+    return _knowledge_or_none(f"/projects/{project_key}/repos/{repo}/knowledge", hub_token)
+
+
+def _knowledge_or_none(path: str, hub_token: str) -> dict[str, Any] | None:
+    try:
+        payload = get_json(path, hub_token)
+    except HubRefusedError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    return payload if isinstance(payload, dict) else None
