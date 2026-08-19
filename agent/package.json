@@ -1,6 +1,6 @@
 {
   "name": "@q-agent/agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Q-Agent Local Agent — claims execution jobs from the Q-Agent server and runs Playwright locally, so manual login/MFA happens on the user's own machine and session credentials never leave it.",
   "license": "UNLICENSED",
   "bin": {
