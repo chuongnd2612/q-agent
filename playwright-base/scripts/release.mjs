@@ -20,7 +20,7 @@
  * the refreshed vendor/ tarball afterwards.
  */
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +33,35 @@ const dryRun = args.includes('--dry-run');
 
 const run = (cmd) => execSync(cmd, { cwd: root, stdio: 'inherit' });
 const version = () => JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')).version;
+
+// A release must not depend on someone having run `npm install` here first. Without
+// deps, `npm run build` dies as "'tsc' is not recognized" — which points at a missing
+// global toolchain rather than at uninstalled local devDependencies, so it reads like
+// an environment problem when it is a one-command fix (#599). `prepublishOnly` rebuilds
+// during `npm publish` too, so this has to hold before the publish, not just the build.
+const hasBin = (name) =>
+  ['', '.cmd', '.ps1'].some((ext) =>
+    existsSync(join(root, 'node_modules', '.bin', `${name}${ext}`)),
+  );
+
+const ensureDeps = () => {
+  if (hasBin('tsc')) return; // already installed — keep the common case fast
+  const locked = existsSync(join(root, 'package-lock.json'));
+  console.log(`node_modules/.bin/tsc not found — installing dependencies (npm ${locked ? 'ci' : 'install'})...`);
+  try {
+    run(locked ? 'npm ci' : 'npm install');
+  } catch {
+    console.error('\nCould not install dependencies. Run `npm ci` in playwright-base/ and retry.');
+    process.exit(1);
+  }
+  if (!hasBin('tsc')) {
+    console.error('\nDependencies installed but node_modules/.bin/tsc is still missing — is `typescript` still a devDependency?');
+    process.exit(1);
+  }
+};
+
+// 0. Dependencies, before anything that needs the local toolchain.
+ensureDeps();
 
 // 1. Bump (package.json only — no git tag, no clean-tree requirement).
 if (!noBump) run(`npm version ${level} --no-git-tag-version`);
