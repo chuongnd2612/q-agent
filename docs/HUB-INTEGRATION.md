@@ -273,6 +273,9 @@ narrative sections below were written before anyone tried it, and were wrong in 
 | `POST /tickets/sync` | **200** | the hub syncs with **its own** PAT — see §5, the PAT never needs to cross |
 | `GET /projects` | **200** | incl. `summary` (repo, branch, knowledge status) |
 | `GET /connections` | **200** | `hasPat` only — **never the PAT** |
+| `GET /projects/{key}/config` | **200** | mirrored by `hub_workspace.ensure_project_config` (#590) |
+| `GET /projects/{key}/knowledge` | **200** / 404 | project-level KB; **404 means "none yet", not an error** (#598) |
+| `GET /projects/{key}/repos/{repo}/knowledge` | **200** / 404 | per-repo KB, **falls back to the project-level row** (so a payload may carry `repo: ""`) |
 | `GET /credentials/claude/resolve` | **200** | real credential material + `source`/`status`/`expiresAt`/`scopes` |
 | `GET /credentials/claude` | 401 | hub audience only |
 | `PUT /credentials/claude/mode` | 401 | hub audience only — **an agent cannot switch the credential** |
@@ -404,6 +407,22 @@ token today, and the hub's `PUT` path means an agent that builds its own knowled
 report it. Two caveats: test-account passwords come back **only to the owning user** (a shared
 project is owned by nobody, so they stay masked even for an admin), and `storageState.json`
 remains an agent-side browser artifact the hub will never hold.
+
+**Knowledge is mirrored, not read through** (#598). `hub_workspace.ensure_knowledge` /
+`ensure_knowledge_for_repos` upsert the hub's payload into the caller's own `project_knowledge`
+row, because every downstream consumer addresses local rows — generation grounds itself through
+`project_config_service.context_for_ticket` → `prompts.render_project_context` off the local
+row's `knowledge` dict, so a read-through would make the UI look right while generation still ran
+blind. Three rules the mirror holds, each with a test:
+
+- **`doc_path` is never copied.** The hub documents it as the *agent-host* directory, opaque to
+  the hub and never resolved by it, so a mirrored value names a path that may not exist here.
+  `knowledge.md`/`.json` are re-rendered from the blob into this owner's own
+  `scoped_knowledge_dir`; if that fails, `doc_path` stays empty.
+- **A newer local build is never destroyed.** The hub wins only when its `lastIndexed` is
+  strictly newer, and a hub row that is not `indexed` never overwrites a local indexed one.
+- **`provider` is translated** through `_local_kind` (`azure_devops` → `ado`) — the #507 join
+  that matched zero rows.
 
 ---
 
