@@ -23,7 +23,8 @@
  */
 import { execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const otpArg = args.find((a) => a.startsWith("--otp="));
@@ -32,6 +33,41 @@ const desktopOnly = args.includes("--desktop-only");
 const noDesktop = args.includes("--no-desktop");
 
 const run = (cmd) => execSync(cmd, { stdio: "inherit" });
+
+// Same gap as #599 in playwright-base: nothing here installed dependencies, so on a
+// fresh clone `npm run build` (and `prepublishOnly` during `npm publish`) died as
+// "'tsc' is not recognized", which reads like a missing global toolchain rather than
+// uninstalled local devDependencies. `electron-builder` is a devDependency too, so the
+// desktop stage needs this just as much as the npm stage.
+const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const hasBin = (name) =>
+  ["", ".cmd", ".ps1"].some((ext) =>
+    existsSync(join(pkgRoot, "node_modules", ".bin", `${name}${ext}`)),
+  );
+
+const ensureDeps = () => {
+  if (hasBin("tsc")) return; // already installed — keep the common case fast
+  const locked = existsSync(join(pkgRoot, "package-lock.json"));
+  console.log(
+    `node_modules/.bin/tsc not found — installing dependencies (npm ${locked ? "ci" : "install"})...`,
+  );
+  try {
+    execSync(locked ? "npm ci" : "npm install", { cwd: pkgRoot, stdio: "inherit" });
+  } catch {
+    console.error("\nCould not install dependencies. Run `npm ci` in agent/ and retry.");
+    process.exit(1);
+  }
+  if (!hasBin("tsc")) {
+    console.error(
+      "\nDependencies installed but node_modules/.bin/tsc is still missing — is `typescript` still a devDependency?",
+    );
+    process.exit(1);
+  }
+};
+
+// Dependencies first, before the publish (prepublishOnly builds) or the desktop build.
+ensureDeps();
 
 // 1. Bump + publish the npm package (skipped for a desktop-only re-stage).
 if (!desktopOnly) {
