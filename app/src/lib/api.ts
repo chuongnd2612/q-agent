@@ -279,6 +279,24 @@ export function markLoggingOut(): void {
   }, 4000);
 }
 
+/**
+ * Restore a session on app boot, using the same ladder as the 401 path (#611).
+ *
+ * `store/auth.ts`'s `bootstrap()` used to call `api.auth.refresh()` raw, so a boot
+ * could only ever be rescued by the `qagent_refresh` cookie — and an SSO session
+ * deliberately has none (#531/#532). A reload therefore always ended at /login even
+ * though the hub knew perfectly well who was signed in. Routing boot through
+ * `tryRefresh` means the cookie is tried first, then the hub, with the
+ * unreachable-vs-expired distinction and the in-flight coalescing already encoded
+ * there rather than duplicated in the store.
+ *
+ * Exported (rather than exporting `tryRefresh` itself) to keep the 401 machinery
+ * private and give the boot path an obvious name.
+ */
+export function restoreSession(): Promise<RefreshOutcome> {
+  return tryRefresh();
+}
+
 function tryRefresh(): Promise<RefreshOutcome> {
   if (!refreshInFlight) {
     refreshInFlight = api.auth
