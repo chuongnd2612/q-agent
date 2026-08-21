@@ -12,7 +12,7 @@
  */
 
 import { create } from "zustand";
-import { api } from "@/lib/api";
+import { restoreSession } from "@/lib/api";
 import type { User } from "@/types/api";
 
 export type AuthStatus = "idle" | "loading" | "authed" | "anon";
@@ -44,11 +44,18 @@ export const useAuth = create<AuthState>((set, get) => ({
   bootstrap: async () => {
     if (get().status === "loading") return;
     set({ status: "loading" });
-    try {
-      const { accessToken, user } = await api.auth.refresh();
-      set({ accessToken, user, status: "authed" });
-    } catch {
-      set({ user: null, accessToken: null, status: "anon" });
-    }
+    // Boot goes through the SAME ladder as the 401 path (#611): refresh cookie
+    // first, then the session authority (the hub). Calling `api.auth.refresh()`
+    // raw here meant a boot could only be rescued by a cookie — and an SSO session
+    // deliberately has none (#531/#532), so every reload of /qagent ended at
+    // /login while the hub knew exactly who was signed in. `restoreSession`
+    // installs the session itself on success, so there is nothing to set here.
+    const outcome = await restoreSession();
+    if (outcome === "refreshed" && get().status === "authed") return;
+    // `expired` is a real answer. `unreachable` is not — but at boot there is no
+    // token to render anything with either way, so both land anonymous for now and
+    // the guard sends them to /login. A distinct service-down state belongs with
+    // the wider degradation work, not here.
+    set({ user: null, accessToken: null, status: "anon" });
   },
 }));
