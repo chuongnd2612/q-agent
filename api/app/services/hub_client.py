@@ -112,6 +112,18 @@ def _base_url() -> str:
     return (internal or settings.hub_base_url).rstrip("/")
 
 
+def effective_base_url() -> str:
+    """The base URL server-side reads actually dial, for diagnostics.
+
+    `_base_url()` prefers `hub_internal_base_url` (#524, to avoid the public
+    tunnel), so a wrong or broken internal route breaks EVERY server-side hub read
+    while the SPA — which uses the public URL — keeps working. That split is
+    invisible unless the effective value is surfaced, which is why this is exposed
+    on /health and named in the credential failure messages (#607).
+    """
+    return _base_url()
+
+
 def enabled() -> bool:
     """True when hub data reads are configured and switched on.
 

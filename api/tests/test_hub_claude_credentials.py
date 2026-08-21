@@ -138,38 +138,56 @@ def test_unknown_status_is_treated_as_usable(hub_on):
 
 # ------------------------------------------------------ fall back to the local
 @respx.mock
-def test_hub_unreachable_falls_back_to_local(hub_on):
+def test_hub_unreachable_refuses_the_run(hub_on):
+    """#607 reversal: an unreachable hub used to fall back to the local credential.
+
+    In hub-data mode (`enabled()` requires BOTH sso+data flags) the hub owns which
+    Claude account is used, so falling back is the wrong answer — and on a box with
+    no local credential it surfaced 20 minutes later, in a background worker, as
+    "No Claude credentials configured. Upload your own credentials in Settings":
+    advice that was flatly wrong for a hub that had the credential all along.
+    Refuse here, while the reason is still known.
+    """
     respx.get(RESOLVE).mock(side_effect=httpx.ConnectError("hub is down"))
 
-    assert hub_credentials.prepare_run_credential(45, "tok") == hub_credentials.SOURCE_LOCAL
+    with pytest.raises(hub_credentials.HubCredentialRefusedError, match="Could not reach EmeHub"):
+        hub_credentials.prepare_run_credential(45, "tok")
     assert _materialized(45) is None
 
 
 @respx.mock
-def test_hub_gateway_error_falls_back_to_local(hub_on):
-    """Behind nginx + a tunnel, "down" arrives as 502/503/504, not a socket error."""
+def test_hub_gateway_error_refuses_the_run(hub_on):
+    """Behind nginx + a tunnel, "down" arrives as 502/503/504, not a socket error —
+    and it must refuse just like a socket error does (#607)."""
     respx.get(RESOLVE).mock(return_value=httpx.Response(503))
 
-    assert hub_credentials.prepare_run_credential(46, "tok") == hub_credentials.SOURCE_LOCAL
+    with pytest.raises(hub_credentials.HubCredentialRefusedError, match="Could not reach EmeHub"):
+        hub_credentials.prepare_run_credential(46, "tok")
 
 
 @respx.mock
-def test_hub_401_falls_back_to_local(hub_on):
-    """An expired 15-minute token / revoked hub session says nothing about the
-    credential — the run proceeds locally."""
+def test_hub_401_refuses_the_run_and_says_to_reload(hub_on):
+    """An expired 15-minute token says nothing about the credential, but it also
+    means we cannot honour "use the hub's credential" — so refuse with the action
+    that actually fixes it (reload, which mints a fresh token) rather than running
+    on whatever is local (#607)."""
     respx.get(RESOLVE).mock(
         return_value=httpx.Response(401, json={"detail": "Session revoked or expired"})
     )
 
-    assert hub_credentials.prepare_run_credential(47, "tok") == hub_credentials.SOURCE_LOCAL
+    with pytest.raises(hub_credentials.HubCredentialRefusedError, match="session token expired"):
+        hub_credentials.prepare_run_credential(47, "tok")
     assert _materialized(47) is None
 
 
 @respx.mock
-def test_no_hub_token_falls_back_to_local_without_calling_the_hub(hub_on):
+def test_no_hub_token_refuses_without_calling_the_hub(hub_on):
+    """No token means the hub's credential cannot be resolved at all. Still no hub
+    call (nothing to authorise it), but no silent local fallback either (#607)."""
     route = respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
 
-    assert hub_credentials.prepare_run_credential(48, None) == hub_credentials.SOURCE_LOCAL
+    with pytest.raises(hub_credentials.HubCredentialRefusedError, match="No EmeHub token"):
+        hub_credentials.prepare_run_credential(48, None)
     assert not route.called
 
 
@@ -182,8 +200,9 @@ def test_fallback_clears_a_stale_hub_credential(hub_on):
     assert _materialized(49) is not None
 
     respx.get(RESOLVE).mock(side_effect=httpx.ConnectError("hub is down"))
-    assert hub_credentials.prepare_run_credential(49, "tok") == hub_credentials.SOURCE_LOCAL
-    assert _materialized(49) is None
+    with pytest.raises(hub_credentials.HubCredentialRefusedError):
+        hub_credentials.prepare_run_credential(49, "tok")
+    assert _materialized(49) is None, "the stale dir is still cleared before refusing"
 
 
 # ------------------------------------------------------------- refuse the run
@@ -373,7 +392,8 @@ def test_create_run_materializes_the_hub_credential(hub_on, client, seed_ticket,
 
 @respx.mock
 def test_create_run_without_a_hub_token_is_unchanged(hub_on, client, seed_ticket, monkeypatch):
-    """A request with no hub token is ordinary — the run proceeds locally."""
+    """#607: in hub-data mode a run start with no hub token is refused (409), not
+    quietly run on local material. The hub decides which Claude account is used."""
     from tests.test_runs import _patch_pipeline_blocking
 
     _patch_pipeline_blocking(monkeypatch)
@@ -381,5 +401,6 @@ def test_create_run_without_a_hub_token_is_unchanged(hub_on, client, seed_ticket
 
     resp = client.post("/runs", json={"scope": "selected", "ticketIds": [seed_ticket.external_id]})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 409
+    assert "No EmeHub token" in resp.json()["detail"]
     assert not route.called

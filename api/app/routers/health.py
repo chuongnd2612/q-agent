@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app import __version__
 from app.config import settings
+from app.services import hub_client
 from app.services import claude_cli
 
 router = APIRouter(tags=["health"])
@@ -39,6 +40,12 @@ def health() -> dict:
         "hubSsoEnabled": settings.hub_sso_enabled,
         "hubDataEnabled": settings.hub_data_enabled,
         "hubBaseUrl": settings.hub_base_url.rstrip("/"),
+        # The URL server-side reads ACTUALLY dial — `_base_url()` prefers
+        # `hub_internal_base_url` (#524), so a broken internal route breaks every
+        # server-side hub read while the SPA (public URL) keeps working. That split
+        # cost a live debugging session to find; surface it (#607). Not a secret:
+        # it is a host/port, and the public one is already exposed above.
+        "hubEffectiveBaseUrl": hub_client.effective_base_url() if hub_client.enabled() else "",
     }
 
 
