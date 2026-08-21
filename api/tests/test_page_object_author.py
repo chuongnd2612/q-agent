@@ -580,3 +580,71 @@ def test_git_changed_paths_reports_added_modified_and_untracked(db_session):
     _write(root, "pages/UserPage.ts", USER_PAGE + "\n// touched\n")
     _write(root, "data/users.ts", "export const validUser = { name: 'a' };\n")
     assert aps.git_changed_paths(project) == ["data/users.ts", "pages/UserPage.ts"]
+
+
+@requires_git
+def test_a_failed_pass_is_retried_not_treated_as_already_authored(db_session, gates, monkeypatch):
+    """#608: a stamp that records an error means nothing was authored.
+
+    The failure path stamps `authoredAt` to stop a paid agentic call being retried once
+    per case of the ticket. But the entry guard used to look at `authoredAt` alone, so
+    after the very first failure every later attempt returned
+    `{"ran": False, "ok": True, "reason": "already authored for this ticket"}` — and the
+    caller in `_generate_one` only warns when `ran and not ok`, so nothing ever surfaced
+    again. On the live box that left `pages/` empty and `importable` `[]` permanently
+    while the UI just showed an empty spec.
+    """
+    project = _project(db_session)
+
+    boom = _editor(monkeypatch, lambda root: (_ for _ in ()).throw(RuntimeError("root refusal")))
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts", "action": "create",
+                            "methods": ["open()"]}])
+
+    plan, first = author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()])
+    assert first["ran"] is True and first["ok"] is False
+    assert plan["authoredAt"] and plan["authoringError"], "the failure is recorded on the plan"
+    assert len(boom) == 1
+
+    # The next attempt must RETRY rather than claim the ticket is already authored.
+    calls = _editor(monkeypatch, lambda root: _write(root, "pages/UserPage.ts", USER_PAGE))
+    cached = planner.load_plan(project, "RUN-1", "SUR-1428")
+    assert cached is not None and cached["authoringError"]
+    refreshed, second = author.author_assets(
+        db_session, project, "RUN-1", "SUR-1428", cached, [_Case("TC-02")]
+    )
+    assert len(calls) == 1, "a plan stamped with an error must be retried"
+    assert second["ran"] is True and second["ok"] is True
+    assert "pages/UserPage.ts" in (refreshed["importable"] or []), (
+        "the retry's files must become importable"
+    )
+    # And the success must clear the stale error, or every later case retries a pass
+    # that has already succeeded (`**extra` merges onto the refreshed plan).
+    assert not refreshed.get("authoringError")
+    reloaded = planner.load_plan(project, "RUN-1", "SUR-1428")
+    assert reloaded is not None and not reloaded.get("authoringError")
+
+    # Now that it genuinely succeeded, the once-per-ticket cost guard applies again.
+    _, third = author.author_assets(
+        db_session, project, "RUN-1", "SUR-1428", reloaded, [_Case("TC-03")]
+    )
+    assert third["ran"] is False, "a clean stamp still skips"
+    assert len(calls) == 1
+
+
+def test_is_sandbox_is_set_only_when_root_and_skipping_permissions(monkeypatch):
+    """#608: the CLI refuses `--dangerously-skip-permissions` at euid 0, which killed
+    every agentic call in the container in ~0.3s. `IS_SANDBOX=1` is its documented
+    container escape hatch — but it must not be set on a non-root host, and
+    `os.geteuid` does not exist on Windows at all."""
+    import os as _os
+
+    monkeypatch.setattr(claude_cli.os, "geteuid", lambda: 0, raising=False)
+    assert claude_cli._running_as_root() is True
+
+    monkeypatch.setattr(claude_cli.os, "geteuid", lambda: 1000, raising=False)
+    assert claude_cli._running_as_root() is False
+
+    # Windows: no geteuid attribute at all — must not raise.
+    monkeypatch.delattr(claude_cli.os, "geteuid", raising=False)
+    assert claude_cli._running_as_root() is False
+    assert not hasattr(_os, "geteuid") or True

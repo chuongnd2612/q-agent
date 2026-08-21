@@ -51,3 +51,5 @@ designs/
 /downloads/*
 !/downloads/.gitkeep
 !/downloads/README.txt
+.env.bak*
+*.env.bak

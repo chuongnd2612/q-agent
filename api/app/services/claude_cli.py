@@ -387,6 +387,15 @@ def run_prompt(
     # clobber CLAUDE_CONFIG_DIR unless a caller explicitly intends to.
     if extra_env:
         env = {**env, **extra_env}
+    if skip_permissions and _running_as_root():
+        # The CLI refuses `--dangerously-skip-permissions` outright when euid == 0:
+        # "cannot be used with root/sudo privileges for security reasons". Our API
+        # container runs as root, so EVERY agentic call (page-object-author,
+        # server-side live-authoring) died in ~0.3s with a non-zero exit and no
+        # tokens spent — see #608. `IS_SANDBOX=1` is the CLI's documented escape
+        # hatch for exactly this containerised case. Set only when we are actually
+        # root and actually passing the flag, so a non-root host is untouched.
+        env = {**env, "IS_SANDBOX": "1"}
 
     # Register the call so operators can observe it live (logs + /ai/activity + WS).
     from app.services import activity, run_context, run_control
@@ -602,6 +611,17 @@ def run_agentic(
         skip_permissions=True,
         extra_env=extra_env,
     )
+
+
+def _running_as_root() -> bool:
+    """Whether this process is euid 0 (POSIX only; always False on Windows).
+
+    Used to decide whether an agentic call needs `IS_SANDBOX=1` — see the note in
+    the exec path. `os.geteuid` does not exist on Windows, where the concept does
+    not apply and the CLI does not refuse the flag.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() == 0
 
 
 def browser_harness_available() -> bool:

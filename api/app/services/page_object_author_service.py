@@ -258,10 +258,21 @@ def author_assets(
         )
         return plan, skipped("no create/extend actions")
     assert plan is not None  # pending_actions() is empty for a None plan
-    if plan.get("authoredAt"):
+    if plan.get("authoredAt") and not plan.get("authoringError"):
         # Once per ticket, like planning itself: the ticket's second case reuses
         # the library this pass authored instead of paying for the editor again.
         return plan, skipped("already authored for this ticket", authoredAt=plan["authoredAt"])
+    if plan.get("authoredAt") and plan.get("authoringError"):
+        # A previous pass FAILED and stamped the plan anyway (to stop a paid call
+        # being retried once per case). But a stamp that records an error is not
+        # "already authored" — it authored nothing, so skipping it forever left the
+        # planned page objects permanently absent while every later attempt reported
+        # ok=True and nothing warned (#608). Retry, and let the budget pre-flight
+        # below be the cost guard rather than a one-shot stamp.
+        logger.warning(
+            "page-object authoring retrying for {} {} after an earlier failure: {}",
+            run_code, ticket_external_id, plan["authoringError"],
+        )
 
     budget = settings_store.authoring_cost_budget_usd()
     if run_id is not None:
@@ -353,7 +364,15 @@ def author_assets(
         # THE handoff to generation: re-normalizing against the tree just written is
         # what turns a `create` into an importable path, with no prompt rewording.
         refreshed = automation_planner_service.refresh_plan(
-            project, run_code, ticket_external_id, plan, authoredAt=utcnow().isoformat()
+            project,
+            run_code,
+            ticket_external_id,
+            plan,
+            authoredAt=utcnow().isoformat(),
+            # Explicitly clear any error stamped by an earlier failed pass: `**extra`
+            # MERGES onto the refreshed plan, so a stale `authoringError` would make
+            # every later case retry a pass that has already succeeded (#608).
+            authoringError="",
         )
         return refreshed, {
             "ran": True,
