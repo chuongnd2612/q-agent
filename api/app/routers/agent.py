@@ -1028,6 +1028,21 @@ def agent_authoring_finalize(
         session_id,
         {"status": "done" if ok else "failed", "summary": (body.summary or "")[:800], "costUsd": body.cost_usd},
     )
+    if not ok:
+        # The device is the ONLY thing that knows why its live-authoring pass produced
+        # nothing — browser-harness could not attach, the profile was not
+        # authenticated, Claude errored, the spec file was never written. That reason
+        # rode in on `summary` and was published to the browser but never logged, so
+        # a failed run left no server-side trace at all and every diagnosis had to
+        # start from "the spec is empty" (#616). `ok` is False precisely when the
+        # posted code was empty, so this is the one line that says why.
+        logger.warning(
+            "Live authoring produced NO spec (session={} run={} case={}): {}",
+            session_id,
+            session.get("run_id"),
+            session.get("case_id"),
+            (body.summary or "(the agent sent no summary)")[:800],
+        )
     logger.info(
         "Authoring finalize (session={} run={} case={}): ok={} status={}",
         session_id,

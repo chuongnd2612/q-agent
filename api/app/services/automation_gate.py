@@ -174,6 +174,29 @@ def _list_env(project_dir: Path) -> dict[str, str]:
     return env
 
 
+#: Playwright exits **1** with this when `testDir` contains no spec at all. That is
+#: not a broken project — and it is the *normal* state while the page-object author
+#: runs, because assets are authored BEFORE any spec is generated. Treating it as a
+#: collection failure rejected every asset edit with "the edit broke project
+#: collection", rolling back page objects that were perfectly fine (#615).
+_EMPTY_COLLECTION_MARKER = "no tests found"
+
+
+def _is_empty_collection(output: str) -> bool:
+    """True when a non-zero exit only means "the test dir is empty".
+
+    Deliberately narrow: it must ALSO have got far enough to print the listing
+    header and a zero total, so a genuine compile/collection error (which fails
+    before listing, or prints a diagnostic instead) is still a failure.
+    `expect_titles` remains what makes an empty collection fail when a spec was
+    supposed to be there, so the spec gate loses no strictness.
+    """
+    lowered = output.lower()
+    if _EMPTY_COLLECTION_MARKER not in lowered:
+        return False
+    return "listing tests" in lowered and "total: 0 tests" in lowered
+
+
 def list_ok_in_project(project_dir: Path, expect_titles: list[str]) -> tuple[bool, str]:
     """Collect the whole project with ``playwright test --list``.
 
@@ -222,7 +245,7 @@ def list_ok_in_project(project_dir: Path, expect_titles: list[str]) -> tuple[boo
         return True, f"skipped: {type(exc).__name__}"
 
     output = "\n".join(p for p in (proc.stdout, proc.stderr) if p).strip()
-    if proc.returncode != 0:
+    if proc.returncode != 0 and not _is_empty_collection(output):
         # A real collection failure — this is what catches a broken page object
         # that breaks *another* case's spec, not just the candidate's.
         return False, f"playwright --list failed (rc={proc.returncode}): {output[-1200:]}"
