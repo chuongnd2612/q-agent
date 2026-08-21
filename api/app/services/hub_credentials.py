@@ -146,22 +146,48 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
     # Flag off (or no hub token on the request): nothing to do, and crucially any
     # dir left behind by an earlier attempt is cleared, so the run cannot pick up
     # stale hub material once the integration is switched off.
-    if not hub_client.enabled() or not hub_token:
+    if not hub_client.enabled():
         claude_credentials.discard_hub_run_credential(run_id)
         return SOURCE_LOCAL
+    if not hub_token:
+        # Hub-data mode: the hub's Claude credential is the ONLY source (#607). A
+        # run started without a fresh hub token cannot resolve it, and silently
+        # running on local material would be exactly the wrong answer — the whole
+        # point of the mode is that the hub decides which account is used.
+        claude_credentials.discard_hub_run_credential(run_id)
+        raise HubCredentialRefusedError(
+            "No EmeHub token on the request, so the hub's Claude credential could "
+            "not be resolved. Reload Q-Agent (which mints a fresh hub token) and "
+            "start the run again."
+        )
 
     try:
         payload = hub_client.resolve_claude_credential(hub_token)
     except (hub_client.HubUnauthorizedError, hub_client.HubUnavailableError) as exc:
-        # Not an answer about the credential — the hub is down, or this token's
-        # 15 minutes are up. Proceed on the local credential.
-        logger.info(
-            "run {} could not read the hub credential ({}); using the local credential",
+        # Not an answer about the credential — the hub is down, or this token's 15
+        # minutes are up. This used to fall back to the local credential at INFO,
+        # which is how an unreachable hub surfaced 20 minutes later, in a background
+        # worker, as "No Claude credentials configured. Upload your own credentials
+        # in Settings" — advice that was simply wrong, for a hub that had the
+        # credential all along (#607). In hub-data mode the hub is authoritative, so
+        # refuse the run here, while we still know why.
+        logger.warning(
+            "run {} could not read the hub credential from {} ({}): {}",
             run_id,
+            hub_client.effective_base_url(),
             type(exc).__name__,
+            exc,
         )
         claude_credentials.discard_hub_run_credential(run_id)
-        return SOURCE_LOCAL
+        expired = isinstance(exc, hub_client.HubUnauthorizedError)
+        raise HubCredentialRefusedError(
+            "Your EmeHub session token expired before the run could start. Reload "
+            "Q-Agent and start the run again."
+            if expired
+            else "Could not reach EmeHub to resolve the Claude credential "
+            f"({hub_client.effective_base_url()}). The hub is unreachable from the "
+            "Q-Agent server, so the run was not started."
+        ) from exc
     except hub_client.HubDisabledError:
         claude_credentials.discard_hub_run_credential(run_id)
         return SOURCE_LOCAL
@@ -176,10 +202,18 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
         ) from exc
 
     if not isinstance(payload, dict):
-        # A 200 that isn't the documented object is a broken hub, not an answer.
-        logger.warning("run {} got a malformed hub credential payload; using local", run_id)
+        # A 200 that isn't the documented object is a broken hub, not an answer —
+        # and in hub-data mode it must not silently become "use local" (#607).
+        logger.warning(
+            "run {} got a malformed hub credential payload from {}",
+            run_id,
+            hub_client.effective_base_url(),
+        )
         claude_credentials.discard_hub_run_credential(run_id)
-        return SOURCE_LOCAL
+        raise HubCredentialRefusedError(
+            "EmeHub returned an unreadable Claude credential response, so the run "
+            "was not started."
+        )
 
     status = str(payload.get("status") or "")
     hub_source = str(payload.get("source") or "")
