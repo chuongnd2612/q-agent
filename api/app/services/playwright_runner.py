@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from app import db as db_module
+from app.services.proc_shell import NEEDS_SHELL
 from app.config import settings
 from app.logging import logger
 from app.models.automation_project import AutomationProject
@@ -686,7 +687,7 @@ def _invoke_playwright(
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            shell=True,  # noqa: S602 - .cmd resolution on Windows
+            shell=NEEDS_SHELL,  # Windows-only: on POSIX this would drop every arg (#613)
             env=env,
         )
         return proc.returncode, proc.stdout, proc.stderr
@@ -699,7 +700,8 @@ def _invoke_playwright(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        shell=True,
+        # Windows-only: on POSIX `shell=True` would drop every arg (#613).
+        shell=NEEDS_SHELL,
         env=env,
     )
     run_control.register_process(run_id, popen)
