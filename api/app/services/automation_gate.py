@@ -42,6 +42,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from app.services.proc_shell import NEEDS_SHELL
 from app.config import settings
 from app.logging import logger
 
@@ -211,7 +212,7 @@ def list_ok_in_project(project_dir: Path, expect_titles: list[str]) -> tuple[boo
             capture_output=True,
             text=True,
             timeout=_LIST_TIMEOUT_S,
-            shell=True,  # noqa: S602 - .cmd resolution on Windows
+            shell=NEEDS_SHELL,  # Windows-only: on POSIX this would drop every arg (#613)
             env=_list_env(project_dir),
             encoding="utf-8",
             errors="replace",
@@ -289,7 +290,7 @@ def typecheck_ok(project_dir: Path) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=_TSC_TIMEOUT_S,
-            shell=True,  # noqa: S602 - .cmd resolution on Windows
+            shell=NEEDS_SHELL,  # Windows-only: on POSIX this would drop every arg (#613)
             env=_list_env(project_dir),
             encoding="utf-8",
             errors="replace",

@@ -61,6 +61,7 @@ __all__ = [
     "project_dir",
     "ensure_project",
     "materialize_scaffold",
+    "migrate_gitignore",
     "migrate_tsconfig",
     "migrate_base_pin",
     "base_pin_major",
@@ -256,13 +257,23 @@ def ensure_project(
 # Scaffold
 # ---------------------------------------------------------------------------
 
+# `results.json` is the JSON reporter's output (see `_PLAYWRIGHT_CONFIG` below), so it
+# lands in the project ROOT whenever anything runs the suite. Untracked, git reports it
+# as a change, and the page-object author's authorization check then blames the editor
+# for "writing files the plan did not authorize" and rolls back the assets it legitimately
+# wrote (#613). A build artifact must never be able to look like an authored file.
 _GITIGNORE = """node_modules/
 test-results/
 playwright-report/
 blob-report/
+results.json
 .auth/
 *.log
 """
+
+#: Lines a project's .gitignore must contain for artifacts not to read as authored
+#: files. Appended by `migrate_gitignore` to projects scaffolded before #613.
+_REQUIRED_IGNORES = ("results.json",)
 
 # `module`/`moduleResolution` are **NodeNext**, not the `CommonJS` + `node` pair this
 # originally scaffolded (#562). Two reasons, both measured against a real compiler:
@@ -340,6 +351,38 @@ def _package_json(project: AutomationProject) -> str:
 # both `node`/`node10` and `classic`, so a project still declaring one cannot be
 # typechecked at all — every spec in it fails for a reason that is not the spec's.
 _REMOVED_MODULE_RESOLUTIONS = frozenset({"node", "node10", "classic"})
+
+
+def migrate_gitignore(target: "Path | AutomationProject") -> bool:
+    """Append any missing artifact-ignore lines to an existing project's .gitignore.
+
+    Same shape as :func:`migrate_tsconfig` (#562) and for the same reason: projects
+    scaffolded before #613 have a `.gitignore` with no `results.json`, so the JSON
+    reporter's output reads as an unauthorized write and rolls back legitimately
+    authored assets. Self-limiting — appends only the lines that are absent, leaves
+    everything else (including hand edits) untouched, and never rewrites the file when
+    there is nothing to add.
+
+    Returns True only when it wrote.
+    """
+    root = target if isinstance(target, Path) else project_dir(target)
+    path = root / ".gitignore"
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    except OSError:
+        return False
+    present = {line.strip() for line in existing.splitlines()}
+    missing = [line for line in _REQUIRED_IGNORES if line not in present]
+    if not missing:
+        return False
+    trailing = existing.endswith("\n") or not existing
+    body = existing if trailing else existing + "\n"
+    try:
+        path.write_text(body + "\n".join(missing) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    logger.info("migrated .gitignore for {}: added {}", root.name, ", ".join(missing))
+    return True
 
 
 def migrate_tsconfig(path: Path) -> bool:
@@ -566,6 +609,10 @@ def materialize_scaffold(project: AutomationProject) -> Path:
         if not path.exists():
             path.write_text(content, encoding="utf-8")
     migrate_tsconfig(root / "tsconfig.json")
+    # Same idea for artifact ignores: a project scaffolded before #613 has no
+    # `results.json` line, so the JSON reporter output reads as an unauthorized
+    # write and rolls back legitimately authored assets.
+    migrate_gitignore(root)
     migrate_base_pin(root / "package.json")
     drift = base_version_drift(project)
     if drift:

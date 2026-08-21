@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.proc_shell import NEEDS_SHELL
 from app.config import settings
 from app.logging import logger
 from app.models.run import RunTicket
@@ -757,7 +758,7 @@ def playwright_list_ok(code: str, owner_id: int | None = None) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=60,
-                shell=True,  # noqa: S602 - .cmd resolution on Windows
+                shell=NEEDS_SHELL,  # Windows-only: on POSIX this would drop every arg (#613)
                 env=env,
             )
             return proc.returncode == 0
