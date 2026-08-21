@@ -432,3 +432,57 @@ def test_wiring_skips_both_static_gates_when_gating_is_disabled(gate_wiring):
     _gate, outcome = gate_wiring.call(project=object())
     assert outcome == "passed"
     assert called == []
+
+
+# --------------------------------------------------- #615: an empty test dir is not a failure
+def test_an_empty_test_dir_is_not_a_collection_failure():
+    """#615: Playwright exits 1 with "No tests found" when `testDir` is empty.
+
+    That is the NORMAL state while the page-object author runs, because assets are
+    authored BEFORE any spec is generated. Treating the non-zero exit as a failure
+    rejected every asset edit with "the edit broke project collection" and rolled
+    back page objects that were perfectly fine.
+    """
+    from app.services.automation_gate import _is_empty_collection
+
+    assert _is_empty_collection("Listing tests:\nTotal: 0 tests in 0 files\n\nError: No tests found")
+
+
+def test_a_real_collection_error_is_still_a_failure():
+    """The narrowness is the point: only a listing that got as far as a zero total
+    counts as "empty". A compile error fails before listing, or prints a diagnostic
+    instead, and must still be rejected."""
+    from app.services.automation_gate import _is_empty_collection
+
+    assert not _is_empty_collection(
+        "Error: No tests found\nerror TS2551: Property 'fillUsre' does not exist"
+    ), "a diagnostic alongside it is a real failure"
+    assert not _is_empty_collection(
+        "Error: Cannot find module '../../pages/UserPage'"
+    ), "a broken import never reaches the listing"
+    assert not _is_empty_collection("Listing tests:\nTotal: 3 tests in 1 file"), "not empty"
+    assert not _is_empty_collection(""), "no output tells us nothing"
+
+
+def test_expected_titles_still_fail_on_an_empty_collection(tmp_path, monkeypatch):
+    """An empty collection must still fail the SPEC gate, which is what keeps this
+    from weakening #540: `expect_titles` is the thing that says "a spec should be
+    here", and it is checked after the empty-collection allowance."""
+    import subprocess
+
+    from app.services import automation_gate as gate
+
+    monkeypatch.setattr(gate, "resolve_list_bin", lambda d: "/fake/playwright")
+
+    def fake_run(*a, **k):
+        return subprocess.CompletedProcess(
+            a[0] if a else [], 1, "Listing tests:\nTotal: 0 tests in 0 files", "Error: No tests found"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ok, detail = gate.list_ok_in_project(tmp_path, [])
+    assert ok, "no titles expected -> an empty project collects cleanly"
+
+    ok, detail = gate.list_ok_in_project(tmp_path, ["TC-01 — does a thing"])
+    assert not ok and "missing" in detail, "a spec that should be there must still be required"
