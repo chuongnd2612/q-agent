@@ -11,6 +11,7 @@ const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const authState = require('./session_auth_state.cjs');
 const [, , baseUrl, storageDest, sessionDest] = process.argv;
 
 process.on('unhandledRejection', (e) => console.error('capture unhandledRejection:', e && (e.message || e)));
@@ -103,7 +104,10 @@ async function waitForCDP(port, timeoutMs) {
         });
         if (!dump.origin || !dump.origin.startsWith('http')) continue;
         if (Object.keys(dump.local).length) localByOrigin[dump.origin] = dump.local;
-        if (Object.keys(dump.session).length) sessionByOrigin[dump.origin] = dump.session;
+        // Record faithfully, INCLUDING the transition to empty. The old guard only
+        // assigned when non-empty, so once MSAL cleared its handshake keys the stale
+        // mid-redirect map was retained forever and later replayed (#618).
+        sessionByOrigin[dump.origin] = dump.session;
       } catch {}
     }
     try {
@@ -114,7 +118,13 @@ async function waitForCDP(port, timeoutMs) {
       }));
       fs.writeFileSync(storageDest, JSON.stringify({ cookies, origins }, null, 2));
     } catch {}
-    try { fs.writeFileSync(sessionDest, JSON.stringify(sessionByOrigin, null, 2)); } catch {}
+    try {
+      // A handshake-only map is not a session; persisting it is what made the
+      // authoring browser land unauthenticated (#618).
+      const [clean, dropped] = authState.sanitize(sessionByOrigin);
+      if (dropped.length) console.error('capture: ignoring mid-login sessionStorage for', dropped.join(','));
+      fs.writeFileSync(sessionDest, JSON.stringify(clean, null, 2));
+    } catch {}
   }
 
   const timer = setInterval(() => { snapshot().catch(() => {}); }, 1500);
@@ -127,6 +137,13 @@ async function waitForCDP(port, timeoutMs) {
 
   clearInterval(timer);
   await snapshot().catch(() => {});
+  // Say plainly whether a login was actually captured. Saving whatever happened to
+  // be there let the operator believe a half-finished login had been stored (#618).
+  if (authState.anyAuthenticated(sessionByOrigin)) {
+    console.error('capture: captured an authenticated session');
+  } else {
+    console.error('capture: NO authenticated session captured — the login did not complete before the browser closed. Sign in fully, wait for the app to load, then close the window.');
+  }
   try { await browser.close(); } catch {}
   try { child.kill(); } catch {}
   process.exit(0);

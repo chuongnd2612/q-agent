@@ -28,6 +28,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const authState = require('./session_auth_state.cjs');
 const [, , baseUrl, portArg, profileDir, sessionStoragePath] = process.argv;
 const PORT = parseInt(portArg, 10);
 
@@ -78,9 +79,20 @@ async function waitForCDP(port, timeoutMs) {
 // Load the saved sessionStorage map ({origin: {k:v}}), or null if unusable.
 function loadSessionStorage() {
   if (!sessionStoragePath) return null;
+  // Guard, belt-and-braces with the capture-side fix: an older or interrupted
+  // snapshot may still hold MSAL mid-redirect state. Replaying it makes MSAL think
+  // an interaction is already running, so it restarts the redirect or errors — while
+  // doing NOTHING would have let the profile's IdP cookies re-authenticate silently
+  // (#618). Non-MSAL state is never discarded: only 'handshake-only' is dropped.
   try {
-    const m = JSON.parse(fs.readFileSync(sessionStoragePath, 'utf-8'));
-    return m && typeof m === 'object' && Object.keys(m).length ? m : null;
+    const raw = JSON.parse(fs.readFileSync(sessionStoragePath, 'utf-8'));
+    if (!raw || typeof raw !== 'object') return null;
+    const [clean, dropped] = authState.sanitize(raw);
+    if (dropped.length) {
+      console.error('authoring_browser: refusing to replay mid-login sessionStorage for',
+        dropped.join(','), '- letting the profile cookies re-authenticate instead');
+    }
+    return Object.keys(clean).length ? clean : null;
   } catch { return null; }
 }
 
