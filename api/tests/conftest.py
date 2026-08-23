@@ -13,6 +13,8 @@ workstreams: ``client``, ``db_session``, ``seed_ticket``, ``app``, ``app_env``,
 
 from __future__ import annotations
 
+import time
+
 import contextlib
 from collections.abc import Iterator
 
@@ -68,6 +70,57 @@ class FakePopen:
     def terminate(self):
         pass
 
+
+
+@pytest.fixture(autouse=True)
+def _join_automation_workers():
+    """Never let a fire-and-forget worker outlive the test that started it.
+
+    `POST /runs/{id}/automation/generate`, `/cases/{id}/spec/regenerate` and
+    `/cases/{id}/spec/chat` all return immediately and finish on a daemon thread
+    (deliberately — they make several Claude calls and would exceed the fronting
+    proxy timeout inline). Nothing waited for them, so a worker from test N was
+    still mutating `automation_specs` during test N+1.
+
+    Before #604 that collided on the `test_case_id` UNIQUE index and surfaced as a
+    loud `IntegrityError` — the flake reported in #604. #604's `_get_or_create_spec`
+    correctly made the loser *adopt* the winner's row instead of crashing, which is
+    right for production but turned the cross-test leak SILENT: the late worker now
+    overwrites whatever the next test seeded. The symptom moved to
+    `test_generate_is_incremental_and_preserves_edits` asserting on an empty `code`,
+    intermittently.
+
+    The router already publishes exactly the signal needed: each endpoint adds its
+    id to a module-level in-flight set and discards it in a `finally`. So wait on
+    those rather than inventing new bookkeeping or making production code
+    test-aware.
+    """
+    yield
+    from app.routers import automation
+
+    deadline = time.monotonic() + 30.0
+    markers = (
+        automation._generating,
+        automation._regenerating_cases,
+        automation._chatting_cases,
+    )
+    while any(markers) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    stragglers = {
+        name: sorted(marker)
+        for name, marker in (
+            ("generating", automation._generating),
+            ("regenerating", automation._regenerating_cases),
+            ("chatting", automation._chatting_cases),
+        )
+        if marker
+    }
+    # Clear so one stuck worker cannot cascade into every later test, but fail
+    # loudly: a worker that outlives a 30s wait is a bug worth seeing, not
+    # something to swallow.
+    for marker in markers:
+        marker.clear()
+    assert not stragglers, f"background automation worker(s) outlived the test: {stragglers}"
 
 @pytest.fixture
 def workspace_dir(tmp_path, monkeypatch) -> Iterator:
