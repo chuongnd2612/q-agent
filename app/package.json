@@ -6,9 +6,11 @@
   "description": "Q-Agent — AI-native QA Operating System (frontend)",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run check:i18n",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
+    "check:i18n": "node scripts/check-i18n.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

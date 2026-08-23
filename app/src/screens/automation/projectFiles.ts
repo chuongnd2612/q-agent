@@ -54,14 +54,32 @@ export function baseName(path: string): string {
 }
 
 /**
+ * The project-relative path to show for a spec's `filename`.
+ *
+ * Since #540 a project-backed spec's `filename` **is** the project-relative path
+ * (`tests/<TICKET>/<TICKET>-TC-01.spec.ts`), so it is rendered as-is. A legacy
+ * spec (`project_id IS NULL`) still carries a bare basename by design, and gets
+ * the historical `tests/` prefix so it keeps rendering a sensible path (#606).
+ */
+export function specDisplayPath(filename: string | undefined): string {
+  const name = filename ?? "";
+  if (name === "") return "";
+  return name.includes("/") ? name : `tests/${name}`;
+}
+
+/**
  * Build the file list for the selected spec: the project's own files, with a
  * synthetic entry for the **editable** spec guaranteed to be present and first.
  *
  * The server may or may not include the selected case's spec in `projectFiles`.
  * Either way exactly one row must represent the editable spec, so any entry whose
- * basename matches `specFilename` is dropped and replaced by the synthetic one
+ * path matches `specFilename` is dropped and replaced by the synthetic one
  * (its code comes from `AutomationSpec.code`, which stays authoritative for the
  * editor, chat edits and the typewriter).
+ *
+ * Since #540 `specFilename` is itself a project-relative path, so the match is on
+ * the **full path**, not the basename (#606) — a legacy bare filename is widened
+ * to a path first so both shapes still resolve. `baseName` stays for display.
  *
  * @returns `null` when there is no project (legacy spec) — the caller then renders
  *   nothing at all, leaving the screen exactly as it was before #543.
@@ -71,8 +89,8 @@ export function buildFileList(
   specFilename: string | undefined,
 ): { specPath: string; groups: ProjectFileGroup[] } | null {
   if (projectFiles == null || projectFiles.length === 0) return null;
-  const name = specFilename ?? "";
-  const own = projectFiles.find((f) => baseName(f.path) === name);
+  const name = specDisplayPath(specFilename);
+  const own = projectFiles.find((f) => f.path === name);
   const specPath = own?.path ?? name;
   const rest = projectFiles.filter((f) => f.path !== specPath);
   return {

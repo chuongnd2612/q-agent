@@ -88,9 +88,9 @@
       "regenerating": "Regenerating…",
       "updating": "Updating…"
     },
-    "empty": {
-      "title": "Not generated yet",
-      "hint": "This spec hasn't been authored yet. Use Regenerate to generate it."
+    "notGenerated": {
+      "title": "No code yet",
+      "hint": "This test case has a spec row, but generation hasn't produced any code for it yet. Use Regenerate to have Q-Agent author it."
     },
     "footer": {
       "description": "Execute the approved suite in parallel across the Run"
