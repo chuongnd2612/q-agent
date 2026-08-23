@@ -354,8 +354,17 @@ export const useCaptureSharedProjectAuth = (key: string) => {
   });
 };
 
-export const useKnowledgeList = () =>
-  useQuery({ queryKey: queryKeys.knowledgeList, queryFn: api.listKnowledge });
+/**
+ * All knowledge rows, including the hub status-only rows the server appends (#603).
+ *
+ * `enabled` exists for the Projects grid: those hub rows are projected from the
+ * summary `GET /projects` mirrors into the project row, so asking for knowledge
+ * *before* the projects request has landed can legitimately answer "nothing from
+ * the hub yet" and paint a stale badge. The grid gates on its projects query;
+ * every other caller leaves it alone.
+ */
+export const useKnowledgeList = (enabled = true) =>
+  useQuery({ queryKey: queryKeys.knowledgeList, queryFn: api.listKnowledge, enabled });
 
 export const useProjectKnowledge = (key: string | null) =>
   useQuery({

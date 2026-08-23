@@ -25,12 +25,31 @@ interface KnowledgeSummary {
   framework: string;
   indexedRepos: number;
   totalRepos: number;
+  /** True when the only thing we have is the hub's project-level status (#603) —
+   *  no per-repo rows, so the card must not claim a repo count or an index date. */
+  fromHub: boolean;
 }
 function summarize(rows: ProjectKnowledgeOut[]): KnowledgeSummary | undefined {
   if (!rows.length) return undefined;
+  const fromHub = rows.every((r) => r.source === "hub");
   const indexed = rows.filter((r) => r.status === "indexed");
   const lastIndexed =
     indexed.map((r) => r.lastIndexed).filter(Boolean).sort().at(-1) ?? null;
+  // A hub row is the project's own status, already collapsed by the hub across
+  // its repos — pass it through rather than re-deriving indexed/not_indexed and
+  // losing `stale` / `indexing` / `error` on the way.
+  if (fromHub) {
+    const row = rows[0];
+    return {
+      status: row.status,
+      confidence: row.confidence,
+      lastIndexed: row.lastIndexed,
+      framework: row.framework || "Playwright",
+      indexedRepos: 0,
+      totalRepos: 0,
+      fromHub: true,
+    };
+  }
   return {
     status: indexed.length ? "indexed" : "not_indexed",
     confidence: indexed.length
@@ -40,6 +59,7 @@ function summarize(rows: ProjectKnowledgeOut[]): KnowledgeSummary | undefined {
     framework: rows[0]?.framework || "Playwright",
     indexedRepos: indexed.length,
     totalRepos: rows.length,
+    fromHub: false,
   };
 }
 
@@ -55,7 +75,11 @@ export function Projects() {
 
   const { data: projects, isLoading, isError, refetch } = useProjects();
   const { data: providers } = useProviders();
-  const { data: knowledgeList } = useKnowledgeList();
+  // Gated on projects: the hub-derived badge rows this list carries (#603) are
+  // projected from the summary that `GET /projects` mirrors, so asking first
+  // would legitimately answer "nothing indexed" and paint the stale badge #603
+  // is about.
+  const { data: knowledgeList } = useKnowledgeList(projects !== undefined);
   const refresh = useRefreshProjects();
   // With hub data on, projects are mirrored from EmeHub. Refresh pulls through
   // the provider adapters, which cannot work for a mirrored hub connection —
@@ -196,15 +220,24 @@ function ProjectCard({
   const confidence = summary?.confidence ?? 0;
   const baseLabel = knowledgeStatusStyle(status);
   const [, statusColor, statusBg, statusDot] = baseLabel;
-  const statusLabel = summary
-    ? t("card.reposIndexed", { indexed: summary.indexedRepos, total: summary.totalRepos })
-    : baseLabel[0];
+  // The hub's summary is project-level and carries no per-repo breakdown, so the
+  // badge shows the plain status rather than a fabricated "0 of 0 repos" (#603).
+  const statusLabel =
+    summary && !summary.fromHub
+      ? t("card.reposIndexed", { indexed: summary.indexedRepos, total: summary.totalRepos })
+      : baseLabel[0];
   const [glyph, glyphBg] = providerGlyph[project.providerKind] ?? ["?", "#6b7280"];
   const glyphColor = project.providerKind === "github" ? "#12121a" : "#fff";
   const framework = summary?.framework || "Playwright";
-  const lastIndexed =
-    indexed && summary?.lastIndexed
+  const lastIndexed = summary?.lastIndexed
+    ? indexed
       ? new Date(summary.lastIndexed).toLocaleDateString()
+      : t("card.never")
+    : // "Never" would be a lie for a hub-indexed project: the hub's summary
+      // simply does not carry a timestamp, and the real one arrives with the blob
+      // when the detail screen mirrors it (#603).
+      summary?.fromHub && indexed
+      ? "—"
       : t("card.never");
 
   return (

@@ -149,12 +149,26 @@ def refresh_projects(
 @router.get("/knowledge", response_model=list[ProjectKnowledgeOut])
 def list_knowledge(
     db: Session = Depends(get_db), user: User | None = Depends(current_user)
-) -> list[ProjectKnowledge]:
+) -> list[ProjectKnowledgeOut]:
     """All Project Knowledge Bases (drives the Projects grid's status badges).
 
     Scoped to ``user`` (#93 — private per-user data).
+
+    Hub-indexed projects with no local row yet are appended as **status-only**
+    rows (``source: "hub"``, #603) so the grid stops reading "not indexed" for a
+    project the hub has indexed until its detail page is opened. Those rows come
+    out of the summary ``ensure_projects`` already mirrored into
+    ``Project.meta["hub"]`` — **this endpoint makes no hub calls at all**, which is
+    the whole point: mirroring the blob here would cost projects x repos hub round
+    trips to paint a list. A local row always wins; nothing here is persisted.
     """
-    return owned(db.query(ProjectKnowledge), ProjectKnowledge, user).all()
+    rows = owned(db.query(ProjectKnowledge), ProjectKnowledge, user).all()
+    out = [ProjectKnowledgeOut.model_validate(row) for row in rows]
+    out.extend(
+        ProjectKnowledgeOut(**fields)
+        for fields in hub_workspace.hub_knowledge_status_rows(db, user, rows)
+    )
+    return out
 
 
 @router.get("/{key}/knowledge", response_model=ProjectKnowledgeOut)
