@@ -19,6 +19,7 @@ from app.models.user import User
 from app.models.session import Session
 from app.models.agent_device import AgentDevice
 from app.models.automation_project import AutomationFile, AutomationProject
+from app.models.agent_authoring import AgentAuthoringSession
 
 __all__ = [
     "AuditLog",
@@ -27,6 +28,7 @@ __all__ = [
     "User",
     "Session",
     "AgentDevice",
+    "AgentAuthoringSession",
     "AutomationProject",
     "AutomationFile",
     "Provider",

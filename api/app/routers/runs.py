@@ -32,7 +32,7 @@ from app.models.execution import Execution, ExecutionResult
 from app.models.linked import LinkedTestCase
 from app.models.report import Report
 from app.models.run import TERMINAL_RUN_STATUSES, Run, RunTicket
-from app.models.testcase import AutomationSpec, TestCase
+from app.models.testcase import TestCase
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.routers import automation as automation_router
@@ -53,6 +53,7 @@ from app.services import (
     link_service,
     project_config_service,
     run_control,
+    run_status,
     sample_run_service,
 )
 from app.services.ai_service import run_generation_pipeline
@@ -432,21 +433,15 @@ def _stop_run_work(db: Session, run: Run) -> None:
 
     # 1) Specs left "running" by live-authoring or self-heal: keep whatever was
     #    authored so far (-> draft), else mark blocked with a reason. Collect their
-    #    cases so we can close the live trail on any open client (step 5).
-    stopped_cases: list[tuple[int, str, str]] = []
-    for spec, case in (
-        db.query(AutomationSpec, TestCase)
-        .join(TestCase, AutomationSpec.test_case_id == TestCase.id)
-        .filter(TestCase.run_id == run_id, AutomationSpec.status == "running")
-        .all()
-    ):
-        if (spec.code or "").strip():
-            spec.status = "draft"
-        else:
-            spec.status = "blocked"
-            spec.block_reason = (spec.block_reason or "").strip() or "Stopped before authoring finished."
-        db.add(spec)
-        stopped_cases.append((case.id, case.ticket_external_id, case.code))
+    #    cases so we can close the live trail on any open client (step 5). Shared
+    #    with the #605 boot sweep (`run_status.recover_orphaned_authoring`) so the
+    #    two stuck-spec resets can't drift apart.
+    stopped_cases = [
+        (case_id, ticket, code)
+        for (_run_id, case_id, ticket, code) in run_status.reset_stuck_specs(
+            db, run_id=run_id, reason="Stopped before authoring finished."
+        )
+    ]
 
     # 2) In-flight executions + their pending/running case results.
     for execution in (
