@@ -32,16 +32,37 @@ export function browserHarnessBinDir(): string {
 }
 
 /** Run a command to completion, returning its exit code (null on spawn error).
- * Inherits stdio so first-run downloads/installs are visible in the agent log. */
+ * Captures stdio and forwards it to the agent log, so first-run
+ * downloads/installs stay visible.
+ *
+ * Why piped and not `stdio: "inherit"` (#421):
+ *
+ *   - Measured on Windows 11: with `windowsHide: true` and **piped** stdio the
+ *     child gets NO console at all (`GetConsoleWindow() == 0`). With
+ *     `stdio: "inherit"` it still gets a console object — window hidden, so no
+ *     flash, but a console its own descendants then inherit. No console at all is
+ *     strictly the safer state, and it is what makes CREATE_NO_WINDOW propagate
+ *     cleanly to `uv`'s own python/tar grandchildren.
+ *   - Under Electron the agent is a GUI process with no stdout, so `inherit`
+ *     wrote provisioning output into a void — a first-run `uv` failure was
+ *     invisible (the #615 class of bug). Piping and logging makes it visible.
+ */
 function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number | null> {
   return new Promise((resolve) => {
     // windowsHide: don't pop a console window for the uv/tar/browser-harness probe
     // when the agent runs as a GUI (Electron) process with no console of its own.
     const child = spawn(cmd, args, {
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, ...env },
     });
+    const label = path.basename(cmd);
+    const forward = (chunk: unknown): void => {
+      const text = String(chunk).replace(/\s+$/, "");
+      if (text) console.log(`[${label}] ${text}`);
+    };
+    child.stdout?.on("data", forward);
+    child.stderr?.on("data", forward);
     child.on("close", resolve);
     child.on("error", () => resolve(null));
   });

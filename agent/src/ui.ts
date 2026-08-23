@@ -93,7 +93,10 @@ function sendJson(res: http.ServerResponse, code: number, body: unknown): void {
 
 function openBrowser(url: string): void {
   try {
-    const opts = { detached: true, stdio: "ignore" as const };
+    // windowsHide (#421): `cmd /c start` is a console app, so without the flag a
+    // GUI/Electron agent (no console of its own) pops a visible console window
+    // for the split second it takes to hand the URL to the shell.
+    const opts = { detached: true, stdio: "ignore" as const, windowsHide: true };
     if (process.platform === "win32") spawn("cmd", ["/c", "start", "", url], opts).unref();
     else if (process.platform === "darwin") spawn("open", [url], opts).unref();
     else spawn("xdg-open", [url], opts).unref();
