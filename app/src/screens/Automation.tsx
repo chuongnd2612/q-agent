@@ -842,6 +842,7 @@ export function Automation() {
             authoringActive={authoringActive}
             authoringLines={authoringForSelected?.lines ?? []}
             authoringDone={authoringForSelected?.done ?? false}
+            authoringPaused={authoringForSelected?.paused ?? false}
             updateSpecPending={updateSpec.isPending}
             startExecutionPending={startExecution.isPending}
             copyLabel={copyLabel}

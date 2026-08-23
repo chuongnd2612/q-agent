@@ -922,6 +922,28 @@ export interface ExecutionOut {
   results: ExecutionResultOut[];
 }
 
+/**
+ * Live-authoring pause state for one case (`GET /cases/{id}/authoring`, #619).
+ *
+ * Fetched rather than derived from the WS stream because the `paused` event fires
+ * once: a user who reloads mid-pause would otherwise see a dead spinner with no
+ * way to continue the session their device is still holding a browser open for.
+ */
+export interface AuthoringStateOut {
+  active: boolean;
+  status: string;
+  canPause: boolean;
+  canContinue: boolean;
+  pausePending?: boolean;
+  /** False ⇒ Continue will run a FRESH guided pass, not `claude --resume`. */
+  resumable?: boolean;
+  guidancePending?: number;
+  guidanceGiven?: number;
+  costUsdSoFar?: number;
+  remainingBudgetUsd?: number;
+  resumeCount?: number;
+}
+
 /** A paired Local Agent device (`GET /agent/devices`). */
 export interface AgentDeviceOut {
   id: number;

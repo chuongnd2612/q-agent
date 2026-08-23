@@ -46,9 +46,13 @@ from app.models.testcase import AutomationSpec, TestCase
 from app.models.user import User
 from app.schemas import (
     AuthoringClaimOut,
+    AuthoringEventOut,
     AuthoringEventRequest,
     AuthoringFinalizeOut,
     AuthoringFinalizeRequest,
+    AuthoringPausedOut,
+    AuthoringPausedRequest,
+    AuthoringResumeOut,
     ExploreClaimOut,
     ExploreDecideRequest,
     ExploreDecideStartOut,
@@ -951,21 +955,101 @@ def agent_authoring_next(
     ).model_dump(by_alias=True)
 
 
-@router.post("/authoring/{session_id}/events")
+@router.post("/authoring/{session_id}/events", response_model=AuthoringEventOut)
 def agent_authoring_events(
     session_id: str,
     body: AuthoringEventRequest,
     user: User = Depends(require_agent),
     db: Session = Depends(get_db),
-) -> dict:
-    """Relay an authoring progress event onto the run's WebSocket."""
+) -> AuthoringEventOut:
+    """Relay an authoring progress event onto the run's WebSocket.
+
+    The reply also carries any pending ``control`` directive (#619). The agent
+    already posts here once per Claude step and already reads the status (a 404
+    means "run stopped, abort"), so Pause rides the same channel: no new poller,
+    and the directive lands within one step. Keeping it on this response — rather
+    than a separate endpoint the agent polls — is why pause needs nothing in
+    process memory (#605/#625).
+    """
     session = agent_authoring_service.get_session(session_id, user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Authoring session not found")
     run_id = session.get("run_id")
     if run_id is not None:
         hub.publish(str(run_id), body.event, body.payload or {})
-    return {"ok": True}
+    return AuthoringEventOut(
+        ok=True, control=agent_authoring_service.pending_control(session_id, user.id)
+    )
+
+
+@router.post("/authoring/{session_id}/paused", response_model=AuthoringPausedOut)
+def agent_authoring_paused(
+    session_id: str,
+    body: AuthoringPausedRequest,
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+) -> AuthoringPausedOut:
+    """The device confirming it stopped Claude and parked the session (#619).
+
+    Records Claude CLI's OWN ``session_id`` — scraped from the ``stream-json``
+    envelope on the device and, before #619, never captured anywhere — plus the
+    session's spend so far. Both are needed by Continue: the first to
+    ``claude --resume`` the very same reasoning context, the second so the cost
+    ceiling is a SESSION budget rather than one that resets on every resume.
+    """
+    row = agent_authoring_service.mark_paused(
+        session_id,
+        owner_id=user.id,
+        claude_session_id=body.claude_session_id or "",
+        cost_usd=float(body.cost_usd or 0.0),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Authoring session not found")
+    run_id = row.get("run_id")
+    if run_id is not None:
+        hub.publish(
+            str(run_id),
+            "authoring.progress",
+            {
+                "case": row.get("case_id"),
+                "phase": "paused",
+                "message": (
+                    "Paused — the browser is still open. Navigate it wherever you need, "
+                    "type guidance in the chat, then Continue."
+                ),
+                "costUsd": row.get("cost_usd_so_far", 0.0),
+                "resumable": bool(row.get("claude_session_id")),
+            },
+        )
+    return AuthoringPausedOut(
+        ok=True, status="paused", remaining_budget_usd=row.get("remaining_budget_usd", 0.0)
+    )
+
+
+@router.post("/authoring/{session_id}/resume", response_model=AuthoringResumeOut)
+def agent_authoring_resume_poll(
+    session_id: str,
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+) -> AuthoringResumeOut:
+    """The parked device asking what to do next: keep waiting, resume, or tear down.
+
+    This is the ONLY path that can actually close the held-open Chrome, so
+    ``abort`` is load-bearing rather than advisory: an expired pause, a stopped
+    run and an exhausted session budget all arrive here. The guidance turns are
+    consumed inside the same conditional UPDATE that flips ``resuming`` ->
+    ``running``, so a duplicated poll cannot replay them.
+    """
+    directive = agent_authoring_service.take_resume_directive(session_id, user.id)
+    return AuthoringResumeOut(
+        action=str(directive.get("action") or "wait"),
+        reason=str(directive.get("reason") or ""),
+        guidance=list(directive.get("guidance") or []),
+        guidance_history=list(directive.get("guidanceHistory") or []),
+        claude_session_id=str(directive.get("claudeSessionId") or ""),
+        remaining_budget_usd=float(directive.get("remainingBudgetUsd") or 0.0),
+        resume_count=int(directive.get("resumeCount") or 0),
+    )
 
 
 @router.post("/authoring/{session_id}/finalize", response_model=AuthoringFinalizeOut)

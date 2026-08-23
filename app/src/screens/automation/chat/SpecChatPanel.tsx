@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { useRunEvents } from "@/hooks/useRunEvents";
-import { useSendSpecChat, useSpecs, useUpdateSpec } from "@/hooks/queries";
+import { useAuthoringState, useSendSpecChat, useSpecs, useUpdateSpec } from "@/hooks/queries";
 import { AI_MODEL_OPTIONS } from "@/lib/models";
 import { useUI } from "@/store/ui";
 import type { AutomationSpecOut, ChatErrorPayload, ChatReplyPayload } from "@/types/api";
@@ -64,6 +64,11 @@ export function SpecChatPanel({ runId, spec }: Props) {
   // @-mention: the run's specs the reviewer can embed as context. `mention` is the
   // active token (the text after the last "@") + where it starts, or null.
   const specs = useSpecs(runId).data ?? [];
+  // #619: while live authoring holds this case the panel is the GUIDANCE channel,
+  // not the spec-edit channel — the server banks the message on the authoring
+  // session and no `automation.chat.reply` will ever arrive for it.
+  const authoring = useAuthoringState(caseId, caseId > 0).data;
+  const guidanceMode = Boolean(authoring?.active);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const mentionMatches = mention
     ? specs.filter((s) => s.filename.toLowerCase().includes(mention.query.toLowerCase())).slice(0, 8)
@@ -116,7 +121,28 @@ export function SpecChatPanel({ runId, spec }: Props) {
     ]);
     setInput("");
     setMention(null);
-    sendChat.mutate({ caseId, message, model: model || undefined, messageId });
+    sendChat.mutate(
+      { caseId, message, model: model || undefined, messageId },
+      {
+        // A message routed to authoring gets NO WS reply, so its pending bubble
+        // must be resolved from this response. Without this the panel would spin
+        // forever and `busy` would lock the input — the exact failure a naive
+        // "just route it server-side" change produces.
+        onSuccess: (res) => {
+          if (res?.routedToAuthoring) {
+            patch(messageId, {
+              thinking: false,
+              text: t("progress.authoring.guidanceQueued"),
+            });
+          }
+        },
+        onError: (err) =>
+          patch(messageId, {
+            thinking: false,
+            error: (err as { message?: string })?.message || String(err),
+          }),
+      },
+    );
   };
 
   // Detect an active "@…" token immediately before the caret, to drive the
@@ -255,6 +281,17 @@ export function SpecChatPanel({ runId, spec }: Props) {
                       <span className="truncate font-mono text-ink-soft">{s.filename}</span>
                     </button>
                   ))}
+                </div>
+              )}
+              {guidanceMode && (
+                // Say it before they type, not after: the same box does two very
+                // different things depending on whether a device is authoring
+                // this case right now, and only one of them edits the spec.
+                <div
+                  className="mb-2 rounded-lg px-2.5 py-1.5 text-[11px] text-violet-200"
+                  style={{ background: "rgba(139,92,246,.14)" }}
+                >
+                  {t("progress.authoring.chatIsGuidance")}
                 </div>
               )}
               <div className="mb-2 flex flex-wrap gap-1.5">

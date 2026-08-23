@@ -35,6 +35,7 @@ from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import (
+    AuthoringGuidanceRequest,
     AutomationExportRequest,
     AutomationSpecRegenerate,
     AutomationSpecUpdate,
@@ -1403,6 +1404,167 @@ def _run_spec_chat(run_id: int, case_id: int, message: str, message_id: str) -> 
         run_context.clear()
 
 
+# ------------------------------------ Pause / continue live authoring (#619)
+#
+# "Stop mid-authoring, feed more input, continue." All three verbs address the
+# CASE, not the queue's session id, because that is what the UI holds — the
+# session id is an agent-protocol detail. Every bit of state lives in the
+# agent_authoring_sessions row (#605/#625); nothing here keeps anything in memory.
+
+
+def _authoring_session_for(case_id: int, user: User | None) -> dict | None:
+    from app.services import agent_authoring_service
+
+    return agent_authoring_service.live_session_for_case(case_id, user.id if user else None)
+
+
+def _route_chat_to_authoring(
+    case_id: int, run_id: int, message: str, user: User | None
+) -> dict | None:
+    """Bank a chat message as authoring guidance, or ``None`` to let the chat run.
+
+    Returns a reply payload (and echoes it on the run WS so the trail shows the
+    guidance inline with Claude's steps) only when a live authoring session holds
+    this case. A ``queued`` session is deliberately included: guidance typed before
+    the device claims the job is still guidance, and it is delivered on the first
+    resume rather than silently dropped.
+    """
+    from app.services import agent_authoring_service
+
+    session = _authoring_session_for(case_id, user)
+    if session is None:
+        return None
+    updated = agent_authoring_service.add_guidance(
+        session["session_id"], message, user.id if user else None
+    )
+    if updated is None:
+        return None
+    hub.publish(
+        str(run_id),
+        "authoring.progress",
+        {"case": case_id, "phase": "guidance", "message": f"You: {message[:300]}"},
+    )
+    return {
+        "started": False,
+        "routedToAuthoring": True,
+        "caseId": case_id,
+        "authoringStatus": updated["status"],
+        "guidancePending": len(updated["guidance"]),
+    }
+
+
+@router.get("/cases/{case_id}/authoring")
+def get_case_authoring_state(
+    case_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+) -> dict:
+    """The case's live-authoring session state, for the Pause/Continue controls.
+
+    A GET rather than WS-only state because the trail must render correctly after a
+    reload: the ``paused`` WS event fires once, and a user who refreshes mid-pause
+    would otherwise see a dead spinner and no way to continue.
+    """
+    _get_case_and_run_or_404(db, case_id, user)
+    session = _authoring_session_for(case_id, user)
+    if session is None:
+        return {"active": False, "status": "", "canPause": False, "canContinue": False}
+    status = session["status"]
+    return {
+        "active": True,
+        "status": status,
+        "canPause": status == "running" and not session["pause_requested"],
+        "canContinue": status == "paused",
+        "pausePending": session["pause_requested"],
+        # False ⇒ Continue will take the FALLBACK path (a fresh guided pass), because
+        # the device never reported a Claude session id to --resume.
+        "resumable": bool(session["claude_session_id"]),
+        "guidancePending": len(session["guidance"]),
+        "guidanceGiven": len(session["guidance_history"]),
+        "costUsdSoFar": session["cost_usd_so_far"],
+        "remainingBudgetUsd": session["remaining_budget_usd"],
+        "resumeCount": session["resume_count"],
+    }
+
+
+@router.post("/cases/{case_id}/authoring/pause")
+def pause_case_authoring(
+    case_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+) -> dict:
+    """Ask the device to stop Claude at its next step, keeping the browser open.
+
+    409 when there is nothing to pause — a case that is not being live-authored, or
+    one still ``queued`` (no device holds it yet), which is the "pause during a
+    non-authoring stage" case: refused cleanly rather than half-applied.
+    """
+    from app.services import agent_authoring_service
+
+    _get_case_and_run_or_404(db, case_id, user)
+    session = _authoring_session_for(case_id, user)
+    if session is None:
+        raise HTTPException(status_code=409, detail="This case is not being live-authored")
+    outcome = agent_authoring_service.request_pause(
+        session["session_id"], user.id if user else None
+    )
+    if outcome in ("not-found", "not-running"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Live authoring has not started on the device yet — nothing to pause"
+                if outcome == "not-running"
+                else "This case is not being live-authored"
+            ),
+        )
+    return {"ok": True, "outcome": outcome, "status": session["status"]}
+
+
+@router.post("/cases/{case_id}/authoring/continue")
+def continue_case_authoring(
+    case_id: int,
+    payload: AuthoringGuidanceRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """Continue a paused session, optionally with one more guidance turn.
+
+    The device picks this up on its resume poll and either ``claude --resume``s the
+    same session (context preserved) or, when that is impossible, runs a fresh pass
+    carrying the accumulated guidance — a decision made on the device, because only
+    it can see whether the transcript still exists.
+    """
+    from app.services import agent_authoring_service
+
+    _get_case_and_run_or_404(db, case_id, user)
+    session = _authoring_session_for(case_id, user)
+    if session is None:
+        raise HTTPException(status_code=409, detail="This case is not being live-authored")
+    outcome = agent_authoring_service.request_resume(
+        session["session_id"],
+        owner_id=user.id if user else None,
+        guidance=payload.guidance or "",
+    )
+    if outcome == "not-paused":
+        raise HTTPException(status_code=409, detail="This authoring session is not paused")
+    if outcome == "budget-exhausted":
+        raise HTTPException(
+            status_code=409,
+            detail="The authoring budget for this session is spent — nothing left to resume with",
+        )
+    if outcome == "resume-limit":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This session has been resumed the maximum number of times — "
+                "let it finish, then regenerate"
+            ),
+        )
+    if outcome == "expired":
+        raise HTTPException(
+            status_code=409, detail="This pause expired and the session was torn down"
+        )
+    if outcome == "not-found":
+        raise HTTPException(status_code=409, detail="This case is not being live-authored")
+    return {"ok": True, "outcome": outcome, "status": "resuming"}
+
+
 @router.post("/cases/{case_id}/spec/chat")
 def chat_edit_spec(
     case_id: int,
@@ -1419,12 +1581,20 @@ def chat_edit_spec(
     message is empty.
     """
     case, run = _get_case_and_run_or_404(db, case_id, user)
-    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
-    if spec is None:
-        raise HTTPException(status_code=404, detail="Generate a spec for this case first")
     message = (payload.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
+    # #619: while live authoring holds this case, the chat is the GUIDANCE channel,
+    # not the spec-edit channel. Editing a spec that a device is mid-authoring is
+    # incoherent anyway — the agent will overwrite it on finalize — so the message
+    # is banked on the authoring session instead and delivered to Claude on
+    # Continue. The reply says so, so the panel can label it as guidance.
+    routed = _route_chat_to_authoring(case_id, run.id, message, user)
+    if routed is not None:
+        return routed
+    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Generate a spec for this case first")
     message_id = payload.messageId or uuid4().hex
     if case_id not in _chatting_cases:
         _chatting_cases.add(case_id)

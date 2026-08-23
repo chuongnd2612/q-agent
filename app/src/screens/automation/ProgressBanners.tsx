@@ -1,8 +1,14 @@
-import { Check, Sparkles, Telescope } from "lucide-react";
+import { Check, Pause, Play, Sparkles, Telescope } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { useSettings } from "@/hooks/queries";
+import {
+  useAuthoringState,
+  useContinueAuthoring,
+  usePauseAuthoring,
+  useSettings,
+} from "@/hooks/queries";
+import { toast } from "@/lib/toast";
 import { THINKING_STEPS } from "./useThinkingSteps";
 import { describeExploreStep } from "./exploreStep";
 import type { AuthoringProgress, ExploreProgress, ExploreStep, GenProgress, HealProgress } from "./useAutomationEvents";
@@ -117,7 +123,16 @@ export function HealProgressBanner({ healProgress }: { healProgress: HealProgres
  * Respects the `authoringLogVerbosity` setting: in "concise" (default) the raw
  * tool/Bash lines are hidden so users see only Claude's narration + phase status;
  * "verbose" shows everything. Auto-scrolls to the latest line as it streams. */
-export function AuthoringTrail({ lines, done }: { lines: string[]; done: boolean }) {
+export function AuthoringTrail({
+  lines,
+  done,
+  paused = false,
+}: {
+  lines: string[];
+  done: boolean;
+  /** #619: a paused session is not "working" — a spinner there reads as a hang. */
+  paused?: boolean;
+}) {
   const { data: settings } = useSettings();
   const concise = (settings?.authoringLogVerbosity ?? "concise") === "concise";
   const shown = concise ? lines.filter((l) => !isToolLine(l)) : lines;
@@ -137,7 +152,7 @@ export function AuthoringTrail({ lines, done }: { lines: string[]; done: boolean
           {l}
         </div>
       ))}
-      {!done && (
+      {!done && !paused && (
         <div className="flex items-center gap-2 text-[12px]">
           <span
             className="h-[14px] w-[14px] shrink-0 rounded-full border-2"
@@ -145,6 +160,73 @@ export function AuthoringTrail({ lines, done }: { lines: string[]; done: boolean
           />
           <span className="text-ink">working…</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Pause / Continue for a live-authoring session (#619).
+ *
+ * Renders nothing unless the case actually has a live session, so the same
+ * component is safe in both the banner and the code panel. The button set is
+ * driven by the SERVER's view of the session (`canPause` / `canContinue`), not by
+ * the WS trail: the trail is a stream of lines, and a user who reloaded has none
+ * of it while their device is still holding a browser open.
+ */
+export function AuthoringPauseControls({ caseId }: { caseId: number }) {
+  const { t } = useTranslation("pipeline");
+  const { data } = useAuthoringState(caseId, caseId > 0);
+  const pause = usePauseAuthoring(caseId);
+  const resume = useContinueAuthoring(caseId);
+  if (!data?.active) return null;
+  const paused = data.status === "paused";
+  const busy = pause.isPending || resume.isPending;
+  const fail = (err: unknown) =>
+    toast.error((err as { message?: string })?.message || String(err));
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-3">
+      {paused ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            resume
+              .mutateAsync("")
+              .then(() => toast.success(t("progress.authoring.continuing")))
+              .catch(fail);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)" }}
+        >
+          <Play size={13} /> {t("progress.authoring.continue")}
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={busy || !data.canPause}
+          onClick={() => {
+            pause.mutateAsync().catch(fail);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[12px] font-semibold text-ink disabled:opacity-50"
+        >
+          <Pause size={13} />{" "}
+          {data.pausePending ? t("progress.authoring.pausing") : t("progress.authoring.pause")}
+        </button>
+      )}
+      <span className="min-w-0 flex-1 text-[11px] text-muted">
+        {paused
+          ? data.resumable
+            ? t("progress.authoring.pausedHint")
+            : t("progress.authoring.pausedFreshHint")
+          : t("progress.authoring.pauseHint")}
+      </span>
+      {typeof data.remainingBudgetUsd === "number" && data.remainingBudgetUsd > 0 && (
+        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-muted">
+          {t("progress.authoring.budgetLeft", {
+            amount: data.remainingBudgetUsd.toFixed(2),
+          })}
+        </span>
       )}
     </div>
   );
@@ -163,7 +245,7 @@ export function AuthoringCost({ costUsd }: { costUsd: number | undefined }) {
 /** Live authoring trail (#400): the streamed step log while the paired agent
  * drives browser-harness to author a spec — Claude's messages + tool calls. */
 export function AuthoringProgressBanner({ authoringProgress }: { authoringProgress: AuthoringProgress }) {
-  const { lines, done, costUsd } = authoringProgress;
+  const { lines, done, costUsd, paused } = authoringProgress;
   return (
     <GlassCard className="mb-3.5 p-4 md:p-[22px]" style={{ borderColor: "rgba(139,92,246,.32)" }}>
       <div className="mb-[14px] flex items-center gap-[13px]">
@@ -181,7 +263,8 @@ export function AuthoringProgressBanner({ authoringProgress }: { authoringProgre
           <div className="mt-0.5 text-xs text-muted">Claude is driving the browser to author this spec</div>
         </div>
       </div>
-      <AuthoringTrail lines={lines} done={done} />
+      <AuthoringTrail lines={lines} done={done} paused={paused} />
+      {!done && <AuthoringPauseControls caseId={authoringProgress.caseId} />}
     </GlassCard>
   );
 }

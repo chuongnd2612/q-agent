@@ -942,6 +942,40 @@ export const useSendSpecChat = (_runId: number | string) =>
     }) => api.sendSpecChat(caseId, message, model, messageId),
   });
 
+// ------------------------------------- Pause / continue live authoring (#619)
+
+/**
+ * The case's live-authoring pause state.
+ *
+ * Polled while a session is live rather than read only from the WS: the `paused`
+ * event fires once, so a reload mid-pause would otherwise leave the panel with a
+ * spinner and no Continue — while the user's own machine keeps a Chrome window
+ * open waiting for it.
+ */
+export const useAuthoringState = (caseId: number, enabled: boolean) =>
+  useQuery({
+    queryKey: queryKeys.authoringState(caseId),
+    queryFn: () => api.getAuthoringState(caseId),
+    enabled: enabled && caseId > 0,
+    refetchInterval: enabled ? 4000 : false,
+  });
+
+export const usePauseAuthoring = (caseId: number) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.pauseAuthoring(caseId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authoringState(caseId) }),
+  });
+};
+
+export const useContinueAuthoring = (caseId: number) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (guidance: string) => api.continueAuthoring(caseId, guidance),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.authoringState(caseId) }),
+  });
+};
+
 export const useUpdateSpec = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({

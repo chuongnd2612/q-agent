@@ -5,7 +5,7 @@ import type { AutomationSpecOut } from "@/types/api";
 import { Pill } from "@/components/ui/badges";
 import { GateRejectedNote } from "./banners";
 import { CodeHighlight, type FoldRange } from "./CodeViewer";
-import { AuthoringTrail } from "./ProgressBanners";
+import { AuthoringPauseControls, AuthoringTrail } from "./ProgressBanners";
 import { RegenerateWithNote } from "./RegenerateWithNote";
 import { specDisplayPath } from "./projectFiles";
 
@@ -39,6 +39,7 @@ export function SpecCodePanel({
   authoringActive,
   authoringLines,
   authoringDone,
+  authoringPaused,
   updateSpecPending,
   startExecutionPending,
   copyLabel,
@@ -84,6 +85,8 @@ export function SpecCodePanel({
   authoringActive: boolean;
   authoringLines: string[];
   authoringDone: boolean;
+  /** #619: the session is parked with the browser still open, awaiting Continue. */
+  authoringPaused: boolean;
   updateSpecPending: boolean;
   startExecutionPending: boolean;
   copyLabel: string;
@@ -292,7 +295,8 @@ export function SpecCodePanel({
         />
       ) : authoringActive ? (
         <div className="px-4 py-[18px]" style={{ minHeight: 380, background: "rgba(8,8,13,.6)" }}>
-          <AuthoringTrail lines={authoringLines} done={authoringDone} />
+          <AuthoringTrail lines={authoringLines} done={authoringDone} paused={authoringPaused} />
+          {!authoringDone && <AuthoringPauseControls caseId={selectedSpec?.testCaseId ?? 0} />}
         </div>
       ) : selectedSpec && !(selectedSpec.code ?? "").trim() ? (
         // Spec row exists but has no code yet (not generated) — show a friendly

@@ -471,6 +471,88 @@ class AuthoringFinalizeOut(ApiModel):
     ok: bool = True
 
 
+# ------------------------------------- Pause / resume a live authoring session (#619)
+class AuthoringEventOut(ApiModel):
+    """Reply to ``POST /agent/authoring/{id}/events``.
+
+    ``control`` piggybacks the user's Pause onto the channel the agent ALREADY
+    polls (one progress post per Claude step), so pause is delivered within a step
+    with no second poller and no process-memory flag. ``""`` means carry on;
+    ``"pause"`` means stop Claude but keep Chrome, the workdir and
+    ``CLAUDE_CONFIG_DIR`` alive and park.
+    """
+
+    ok: bool = True
+    control: str = ""
+
+
+class AuthoringPausedRequest(ApiModel):
+    """Body for ``POST /agent/authoring/{id}/paused`` — the device confirming it parked.
+
+    ``claude_session_id`` is Claude CLI's OWN session id, read off the
+    ``--output-format stream-json`` envelope. It is the only value ``claude
+    --resume`` accepts; the queue's ``session_id`` is Q-Agent's id and is useless
+    for that. An EMPTY value is meaningful, not an error: it is precisely the
+    signal that Continue must fall back to a fresh guided pass.
+
+    ``cost_usd`` is the session total so far (the agent accumulates across passes),
+    stored absolutely so a retried post cannot double-count the session budget.
+    """
+
+    claude_session_id: str = ""
+    cost_usd: float = 0.0
+
+
+class AuthoringPausedOut(ApiModel):
+    """Pause acknowledgement — how much of the SESSION budget is left to resume with."""
+
+    ok: bool = True
+    status: str = "paused"
+    remaining_budget_usd: float = 0.0
+
+
+class AuthoringResumeOut(ApiModel):
+    """Reply to the parked device's resume poll.
+
+    ``action`` is one of ``wait`` (still paused — hold the browser open),
+    ``resume`` (the user pressed Continue) or ``abort`` (tear the browser and
+    workdir down and finalize: the pause expired, the session was stopped, or the
+    session budget is spent).
+
+    ``guidance`` is the turns not yet delivered; ``guidance_history`` is every turn
+    ever given, which the device needs only on the FALLBACK path — a fresh Claude
+    pass has no memory of earlier turns, a genuine ``--resume`` does.
+    """
+
+    action: str = "wait"
+    reason: str = ""
+    guidance: list[str] = Field(default_factory=list)
+    guidance_history: list[str] = Field(default_factory=list)
+    claude_session_id: str = ""
+    remaining_budget_usd: float = 0.0
+    resume_count: int = 0
+
+
+class AuthoringPauseControlOut(ApiModel):
+    """Reply to the user's Pause / Continue on the authoring trail.
+
+    ``outcome`` is the service's verdict verbatim (``requested``,
+    ``already-paused``, ``not-running``, ``resuming``, ``budget-exhausted``,
+    ``expired``, ``not-found``) so the UI can say what actually happened instead
+    of guessing from a bare 200.
+    """
+
+    ok: bool = True
+    outcome: str = ""
+    status: str = ""
+
+
+class AuthoringGuidanceRequest(ApiModel):
+    """Body for the user's Continue — the guidance typed in the spec chat."""
+
+    guidance: str = ""
+
+
 # ------------------------------------------------------- Shared namespace (#120)
 class SharedProjectKnowledgeOut(ApiModel):
     """One repo's (or the bare project's, when ``repo`` is blank) knowledge status

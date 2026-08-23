@@ -13,6 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import * as api from "./api";
+import { buildPassArgs, findTranscript, planPass, sessionIdFrom } from "./authoringResume";
 import { emit } from "./bus";
 import { AgentConfig } from "./config";
 import { ensureChromium } from "./ensureBrowser";
@@ -1102,6 +1103,37 @@ export async function processExplorationJob(cfg: AgentConfig, session: api.Explo
 
 const AUTHORING_CDP_READY_TIMEOUT_MS = 30_000;
 
+/** How often a parked (paused) session asks the server whether to continue (#619). */
+const AUTHORING_RESUME_POLL_MS = 3_000;
+
+/**
+ * Device-side ceiling on a pause, as a backstop only.
+ *
+ * The server expires a pause (``PAUSE_EXPIRES_AFTER``) and answers the poll with
+ * `abort`, which is the normal teardown path. This exists for the case where the
+ * server is unreachable for the whole pause: without it an unreachable server
+ * would leave a Chrome window and a temp dir on the user's machine forever, which
+ * is precisely the leak #619 says must not happen. Deliberately LONGER than the
+ * server window so the server's decision wins whenever it can be heard.
+ */
+const AUTHORING_PAUSE_HARD_CAP_MS = 75 * 60 * 1_000;
+
+/** Human-readable trail line for a `abort` directive from the server. */
+function resumeAbortMessage(reason: string): string {
+  switch (reason) {
+    case "pause-expired":
+      return "Pause expired — closing the browser and wrapping up with whatever was authored.";
+    case "budget-exhausted":
+      return "The authoring budget for this session is spent — wrapping up.";
+    case "resume-limit":
+      return "This session has been resumed too many times — wrapping up.";
+    case "session-gone":
+      return "The run was stopped — closing the browser.";
+    default:
+      return `Cannot continue (${reason || "unknown"}) — closing the browser.`;
+  }
+}
+
 /** Grab a free localhost TCP port for the dedicated Chrome's CDP endpoint. */
 async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -1165,7 +1197,13 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "qagent-authoring-"));
   const port = await getFreePort();
   let launcher: ChildProcess | null = null;
-  let claude: ChildProcess | null = null;
+  // A REF cell, not a plain `let`: the Claude child is now (re)assigned inside
+  // `runPass`, a closure, and TypeScript's control-flow analysis would narrow a
+  // plain `let` back to `null` in the `finally`, making the optional-chained
+  // kill there a compile error against `never`. Behaviourally identical, and the indirection
+  // is the point: across a pause there is a SEQUENCE of Claude children, while
+  // the launcher (Chrome) and the workdir stay the same throughout.
+  const claudeChild: { current: ChildProcess | null } = { current: null };
   try {
     await api
       .postAuthoringEvent(cfg, job.sessionId, "authoring.progress", {
@@ -1239,17 +1277,9 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     }
     // Prompt goes as the -p ARGUMENT (not stdin — headless `claude -p` reads the
     // prompt from argv). stream-json + verbose lets us surface every step live.
-    const claudeArgs = [
-      "-p", job.taskPrompt,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--model", job.model,
-      "--append-system-prompt-file", systemFile,
-      "--allowedTools", "Bash", "Read", "Write", "Glob", "Grep",
-      "--dangerously-skip-permissions",
-      "--add-dir", workDir,
-      "--max-budget-usd", String(job.maxBudgetUsd),
-    ];
+    // argv is built by `buildPassArgs` because a RESUMED pass (#619) must run with
+    // exactly the same tools/system prompt/--add-dir as the pass it continues, and
+    // two copies of that list is how they drift apart.
     // Prepend browser-harness's bin dir to PATH (overwrite the same-case key so
     // Windows doesn't end up with both Path and PATH).
     const pathVar = Object.keys(process.env).find((k) => k.toLowerCase() === "path") || "PATH";
@@ -1259,40 +1289,14 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
       [pathVar]: `${bh.binDir}${path.delimiter}${process.env[pathVar] || ""}`,
     };
     if (claudeConfigDir) claudeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;
-    // Spawn the native `claude` binary directly (it is not a JS entry).
-    //
-    // windowsHide is LOAD-BEARING for the grandchildren, not just for `claude`
-    // itself (#421). Claude's Bash tool runs `browser-harness` (a console-
-    // subsystem Python CLI) once per step, and those were the windows seen
-    // flashing. Measured on Windows 11, from a console-less parent:
-    //
-    //   claude spawned WITHOUT windowsHide -> claude gets a VISIBLE console, and
-    //     every grandchild ATTACHES TO THAT SAME console window (same HWND) and
-    //     is visible. One flash per browser-harness call.
-    //   claude spawned WITH windowsHide (CREATE_NO_WINDOW) -> claude gets no
-    //     console (GetConsoleWindow() == 0), and a grandchild launched by a plain
-    //     CreateProcess we do NOT control (bash -> browser-harness) also gets
-    //     none. CREATE_NO_WINDOW is inherited down the whole subtree.
-    //
-    // So the flag propagates and no native shim is needed. Do NOT "fix" this by
-    // routing through `conhost.exe --headless`: measured, it replaces the child's
-    // stdout with terminal escape sequences, so the --output-format stream-json
-    // events below never arrive and authoring fails silently (#615). Piped stdio
-    // + windowsHide suppresses the console WITHOUT touching the pipes.
-    claude = spawn(claudeCli(), claudeArgs, {
-      cwd: workDir,
-      env: claudeEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    activeChild = claude;
-
     // Surface each step to the agent console + the run WebSocket so the operator
     // can watch Claude drive browser-harness live. Each post also reports whether
-    // the session is still alive: a 404 means the run was stopped server-side
-    // (#420), so abort the local Claude run immediately instead of burning the
-    // rest of the budget on work whose result will be rejected anyway.
+    // the session is still alive (a 404 means the run was stopped server-side —
+    // #420 — so abort instead of burning budget on a rejected result) AND whether
+    // the user pressed Pause (#619). Pause rides that existing per-step post
+    // rather than a second poller, so it lands within one step.
     let aborted = false;
+    let pauseAsked = false;
     // AGENT LOG mirrors the web trail's Settings verbosity (#438): in "concise"
     // (default) skip the raw tool/Bash step lines (▷ …) so the local log shows
     // only Claude's readable narration. The server WS still gets every line — the
@@ -1308,54 +1312,193 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
         .postAuthoringEventAlive(cfg, job.sessionId, "authoring.progress", {
           case: job.caseId, phase: "step", message: trimmed,
         })
-        .then((alive) => {
+        .then(({ alive, control }) => {
           if (!alive && !aborted) {
             aborted = true;
             console.log(`[authoring ${job.caseId}] session gone — run stopped; aborting Claude`);
-            try { claude?.kill(); } catch { /* already exited */ }
+            try { claudeChild.current?.kill(); } catch { /* already exited */ }
+          } else if (control === "pause" && !pauseAsked && !aborted) {
+            // Stop CLAUDE only. Chrome, the workdir and CLAUDE_CONFIG_DIR are all
+            // owned by the enclosing try/finally, so parking here leaves the
+            // browser open for the user to drive by hand and leaves the transcript
+            // that `--resume` needs on disk. That is the whole feature.
+            pauseAsked = true;
+            console.log(`[authoring ${job.caseId}] pause requested — stopping Claude, keeping the browser`);
+            try { claudeChild.current?.kill(); } catch { /* already exited */ }
           }
         });
     };
+
+    // Session-wide state. `costUsd` is the SESSION total across every pass, which
+    // is what the budget ceiling is measured against (#619) — a per-pass total
+    // would let a pause/continue loop spend the ceiling over and over.
     let cerr = "";
     let finalResult = "";
     let costUsd = 0;
-    let buf = "";
-    const handleEvent = (ev: {
-      type?: string;
-      message?: { content?: Array<Record<string, unknown>> };
-      result?: unknown;
-      total_cost_usd?: unknown;
-    }): void => {
-      if (ev.type === "assistant" && ev.message?.content) {
-        for (const c of ev.message.content) {
-          if (c.type === "text" && typeof c.text === "string" && c.text.trim()) {
-            emitStep(`Claude: ${c.text.trim()}`);
-          } else if (c.type === "tool_use") {
-            const inp = (c.input as Record<string, unknown>) || {};
-            const detail = inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? JSON.stringify(inp).slice(0, 200);
-            emitStep(`▷ ${String(c.name)}: ${String(detail).replace(/\s+/g, " ").trim()}`);
+    let exitCode = -1;
+    // Claude CLI's OWN session id, scraped off the stream-json envelope. Nothing
+    // read this before #619, which is why resume was impossible: `job.sessionId`
+    // is Q-Agent's queue id and `claude --resume` does not know it.
+    let claudeSessionId = "";
+    let fallbackNote = "";
+
+    /** Run one Claude pass to completion (or until it is killed for a pause). */
+    const runPass = async (args: string[]): Promise<void> => {
+      pauseAsked = false;
+      let passCost = 0;
+      let buf = "";
+      const handleEvent = (ev: {
+        type?: string;
+        message?: { content?: Array<Record<string, unknown>> };
+        result?: unknown;
+        total_cost_usd?: unknown;
+      }): void => {
+        const sid = sessionIdFrom(ev);
+        if (sid) claudeSessionId = sid;
+        if (ev.type === "assistant" && ev.message?.content) {
+          for (const c of ev.message.content) {
+            if (c.type === "text" && typeof c.text === "string" && c.text.trim()) {
+              emitStep(`Claude: ${c.text.trim()}`);
+            } else if (c.type === "tool_use") {
+              const inp = (c.input as Record<string, unknown>) || {};
+              const detail = inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? JSON.stringify(inp).slice(0, 200);
+              emitStep(`▷ ${String(c.name)}: ${String(detail).replace(/\s+/g, " ").trim()}`);
+            }
           }
+        } else if (ev.type === "result") {
+          if (typeof ev.result === "string") finalResult = ev.result;
+          if (typeof ev.total_cost_usd === "number") passCost = ev.total_cost_usd;
         }
-      } else if (ev.type === "result") {
-        if (typeof ev.result === "string") finalResult = ev.result;
-        if (typeof ev.total_cost_usd === "number") costUsd = ev.total_cost_usd;
+      };
+      // Spawn the native `claude` binary directly (it is not a JS entry).
+      //
+      // windowsHide is LOAD-BEARING for the grandchildren, not just for `claude`
+      // itself (#421). Claude's Bash tool runs `browser-harness` (a console-
+      // subsystem Python CLI) once per step, and those were the windows seen
+      // flashing. Measured on Windows 11, from a console-less parent:
+      //
+      //   claude spawned WITHOUT windowsHide -> claude gets a VISIBLE console, and
+      //     every grandchild ATTACHES TO THAT SAME console window (same HWND) and
+      //     is visible. One flash per browser-harness call.
+      //   claude spawned WITH windowsHide (CREATE_NO_WINDOW) -> claude gets no
+      //     console (GetConsoleWindow() == 0), and a grandchild launched by a plain
+      //     CreateProcess we do NOT control (bash -> browser-harness) also gets
+      //     none. CREATE_NO_WINDOW is inherited down the whole subtree.
+      //
+      // So the flag propagates and no native shim is needed. Do NOT "fix" this by
+      // routing through `conhost.exe --headless`: measured, it replaces the child's
+      // stdout with terminal escape sequences, so the --output-format stream-json
+      // events below never arrive and authoring fails silently (#615). Piped stdio
+      // + windowsHide suppresses the console WITHOUT touching the pipes.
+      const child = spawn(claudeCli(), args, {
+        cwd: workDir,
+        env: claudeEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      claudeChild.current = child;
+      activeChild = child;
+      child.stdout?.on("data", (d) => {
+        buf += String(d);
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { handleEvent(JSON.parse(line)); } catch { /* ignore non-JSON noise */ }
+        }
+      });
+      child.stderr?.on("data", (d) => { cerr += String(d); });
+      exitCode = await new Promise<number>((resolve) => {
+        child.on("close", (c) => resolve(c ?? 0));
+        child.on("error", (e) => { cerr += `\nclaude spawn error: ${(e as Error).message}`; resolve(-1); });
+      });
+      // A pass killed for a pause may never emit its `result` envelope, so its cost
+      // can be under-counted. That is why the server ALSO caps the number of
+      // resumes: the budget subtraction alone cannot bound spend it never saw.
+      costUsd += passCost;
+    };
+
+    /** Sit parked until the user continues, the pause expires, or the cap hits. */
+    const waitForResume = async (): Promise<api.AuthoringResumeDirective> => {
+      const deadline = Date.now() + AUTHORING_PAUSE_HARD_CAP_MS;
+      for (;;) {
+        const directive = await api.pollAuthoringResume(cfg, job.sessionId);
+        if (directive.action !== "wait") return directive;
+        if (Date.now() > deadline) {
+          return { ...directive, action: "abort", reason: "pause-expired" };
+        }
+        await new Promise((r) => setTimeout(r, AUTHORING_RESUME_POLL_MS));
       }
     };
-    claude.stdout?.on("data", (d) => {
-      buf += String(d);
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        try { handleEvent(JSON.parse(line)); } catch { /* ignore non-JSON noise */ }
+
+    await runPass(
+      buildPassArgs({
+        prompt: job.taskPrompt,
+        model: job.model,
+        systemPromptFile: systemFile,
+        workDir,
+        budgetUsd: job.maxBudgetUsd,
+      })
+    );
+
+    // 2b) Pause / continue (#619). Each iteration: park (browser still up), wait
+    //     for the user, then either resume the SAME Claude session or — when that
+    //     is impossible — run a fresh pass carrying the accumulated guidance, and
+    //     say which happened on the trail.
+    while (pauseAsked && !aborted) {
+      emitStep("⏸ Paused — the browser is still open. Drive it yourself, add guidance in the chat, then Continue.");
+      await api
+        .postAuthoringPaused(cfg, job.sessionId, { claudeSessionId, costUsd })
+        .catch((err) => console.error("postAuthoringPaused failed:", err));
+      const directive = await waitForResume();
+      if (directive.action !== "resume") {
+        emitStep(`⏹ ${resumeAbortMessage(directive.reason)}`);
+        break;
       }
-    });
-    claude.stderr?.on("data", (d) => { cerr += String(d); });
-    const exitCode: number = await new Promise((resolve) => {
-      claude!.on("close", (c) => resolve(c ?? 0));
-      claude!.on("error", (e) => { cerr += `\nclaude spawn error: ${(e as Error).message}`; resolve(-1); });
-    });
+      const transcript = findTranscript(claudeConfigDir, claudeSessionId);
+      const plan = planPass({
+        claudeSessionId,
+        transcriptPresent: Boolean(transcript),
+        guidance: directive.guidance,
+        guidanceHistory: directive.guidanceHistory,
+        taskPrompt: job.taskPrompt,
+        remainingBudgetUsd: directive.remainingBudgetUsd,
+      });
+      emitStep(plan.trailLine);
+      if (plan.mode === "fresh") fallbackNote = plan.trailLine;
+      // The temp workdir can be swept by the OS while we sit parked (that is one of
+      // the two ways resume becomes impossible), so re-materialise what a pass
+      // needs rather than spawning `claude` against a directory that vanished.
+      try {
+        fs.mkdirSync(workDir, { recursive: true });
+        if (!fs.existsSync(systemFile)) fs.writeFileSync(systemFile, job.systemPrompt, "utf-8");
+        // The credential lives in the same swept directory, and CLAUDE_CONFIG_DIR
+        // still points at it — so without this the fallback pass would fail to
+        // AUTHENTICATE, which looks nothing like "the transcript was gone" and
+        // would be diagnosed as a broken resume rather than a swept temp dir.
+        if (claudeConfigDir && job.claudeCredentials) {
+          const credFile = path.join(claudeConfigDir, ".credentials.json");
+          if (!fs.existsSync(credFile)) {
+            fs.mkdirSync(claudeConfigDir, { recursive: true });
+            fs.writeFileSync(credFile, job.claudeCredentials, "utf-8");
+            try { fs.chmodSync(credFile, 0o600); } catch { /* best-effort on Windows */ }
+          }
+        }
+      } catch (err) {
+        console.error("Could not restore the authoring workdir:", err);
+      }
+      await runPass(
+        buildPassArgs({
+          prompt: plan.prompt,
+          model: job.model,
+          systemPromptFile: systemFile,
+          workDir,
+          budgetUsd: directive.remainingBudgetUsd,
+          sessionArgs: plan.sessionArgs,
+        })
+      );
+    }
 
     // 3) Read emitted artifacts.
     const specPath = path.join(workDir, job.specFilename);
@@ -1367,6 +1510,10 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     }
     const ok = code.trim().length > 0;
     let summary = finalResult || "";
+    // Say it in the RESULT too, not just the live trail: a user reading the spec
+    // later must be able to tell that their guidance was replayed into a fresh
+    // pass rather than carried by the original reasoning context (#619).
+    if (fallbackNote) summary = `${summary}\n[resume] ${fallbackNote}`.trim();
     if (!ok) {
       // Make failures diagnosable: include claude's exit + stderr tail.
       const errTail = cerr.trim().slice(-500);
@@ -1392,11 +1539,11 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     }
     await finalize(code, discovered, summary, ok, costUsd, refreshedCredentials);
   } finally {
-    try { claude?.kill(); } catch {}
+    try { claudeChild.current?.kill(); } catch {}
     // Closing the launcher's stdin tells it to kill Chrome (cross-platform).
     try { launcher?.stdin?.end(); } catch {}
     try { launcher?.kill(); } catch {}
-    if (activeChild === launcher || activeChild === claude) activeChild = null;
+    if (activeChild === launcher || activeChild === claudeChild.current) activeChild = null;
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
   }
 }
