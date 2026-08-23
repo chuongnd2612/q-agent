@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
 from app import db as db_module
@@ -620,6 +621,49 @@ def _merge_authored_discovery(context: dict, run: Run, discovered: dict) -> None
     )
 
 
+def _get_or_create_spec(db: Session, case_id: int, *, filename: str) -> AutomationSpec:
+    """Return the case's AutomationSpec row, inserting it if it doesn't exist yet.
+
+    ``AutomationSpec.test_case_id`` is ``unique=True``, and a plain
+    query-then-insert is a check-then-act race (#604): two generation passes on
+    two sessions can both read "no spec" and both insert, and the loser dies with
+    ``UNIQUE constraint failed: automation_specs.test_case_id``. The window is
+    wide in practice because :func:`_generate_one` reads ``existing`` *before*
+    generation (several Claude calls) and inserts *after* it, and it is reachable:
+    the per-run guard (``_generating``) and the per-case one
+    (``_regenerating_cases``) don't guard each other, so a run-wide generate and a
+    single-case regenerate can overlap on the same case.
+
+    So the DB — not a prior read — is the arbiter: the insert goes in a SAVEPOINT
+    and a UNIQUE violation is resolved by adopting the row the winner committed.
+    The loser then updates that row, which is the same last-writer-wins outcome as
+    two *sequential* regenerations. Leaves the caller's transaction usable either
+    way (a bare ``rollback()`` would discard the caller's other pending work).
+
+    ``filename`` is required because the insert is flushed here to provoke the
+    constraint, and ``AutomationSpec.filename`` is NOT NULL; callers overwrite it
+    (along with the rest of the row) right after.
+    """
+    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+    if spec is not None:
+        return spec
+    savepoint = db.begin_nested()
+    spec = AutomationSpec(test_case_id=case_id, filename=filename)
+    db.add(spec)
+    try:
+        db.flush()
+    except IntegrityError:
+        savepoint.rollback()
+        spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+        if spec is None:
+            # Not the concurrent-insert case — some other integrity problem.
+            raise
+        logger.info("Adopted concurrently-created spec row for case {}", case_id)
+        return spec
+    savepoint.commit()
+    return spec
+
+
 def _enqueue_agent_authoring(
     db: Session,
     run: Run,
@@ -683,10 +727,7 @@ def _enqueue_agent_authoring(
         log_verbosity=settings_store.load_settings().get("authoringLogVerbosity", "concise"),
     )
 
-    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case.id).first()
-    if spec is None:
-        spec = AutomationSpec(test_case_id=case.id)
-        db.add(spec)
+    spec = _get_or_create_spec(db, case.id, filename=spec_filename)
     spec.filename = spec_filename
     spec.language = "TypeScript"
     spec.framework = "Playwright"
@@ -858,17 +899,21 @@ def _generate_one(
     filename = spec_service.spec_filename(case.ticket_external_id, case.code)
 
     spec = existing
+    if spec is None:
+        # Re-resolved against the DB, not the read taken before generation: another
+        # pass may have inserted this case's row in the meantime (#604).
+        spec = _get_or_create_spec(db, case.id, filename=filename)
     # "Good" means a genuinely runnable prior spec worth protecting from a rejected
     # regeneration — NOT merely "has code". A previously *blocked* spec is not good:
     # freezing it would discard every new attempt, so a rejected regen on a blocked
     # spec should replace it (visible iteration + a diff to review), while a passing
     # spec is still kept when a regen comes back rejected.
-    has_previous_good = bool(
-        spec is not None and (spec.code or "").strip() and spec.status != "blocked"
-    )
-    if spec is None:
-        spec = AutomationSpec(test_case_id=case.id)
-        db.add(spec)
+    #
+    # Read off the *resolved* row, not the pre-generation `existing`: when a
+    # concurrent pass created the row (#604) its spec is a previous one too, and
+    # judging it "not good" would let a rejected regen clobber it. A row this call
+    # just inserted has no code, so it is correctly not good.
+    has_previous_good = bool((spec.code or "").strip() and spec.status != "blocked")
     spec.filename = filename
     spec.language = "TypeScript"
     spec.framework = "Playwright"
