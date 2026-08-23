@@ -224,6 +224,13 @@ class ProjectKnowledgeOut(ApiModel):
     knowledge: dict = Field(default_factory=dict)
     doc_path: str = ""
     last_error: str = ""
+    #: Where this row came from (#603). `"local"` is a real `project_knowledge`
+    #: row; `"hub"` is a **status-only** projection of the hub's project summary,
+    #: served so the Projects grid badge is right on first paint without fanning
+    #: out one hub call per repo. A `"hub"` row carries no `knowledge` blob, no
+    #: `lastIndexed` and no repo, and is never persisted — read it as a badge, not
+    #: as a knowledge base.
+    source: str = "local"
 
 
 class KnowledgeBuildRequest(ApiModel):

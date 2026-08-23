@@ -255,6 +255,12 @@ export interface ProjectKnowledgeOut {
   knowledge: Partial<KnowledgeBody>;
   docPath: string;
   lastError?: string;
+  /** Where the row came from (#603). `"local"` is a real knowledge base; `"hub"`
+   *  is a status-only projection of EmeHub's project summary, appended by
+   *  `GET /projects/knowledge` so the grid badge is right on first paint. A
+   *  `"hub"` row has no `knowledge`, no `lastIndexed` and no `repo` — render it as
+   *  a badge, never as a knowledge base. */
+  source?: "local" | "hub";
 }
 
 export interface AutomationStatus {

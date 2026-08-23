@@ -709,3 +709,93 @@ def ensure_knowledge_for_repos(
             seen, key,
         )
     return written
+
+
+# ------------------------------------------- knowledge STATUS for the grid (#603)
+# The Projects grid badge reads `GET /projects/knowledge`, a purely local list, so
+# a hub-indexed project read "not indexed" until its detail page had been opened
+# once (#603) — the #598 complaint, moved one screen over.
+#
+# It is fixed **without a single extra hub call**. Mirroring the blob here would
+# be `ensure_knowledge_for_repos` per project, i.e. projects x repos hub round
+# trips to paint a list, on a token that lives 15 minutes: 10 projects x 3 repos
+# is 30 hops. But the grid needs a *status*, not the content — and
+# `ensure_projects` already stores `GET /projects`'s `summary` under
+# `Project.meta["hub"]`, and that summary carries `knowledgeStatus` /
+# `knowledgeConfidence` (EmeHub's `ProjectSummaryOut`). So the badge is served
+# from a payload this request already fetched. The blob mirror stays where the
+# content is actually used: the detail screen and the Repos tab.
+
+
+def _int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def hub_knowledge_status_rows(
+    db: Session, user: User | None, local: list[ProjectKnowledge]
+) -> list[dict[str, Any]]:
+    """Status-only knowledge rows for hub projects with no local row yet (#603).
+
+    **Makes no hub calls.** Reads the already-mirrored ``Project.meta["hub"]``
+    summary; see the note above for why the grid must not fan out.
+
+    Transient by design: nothing is persisted, and a project that already has any
+    local knowledge row is skipped entirely, so a local build (including one still
+    ``indexing``) is never shadowed by the hub's view of it. Only rows the caller
+    owns and that carry ``hub_project_id`` are considered.
+
+    Warns once when a mirrored hub summary exists but carries no readable
+    ``knowledgeStatus``: the call succeeding while the data is quietly empty is
+    this integration's signature failure, and from the UI it is indistinguishable
+    from "the hub has nothing indexed".
+    """
+    if user is None or not hub_client.enabled():
+        return []
+
+    have = {row.project_key or row.key for row in local}
+    rows: list[dict[str, Any]] = []
+    unreadable = 0
+    for project in db.scalars(select(Project).where(Project.owner_id == user.id)).all():
+        if not project.hub_project_id:
+            continue
+        summary = (project.meta or {}).get("hub")
+        if not isinstance(summary, dict) or not summary:
+            continue
+        raw = _pick(summary, "knowledgeStatus", "knowledge_status")
+        status = _str(raw)
+        if status not in KNOWLEDGE_STATUSES:
+            # A summary we could not read at all is the tell-tale; a hub project
+            # that genuinely has nothing indexed is not.
+            unreadable += 1
+            continue
+        if status == "not_indexed" or project.name in have:
+            continue
+        rows.append(
+            {
+                "key": compose_key(project.name),
+                "project_key": project.name,
+                "name": project.name,
+                # `azure_devops` -> `ado` (#507): the hub's spelling would match
+                # nothing on our side of the join.
+                "provider": _local_kind(_pick(summary, "provider", "provider"))
+                or project.provider_kind
+                or "",
+                "repo": "",
+                "status": status,
+                "confidence": _int(_pick(summary, "knowledgeConfidence", "knowledge_confidence")),
+                # Marks the row as a hub summary rather than a mirrored KB, so the
+                # UI can label it "Indexed" instead of inventing a repo count it
+                # does not have.
+                "source": "hub",
+            }
+        )
+    if unreadable and not rows:
+        logger.warning(
+            "{} mirrored hub project summaries carried no readable knowledgeStatus "
+            "— the Projects grid will show them as not indexed",
+            unreadable,
+        )
+    return rows
