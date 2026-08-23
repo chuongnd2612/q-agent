@@ -199,6 +199,39 @@ def _recover_orphaned_runs() -> None:
         db.close()
 
 
+def _recover_orphaned_authoring() -> None:
+    """Sweep live-authoring specs abandoned by a prior process at boot (#605).
+
+    The authoring counterpart of :func:`_recover_orphaned_runs`, which only ever
+    looked at ``Run.status``: an ``AutomationSpec`` committed at ``status="running"``
+    by ``_enqueue_agent_authoring`` used to hang there forever whenever the API
+    restarted, because the queued session lived in the worker's memory and nothing
+    recovered the row. Best-effort: never blocks startup.
+
+    Must run **after** :func:`_recover_orphaned_runs` so a run is already terminal
+    when its specs are reset — but the sweep is deliberately independent of run
+    status: a terminal run must still be able to author on Regenerate (#442), so
+    resetting its spec to draft/blocked is exactly what re-enables that.
+    """
+    from app.db import SessionLocal
+    from app.services.run_status import recover_orphaned_authoring
+
+    db = SessionLocal()
+    try:
+        recovered, dropped = recover_orphaned_authoring(db)
+        if recovered:
+            logger.warning(
+                "Recovered {} orphaned authoring spec(s) from a prior process", recovered
+            )
+        if dropped:
+            logger.warning("Dropped {} stale authoring session(s) with no spec awaiting them", dropped)
+    except Exception as exc:  # noqa: BLE001 - never block startup on the sweep
+        logger.warning("orphaned authoring recovery failed: {}", exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _seed_admin() -> None:
     """Ensure a first admin exists so an auth-required install is reachable.
 
@@ -263,6 +296,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     settings.ensure_dirs()
     init_db()
     _recover_orphaned_runs()
+    _recover_orphaned_authoring()
     _seed_admin()
     hub.bind_loop(asyncio.get_running_loop())
     logger.info("Q-Agent API ready on {}:{}", settings.host, settings.port)
