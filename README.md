@@ -348,11 +348,12 @@ Each package has its own gate. There is **no frontend unit-test harness** — fo
 |---------|----------|
 | `api/` | `uv run uvicorn app.main:app --reload --port 8787` · `uv run pytest -q` (520 tests across 53 modules) · `uv run alembic upgrade head` |
 | `app/` | `npm run dev` · `npm run typecheck` · `npm run build` · `npm run test:e2e` (Playwright, `app/e2e/`) |
-| `agent/` | `npm run build` · `node --test "dist/test/**/*.test.js"` (42 tests) |
+| `agent/` | `npm run build` · `npm test` (65 tests) |
 
-The agent's own `npm test` shortcut is broken on Node 23 (it can't discover the test
-directory) — use the glob form above until
-[#470](https://github.com/chuongnd2612/q-agent/issues/470) lands.
+`agent`'s `npm test` builds and then runs `scripts/run-tests.mjs`, which enumerates the
+compiled test files and hands `node --test` explicit paths — so it works on every supported
+Node, and fails loudly (rather than exiting 0) if it discovers nothing. A fresh clone needs
+`npm ci` and `npm run vendor:base` in `agent/` first.
 
 Integration behavior needs the operator's own environment
 ([ADR 0001](docs/adr/0001-scope-architecture-and-live-integrations.md)): live
