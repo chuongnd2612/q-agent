@@ -19,6 +19,9 @@ Pairing flow:
 3. The agent authenticates subsequent requests with ``Authorization: Bearer
    <device-token>``, resolved via :func:`authenticate_token`
    (``app.deps_auth.require_agent``).
+
+The pending-code store stays **in memory on purpose** — the reasoning is written
+out at :data:`_pending` (#625), where the sibling agent queues were made durable.
 """
 
 from __future__ import annotations
@@ -47,6 +50,31 @@ _CODE_SPACE = 1_000_000  # 6-digit codes: "000000".."999999"
 # single-use (popped on redeem), short-lived (PAIR_TTL), and redemption is
 # throttled below — brute-forcing 1M codes within 5 min is infeasible at the
 # allowed attempt rate.
+#
+# DELIBERATELY MEMORY, not a table (#625, reviewed alongside the capture queue
+# and the #605 authoring queue, both of which were made durable). Three reasons,
+# so this is a decision and not an accident of history:
+#
+# 1. **Losing one is cheap and self-announcing.** The user is sitting in front of
+#    the pairing dialog with the code on screen; a lost code fails loudly at
+#    redemption ("Invalid or expired pairing code") and the fix is one click —
+#    request another. Contrast the capture/authoring queues, where the loss was
+#    *silent*: the agent just kept getting 204 and the operator concluded the
+#    product was broken.
+# 2. **Persisting it would be a net security loss.** The code is a bearer secret
+#    with a 5-minute life whose entire safety argument is single-use +
+#    short-lived + rate-limited. Writing 1M-space plaintext secrets to the
+#    database (or hashing them, which then needs a per-code lookup) widens the
+#    blast radius of a DB read for no operator benefit.
+# 3. **Multi-worker is not a real hazard here.** Unlike a *queue*, both halves of
+#    pairing are driven by the same human within seconds: the code is minted for
+#    the SPA and typed straight into the agent. A redeem landing on a worker that
+#    did not mint the code fails closed (invalid code) and retrying pairs
+#    successfully; nothing is left half-done, and no row anywhere claims a device
+#    exists when it doesn't.
+#
+# The one thing that must NOT regress into memory is anything a background poller
+# waits on — that is exactly what #605/#625 were.
 _pending: dict[str, tuple[int, float]] = {}
 # Sliding window of failed-redeem timestamps, to throttle guessing.
 _failures: list[float] = []

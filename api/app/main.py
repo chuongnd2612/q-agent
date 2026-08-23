@@ -232,6 +232,36 @@ def _recover_orphaned_authoring() -> None:
         db.close()
 
 
+def _recover_orphaned_captures() -> None:
+    """Sweep Local-Agent login captures stranded mid-flight at boot (#625).
+
+    The capture counterpart of :func:`_recover_orphaned_authoring`. The
+    manual-login queue used to be a module-level ``list``, so a restart dropped
+    a queued capture silently and the agent then polled forever for 204 — read
+    by the operator as "the agent isn't connected". It is a table now, which
+    means the reset a restart used to perform by accident has to be explicit: a
+    claim older than ``agent_capture_service.STALE_CLAIM_AFTER`` is re-queued and
+    anything past ``ABANDON_AFTER`` is dropped. Best-effort: never blocks startup.
+    """
+    from app.db import SessionLocal
+    from app.services.run_status import recover_orphaned_captures
+
+    db = SessionLocal()
+    try:
+        requeued, dropped = recover_orphaned_captures(db)
+        if requeued:
+            logger.warning(
+                "Re-queued {} login capture(s) stranded mid-flight by a prior process", requeued
+            )
+        if dropped:
+            logger.warning("Dropped {} abandoned login capture(s)", dropped)
+    except Exception as exc:  # noqa: BLE001 - never block startup on the sweep
+        logger.warning("orphaned capture recovery failed: {}", exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _seed_admin() -> None:
     """Ensure a first admin exists so an auth-required install is reachable.
 
@@ -297,6 +327,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     init_db()
     _recover_orphaned_runs()
     _recover_orphaned_authoring()
+    _recover_orphaned_captures()
     _seed_admin()
     hub.bind_loop(asyncio.get_running_loop())
     logger.info("Q-Agent API ready on {}:{}", settings.host, settings.port)
