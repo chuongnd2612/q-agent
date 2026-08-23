@@ -7,6 +7,7 @@ import { GateRejectedNote } from "./banners";
 import { CodeHighlight, type FoldRange } from "./CodeViewer";
 import { AuthoringTrail } from "./ProgressBanners";
 import { RegenerateWithNote } from "./RegenerateWithNote";
+import { specDisplayPath } from "./projectFiles";
 
 /**
  * The right-hand code panel for the selected spec: header toolbar (Save/Cancel
@@ -120,7 +121,7 @@ export function SpecCodePanel({
       style={{ background: "rgba(8,8,13,.8)", backdropFilter: "blur(22px)" }}
     >
       <div className="flex flex-wrap items-center gap-2.5 border-b border-white/[0.06] px-4 py-3">
-        <span className="font-mono text-[12.5px] text-ink-soft">tests/{selectedSpec?.filename}</span>
+        <span className="font-mono text-[12.5px] text-ink-soft">{specDisplayPath(selectedSpec?.filename)}</span>
         <span className="rounded-md px-2 py-0.5 text-[10px] font-bold" style={{ background: "rgba(34,211,238,.13)", color: "#67e8f9" }}>
           TypeScript
         </span>
@@ -301,8 +302,8 @@ export function SpecCodePanel({
           style={{ minHeight: 380, background: "rgba(8,8,13,.6)" }}
         >
           <FileCode2 size={30} className="text-faint" />
-          <div className="text-[13.5px] font-semibold text-ink-soft">{t("spec.empty.title")}</div>
-          <div className="max-w-sm text-xs text-muted">{t("spec.empty.hint")}</div>
+          <div className="text-[13.5px] font-semibold text-ink-soft">{t("spec.notGenerated.title")}</div>
+          <div className="max-w-sm text-xs text-muted">{t("spec.notGenerated.hint")}</div>
         </div>
       ) : selectedSpec ? (
         <div className="relative">

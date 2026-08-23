@@ -88,9 +88,9 @@
       "regenerating": "Đang tạo lại…",
       "updating": "Đang cập nhật…"
     },
-    "empty": {
-      "title": "Chưa được tạo",
-      "hint": "Spec này chưa được tạo. Dùng Tạo lại để sinh nó."
+    "notGenerated": {
+      "title": "Chưa có mã nguồn",
+      "hint": "Trường hợp kiểm thử này đã có spec, nhưng quá trình tạo chưa sinh ra mã nguồn nào. Dùng Tạo lại để Q-Agent viết nó."
     },
     "footer": {
       "description": "Thực thi bộ kiểm thử đã duyệt song song trên toàn bộ lần Chạy"
