@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, ChevronRight, Plus, Sparkles, X } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -11,6 +11,7 @@ import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCaseMutations, useCreateAndLink, useRun, useRunCases } from "@/hooks/queries";
 import { useUI, type CaseDraft } from "@/store/ui";
+import { cn } from "@/lib/cn";
 import type { TestCaseOut } from "@/types/api";
 
 /** Groups the run's flat case list by ticket, preserving first-seen order. */
@@ -553,34 +554,46 @@ function CaseRow({
                   </div>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
-                  <button
+                  <CaseActionButton
+                    active={c.approval === "approved"}
+                    activeClass="border-[rgba(16,185,129,.35)] bg-[rgba(16,185,129,.16)] text-[#6ee7b7]"
+                    hoverClass="hover:border-[rgba(16,185,129,.4)] hover:bg-[rgba(16,185,129,.12)] hover:text-[#6ee7b7]"
                     onClick={() => onSetApproval("approved")}
-                    className="flex items-center gap-1.5 rounded-[10px] px-[13px] py-[7px] text-xs font-semibold"
-                    style={
-                      c.approval === "approved"
-                        ? { background: "rgba(16,185,129,.16)", border: "1px solid rgba(16,185,129,.3)", color: "#6ee7b7" }
-                        : { background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", color: "#c3c3d0" }
-                    }
                   >
-                    <Check size={12} />
-                    {c.approval === "approved" ? t("review.case.approved") : t("review.case.approve")}
-                  </button>
-                  <button
+                    {/* Keyed by state so the label pops when the approval flips —
+                        the optimistic cache write (#635) makes this instant. */}
+                    <motion.span
+                      key={c.approval === "approved" ? "on" : "off"}
+                      initial={{ scale: 0.6, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", stiffness: 600, damping: 26 }}
+                      className="flex items-center gap-1.5"
+                    >
+                      <Check size={12} />
+                      {c.approval === "approved" ? t("review.case.approved") : t("review.case.approve")}
+                    </motion.span>
+                  </CaseActionButton>
+                  <CaseActionButton
+                    active={c.approval === "rejected"}
+                    activeClass="border-[rgba(244,63,94,.32)] bg-[rgba(244,63,94,.13)] text-[#fb7185]"
+                    hoverClass="hover:border-[rgba(244,63,94,.38)] hover:bg-[rgba(244,63,94,.1)] hover:text-[#fb7185]"
                     onClick={() => onSetApproval("rejected")}
-                    className="flex items-center gap-1.5 rounded-[10px] px-[13px] py-[7px] text-xs font-semibold"
-                    style={
-                      c.approval === "rejected"
-                        ? { background: "rgba(244,63,94,.13)", border: "1px solid rgba(244,63,94,.28)", color: "#fb7185" }
-                        : { background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", color: "#c3c3d0" }
-                    }
                   >
-                    <X size={12} />
-                    {c.approval === "rejected" ? t("review.case.rejected") : t("review.case.reject")}
-                  </button>
-                  <button
+                    <motion.span
+                      key={c.approval === "rejected" ? "on" : "off"}
+                      initial={{ scale: 0.6, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", stiffness: 600, damping: 26 }}
+                      className="flex items-center gap-1.5"
+                    >
+                      <X size={12} />
+                      {c.approval === "rejected" ? t("review.case.rejected") : t("review.case.reject")}
+                    </motion.span>
+                  </CaseActionButton>
+                  <CaseActionButton
                     onClick={onRegenerate}
                     disabled={regenerating}
-                    className="flex items-center gap-1.5 rounded-[10px] border border-white/10 bg-white/5 px-[13px] py-[7px] text-xs font-semibold text-ink-soft disabled:opacity-70"
+                    hoverClass="hover:border-white/20 hover:bg-white/10"
                   >
                     {regenerating ? (
                       <>
@@ -596,8 +609,8 @@ function CaseRow({
                         {t("review.case.regenerate")}
                       </>
                     )}
-                  </button>
-                  <button
+                  </CaseActionButton>
+                  <CaseActionButton
                     onClick={() =>
                       startEdit(c.id, {
                         title: c.title,
@@ -606,13 +619,14 @@ function CaseRow({
                         testData: c.testData ?? [],
                       })
                     }
-                    className="flex items-center gap-1.5 rounded-[10px] border border-white/10 bg-white/5 px-[13px] py-[7px] text-xs font-semibold text-ink-soft hover:bg-white/10 md:ml-auto"
+                    hoverClass="hover:border-white/20 hover:bg-white/10"
+                    className="md:ml-auto"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
                     </svg>
                     {t("review.case.edit")}
-                  </button>
+                  </CaseActionButton>
                 </div>
               </div>
             ) : (
@@ -752,5 +766,46 @@ function CaseRow({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** Per-case action chip (Approve / Reject / Regenerate / Edit) with tactile
+ *  feedback (#635): color transition on hover, a magnetic-ish lift, and a
+ *  spring press. Approval state itself flips optimistically in the cache, so
+ *  the active style lands the moment the button is clicked. */
+function CaseActionButton({
+  active = false,
+  activeClass = "",
+  hoverClass = "",
+  className = "",
+  disabled,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  activeClass?: string;
+  hoverClass?: string;
+  className?: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <motion.button
+      onClick={onClick}
+      disabled={disabled}
+      whileHover={disabled ? undefined : { scale: 1.045, y: -1 }}
+      whileTap={disabled ? undefined : { scale: 0.93 }}
+      transition={{ type: "spring", stiffness: 550, damping: 28 }}
+      className={cn(
+        "flex cursor-pointer items-center gap-1.5 rounded-[10px] border px-[13px] py-[7px] text-xs font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70",
+        active
+          ? activeClass
+          : cn("border-white/10 bg-white/5 text-ink-soft", hoverClass),
+        className,
+      )}
+    >
+      {children}
+    </motion.button>
   );
 }

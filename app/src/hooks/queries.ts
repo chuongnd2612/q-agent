@@ -33,6 +33,7 @@ import type {
   SharedProjectCreate,
   SyncRequest,
   TestCaseCreate,
+  TestCaseOut,
   TestCaseUpdate,
   TicketFilters,
 } from "@/types/api";
@@ -819,6 +820,26 @@ export const useCaseMutations = (runId: number | string) => {
     qc.invalidateQueries({ queryKey: queryKeys.runCases(runId) });
     qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
   };
+  // Optimistic approval writes (#635): flip the case(s) in the cache immediately
+  // so the button and the per-ticket progress bar react on click, then reconcile
+  // with the server on settle. On error the snapshot is restored.
+  const optimistic = <V,>(mapFor: (v: V) => (c: TestCaseOut) => TestCaseOut) => ({
+    onMutate: async (v: V) => {
+      const key = queryKeys.runCases(runId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<TestCaseOut[]>(key);
+      qc.setQueryData<TestCaseOut[]>(key, (old) => old?.map(mapFor(v)));
+      return { prev };
+    },
+    onError: (
+      _e: unknown,
+      _v: unknown,
+      ctx: { prev?: TestCaseOut[] } | undefined,
+    ) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.runCases(runId), ctx.prev);
+    },
+    onSettled: invalidate,
+  });
   return {
     addCase: useMutation({
       mutationFn: (body: TestCaseCreate) => api.addCase(runId, body),
@@ -842,7 +863,11 @@ export const useCaseMutations = (runId: number | string) => {
         caseId: number;
         approval: "approved" | "rejected" | "pending";
       }) => api.setApproval(caseId, approval),
-      onSuccess: invalidate,
+      ...optimistic(
+        ({ caseId, approval }) =>
+          (c) =>
+            c.id === caseId ? { ...c, approval } : c,
+      ),
     }),
     regenerateCase: useMutation({
       mutationFn: (caseId: number) => api.regenerateCase(caseId),
@@ -850,11 +875,16 @@ export const useCaseMutations = (runId: number | string) => {
     }),
     approveAll: useMutation({
       mutationFn: () => api.approveAll(runId),
-      onSuccess: invalidate,
+      ...optimistic<void>(() => (c) => ({ ...c, approval: "approved" as const })),
     }),
     approveTicket: useMutation({
       mutationFn: (tid: string) => api.approveTicket(runId, tid),
-      onSuccess: invalidate,
+      ...optimistic(
+        (tid) => (c) =>
+          c.ticketExternalId === tid
+            ? { ...c, approval: "approved" as const }
+            : c,
+      ),
     }),
   };
 };
