@@ -219,3 +219,33 @@ def force_status(db: Session, run: Run, new: str) -> None:
     db.add(run)
     db.commit()
     hub.publish(str(run.id), "run.status", {"status": new})
+
+
+def recover_orphaned_captures(db: Session) -> tuple[int, int]:
+    """Sweep Local-Agent login captures abandoned by a prior process (#625).
+
+    The capture counterpart of :func:`recover_orphaned_authoring`. Now that the
+    manual-login queue is a table
+    (:class:`app.models.agent_capture.AgentCaptureRequest`) rather than one
+    worker's ``list``, a capture claimed by a device that then died no longer
+    disappears on restart — which is the whole point, but it means an unbounded
+    claim would pin the project at "capturing…" forever where the restart used to
+    clear it by accident. This sweep makes that reset explicit:
+
+    * a ``running`` capture claimed longer ago than
+      ``agent_capture_service.STALE_CLAIM_AFTER`` is **re-queued** — the
+      operator's request is still legitimate, so the next poll picks it up;
+    * any capture older than ``agent_capture_service.ABANDON_AFTER`` is
+      **dropped** — nobody is waiting on a login prompt from half a day ago;
+    * a ``running`` capture claimed *recently* is left alone: the headed browser
+      is open on the operator's machine and its ``/complete`` post-back must
+      still land, and re-queueing it would open a second browser.
+
+    Returns:
+        ``(requeued, dropped)``.
+    """
+    from app.services import agent_capture_service
+
+    requeued, dropped = agent_capture_service.sweep_stranded(db)
+    db.commit()
+    return requeued, dropped

@@ -470,6 +470,12 @@ def claim_next_auth_capture(
     lets them log in, saves the session locally (keyed by ``origin``, never
     uploaded), then reports back via ``/agent/auth/{id}/complete``. 204 when
     nothing is queued.
+
+    The claim is a conditional ``UPDATE … WHERE status = 'queued'`` on the
+    ``agent_capture_requests`` table (#625), so it survives an API restart — the
+    queue used to be process memory, and a dropped capture made this endpoint
+    return 204 forever, indistinguishable from an unpaired agent — and two API
+    workers polling at once cannot hand the same capture to both.
     """
     capture = agent_capture_service.claim_next(user.id)
     if capture is None:
