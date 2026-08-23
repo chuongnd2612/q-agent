@@ -507,28 +507,122 @@ export async function postAuthoringEvent(
   await throwIfNotOk(res);
 }
 
+/** What a progress post tells us about the session besides "it exists". */
+export interface AuthoringHeartbeat {
+  /** False only on a 404 — the run was stopped server-side, so abort (#420). */
+  alive: boolean;
+  /** `"pause"` when the user pressed Pause (#619), else "". */
+  control: string;
+}
+
 /**
- * Post an authoring progress event and report whether the session is still alive
- * (#420). Returns false on a 404 — the server purged the session because the run
- * was stopped — which the caller uses as a mid-flight abort signal to kill the
- * local Claude run. Never throws: a transient network error returns true so a
- * blip doesn't abort a live session.
+ * Post an authoring progress event and read back the session's control state.
+ *
+ * `alive` is false on a 404 — the server purged the session because the run was
+ * stopped — which the caller uses as a mid-flight abort signal to kill the local
+ * Claude run (#420). `control` carries the user's Pause (#619): this endpoint is
+ * already called once per Claude step, so riding on it means pause arrives within
+ * one step with no extra poller and no state in the agent's memory.
+ *
+ * Never throws: a transient network error reports alive with no control, so a blip
+ * neither aborts nor spuriously pauses a live session.
  */
 export async function postAuthoringEventAlive(
   cfg: AgentConfig,
   sessionId: string,
   event: string,
   payload: Record<string, unknown>
-): Promise<boolean> {
+): Promise<AuthoringHeartbeat> {
   try {
     const res = await fetch(`${cfg.serverUrl}/agent/authoring/${sessionId}/events`, {
       method: "POST",
       headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
       body: JSON.stringify({ event, payload }),
     });
-    return res.status !== 404;
+    if (res.status === 404) return { alive: false, control: "" };
+    if (!res.ok) return { alive: true, control: "" };
+    try {
+      const body = (await res.json()) as { control?: unknown };
+      return { alive: true, control: typeof body?.control === "string" ? body.control : "" };
+    } catch {
+      // An older server answers `{"ok":true}` with no `control` — carry on.
+      return { alive: true, control: "" };
+    }
   } catch {
-    return true;
+    return { alive: true, control: "" };
+  }
+}
+
+/** Tell the server the device parked the session, and hand over what resume needs. */
+export async function postAuthoringPaused(
+  cfg: AgentConfig,
+  sessionId: string,
+  body: { claudeSessionId: string; costUsd: number }
+): Promise<void> {
+  const res = await fetch(`${cfg.serverUrl}/agent/authoring/${sessionId}/paused`, {
+    method: "POST",
+    headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  await throwIfNotOk(res);
+}
+
+/** The server's answer to a parked device's "what now?" poll (#619). */
+export interface AuthoringResumeDirective {
+  /** `wait` (stay parked), `resume` (the user continued), `abort` (tear down). */
+  action: "wait" | "resume" | "abort";
+  reason: string;
+  guidance: string[];
+  guidanceHistory: string[];
+  claudeSessionId: string;
+  remainingBudgetUsd: number;
+  resumeCount: number;
+}
+
+/**
+ * Ask what a paused session should do next.
+ *
+ * A network error yields `wait`, deliberately: the device is holding a browser the
+ * user is actively clicking in, and tearing that down because one poll failed
+ * would destroy their work. The pause expiry (server-side) and the agent's own
+ * hard cap are what bound the wait instead.
+ */
+export async function pollAuthoringResume(
+  cfg: AgentConfig,
+  sessionId: string
+): Promise<AuthoringResumeDirective> {
+  const waiting: AuthoringResumeDirective = {
+    action: "wait",
+    reason: "",
+    guidance: [],
+    guidanceHistory: [],
+    claudeSessionId: "",
+    remainingBudgetUsd: 0,
+    resumeCount: 0,
+  };
+  try {
+    const res = await fetch(`${cfg.serverUrl}/agent/authoring/${sessionId}/resume`, {
+      method: "POST",
+      headers: authHeaders(cfg.deviceToken),
+    });
+    if (res.status === 404) return { ...waiting, action: "abort", reason: "session-gone" };
+    if (!res.ok) return waiting;
+    const body = (await res.json()) as Partial<AuthoringResumeDirective>;
+    const action = body.action === "resume" || body.action === "abort" ? body.action : "wait";
+    return {
+      action,
+      reason: typeof body.reason === "string" ? body.reason : "",
+      guidance: Array.isArray(body.guidance) ? body.guidance.map(String) : [],
+      guidanceHistory: Array.isArray(body.guidanceHistory)
+        ? body.guidanceHistory.map(String)
+        : [],
+      claudeSessionId: typeof body.claudeSessionId === "string" ? body.claudeSessionId : "",
+      remainingBudgetUsd:
+        typeof body.remainingBudgetUsd === "number" ? body.remainingBudgetUsd : 0,
+      resumeCount: typeof body.resumeCount === "number" ? body.resumeCount : 0,
+    };
+  } catch {
+    return waiting;
   }
 }
 

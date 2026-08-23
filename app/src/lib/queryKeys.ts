@@ -40,6 +40,8 @@ export const queryKeys = {
   automationExport: (runId: number | string, projectId: number | null) =>
     ["runs", runId, "automation", "export", projectId ?? 0] as const,
   healStatus: (caseId: number) => ["cases", caseId, "heal", "status"] as const,
+  /** Live-authoring pause state for one case (#619). */
+  authoringState: (caseId: number) => ["cases", caseId, "authoring"] as const,
   healReport: (caseId: number) => ["cases", caseId, "heal", "report"] as const,
   exploreStatus: (projectKey: string, repo: string) =>
     ["projects", projectKey, "repos", repo, "explore", "status"] as const,

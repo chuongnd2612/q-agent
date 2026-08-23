@@ -151,7 +151,18 @@
     },
     "authoring": {
       "authored": "Spec authored",
-      "failed": "Live authoring produced no spec"
+      "failed": "Live authoring produced no spec",
+      "pause": "Pause",
+      "pausing": "Pausing…",
+      "continue": "Continue",
+      "continuing": "Continuing…",
+      "paused": "Paused — the browser is still open",
+      "pauseHint": "Pause to take the browser over yourself, then Continue.",
+      "pausedHint": "Drive the browser yourself, add guidance in the chat, then Continue — Claude keeps its context.",
+      "pausedFreshHint": "Continue will start a fresh guided pass: this session's Claude context could not be preserved.",
+      "guidanceQueued": "Saved as guidance for the paused authoring session",
+      "budgetLeft": "${{amount}} left",
+      "chatIsGuidance": "This case is being authored live — your message is sent as guidance, not a spec edit."
     },
     "heal": {
       "progressTitle": "Self-healing {{caseCode}} — attempt {{attempt}}/{{maxAttempts}}",

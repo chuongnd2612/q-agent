@@ -11,6 +11,7 @@ import type {
   AdminUser,
   AgentDeviceOut,
   AiActivity,
+  AuthoringStateOut,
   AnnotationShape,
   AuditEventOut,
   AuditStats,
@@ -857,10 +858,29 @@ export const api = {
     model?: string,
     messageId?: string,
   ) =>
-    post<{ started: boolean; caseId: number }>(`/cases/${caseId}/spec/chat`, {
+    // `routedToAuthoring` (#619): while live authoring holds this case the message
+    // is banked as GUIDANCE for the paused Claude session instead of starting a
+    // spec-edit pass — so there will be no `automation.chat.reply`, and the caller
+    // must resolve its own pending bubble from this response.
+    post<{
+      started: boolean;
+      caseId: number;
+      routedToAuthoring?: boolean;
+      authoringStatus?: string;
+      guidancePending?: number;
+    }>(`/cases/${caseId}/spec/chat`, {
       message,
       model,
       messageId,
+    }),
+  /** Live-authoring pause state for one case (#619). */
+  getAuthoringState: (caseId: number) =>
+    get<AuthoringStateOut>(`/cases/${caseId}/authoring`),
+  pauseAuthoring: (caseId: number) =>
+    post<{ ok: boolean; outcome: string }>(`/cases/${caseId}/authoring/pause`, {}),
+  continueAuthoring: (caseId: number, guidance: string) =>
+    post<{ ok: boolean; outcome: string }>(`/cases/${caseId}/authoring/continue`, {
+      guidance,
     }),
   updateSpec: (caseId: number, code: string) =>
     patch<AutomationSpecOut>(`/cases/${caseId}/spec`, { code }),

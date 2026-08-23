@@ -151,7 +151,18 @@
     },
     "authoring": {
       "authored": "Đã tạo spec",
-      "failed": "Live authoring không tạo được spec"
+      "failed": "Live authoring không tạo được spec",
+      "pause": "Tạm dừng",
+      "pausing": "Đang tạm dừng…",
+      "continue": "Tiếp tục",
+      "continuing": "Đang tiếp tục…",
+      "paused": "Đã tạm dừng — trình duyệt vẫn đang mở",
+      "pauseHint": "Tạm dừng để bạn tự điều khiển trình duyệt, rồi bấm Tiếp tục.",
+      "pausedHint": "Tự điều khiển trình duyệt, nhập hướng dẫn trong chat, rồi bấm Tiếp tục — Claude giữ nguyên ngữ cảnh.",
+      "pausedFreshHint": "Tiếp tục sẽ chạy lại một lượt mới có hướng dẫn: không giữ được ngữ cảnh Claude của phiên này.",
+      "guidanceQueued": "Đã lưu làm hướng dẫn cho phiên viết spec đang tạm dừng",
+      "budgetLeft": "Còn ${{amount}}",
+      "chatIsGuidance": "Case này đang được viết spec trực tiếp — tin nhắn của bạn được gửi làm hướng dẫn, không phải sửa spec."
     },
     "heal": {
       "progressTitle": "Đang tự khắc phục {{caseCode}} — lần thử {{attempt}}/{{maxAttempts}}",

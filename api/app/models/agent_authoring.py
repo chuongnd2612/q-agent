@@ -26,12 +26,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime, timestamp_column
 
-AUTHORING_SESSION_STATUSES = ("queued", "running")
+#: ``paused``/``resuming`` were added by #619 (pause mid-authoring, feed guidance,
+#: continue the SAME Claude session). A ``paused`` row is NOT stranded work: the
+#: device is holding a live Chrome, a live temp workdir and a live
+#: ``CLAUDE_CONFIG_DIR`` open for it, so anything that sweeps "abandoned" sessions
+#: must treat it as alive until its pause expires.
+AUTHORING_SESSION_STATUSES = ("queued", "running", "paused", "resuming")
 
 
 class AgentAuthoringSession(Base):
@@ -71,3 +76,33 @@ class AgentAuthoringSession(Base):
     # would otherwise wedge the case forever now that the queue is durable, so
     # request_authoring re-queues a claim older than the stale-claim window.
     claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=None)
+
+    # ---------------------------------------------- pause / resume (#619)
+    # Set by the user's Pause; the agent picks it up on its next progress post
+    # (the channel it already calls once per Claude step), so pause needs no new
+    # poller — the #625 rule is that nothing a poller waits on may live in
+    # process memory, and this column is that state.
+    pause_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # When the agent confirmed it had stopped Claude and parked. Drives the pause
+    # expiry (a forgotten pause must not leak a browser + temp dir forever) and
+    # the staleness check, which for a paused row is measured from HERE, not from
+    # claimed_at (a long, legitimate pause is not an abandoned claim).
+    paused_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, default=None)
+    # Claude CLI's OWN session id, read off the `--output-format stream-json`
+    # envelope. `session_id` above is Q-Agent's queue id and is NOT usable with
+    # `claude --resume`. Empty when the envelope never carried one, which is
+    # exactly when Continue must fall back to a fresh guided pass.
+    claude_session_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    # JSON array of guidance strings the user typed while paused, not yet handed
+    # to the device. Cleared when a resume delivers them.
+    guidance: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Every guidance string ever accepted for this session, kept so a FALLBACK
+    # (fresh pass) can carry the whole accumulated intent, not just the newest
+    # turn — the resumed Claude session remembers earlier guidance, a fresh one
+    # does not.
+    guidance_history: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Claude spend across ALL passes of this session. The budget ceiling is a
+    # SESSION budget, so each resume is handed `max_budget_usd - cost_usd_so_far`
+    # rather than the full ceiling again (#619).
+    cost_usd_so_far: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    resume_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

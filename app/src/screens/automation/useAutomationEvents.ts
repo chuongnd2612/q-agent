@@ -57,6 +57,8 @@ export type AuthoringProgress = {
   lines: string[];
   /** True once the agent emitted a terminal `done`/`failed` phase. */
   done: boolean;
+  /** #619: parked mid-session with the browser still open, awaiting Continue. */
+  paused?: boolean;
   /** Claude $ the agentic authoring run spent (set on the terminal event). */
   costUsd?: number;
 };
@@ -165,6 +167,10 @@ export function useAutomationEvents(runId: number, generating: boolean) {
       const caseId = p.case ?? p.caseId ?? 0;
       const message = (p.message ?? "").trim();
       const terminal = p.phase === "done" || p.phase === "failed";
+      // #619: `paused` means the device stopped Claude but kept Chrome, the temp
+      // workdir and CLAUDE_CONFIG_DIR alive. It is NOT terminal — the trail must
+      // stay, minus the "working…" spinner, and the Continue control appears.
+      const paused = p.phase === "paused";
       // On session start, refetch specs so the newly-running row appears (a fresh
       // Generate returns before the background thread creates the row).
       if (p.phase === "launching") {
@@ -176,8 +182,13 @@ export function useAutomationEvents(runId: number, generating: boolean) {
         const lines = sameCase ? [...prev.lines] : [];
         if (message) lines.push(message);
         const costUsd = typeof p.costUsd === "number" ? p.costUsd : sameCase ? prev?.costUsd : undefined;
-        return { caseId, lines: lines.slice(-40), done: terminal, costUsd };
+        return { caseId, lines: lines.slice(-40), done: terminal, costUsd, paused };
       });
+      // Pausing/resuming changes what the Pause/Continue controls may do, and the
+      // server is the authority on that — so refetch rather than inferring it here.
+      if (paused || p.phase === "guidance") {
+        qc.invalidateQueries({ queryKey: queryKeys.authoringState(caseId) });
+      }
       if (terminal) {
         // Persistent completion feedback incl. the Claude $ the authoring run spent
         // (the in-panel trail vanishes once the code replaces it).
