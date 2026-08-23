@@ -39,11 +39,20 @@ export async function ensureChromium(): Promise<boolean> {
 
   console.log("Chromium not found — installing Playwright's Chromium (one-time download)...");
   const code = await new Promise<number | null>((resolve) => {
+    // Piped rather than inherited (#421): with windowsHide + pipes the child gets
+    // no console at all (measured), and under Electron — a GUI process with no
+    // stdout — `inherit` discarded the download progress and any failure reason.
     const child = spawn(nodeBin(), [playwrightCli(), "install", "chromium"], {
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       env: { ...process.env, ...childNodeEnv() },
     });
+    const forward = (chunk: unknown): void => {
+      const text = String(chunk).replace(/\s+$/, "");
+      if (text) console.log(`[playwright install] ${text}`);
+    };
+    child.stdout?.on("data", forward);
+    child.stderr?.on("data", forward);
     child.on("close", resolve);
     child.on("error", () => resolve(null));
   });

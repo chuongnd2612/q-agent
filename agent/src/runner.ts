@@ -1045,9 +1045,14 @@ export async function processExplorationJob(cfg: AgentConfig, session: api.Explo
   if (storageState && sessionStoragePath) args.push(sessionStoragePath);
   // Run the explore browser HEADED on the paired device: the user watches the
   // session, and a headed browser dodges WAF/bot-protection that blocks headless.
+  // windowsHide (#421): CREATE_NO_WINDOW is INHERITED by the whole descendant
+  // tree, so this also keeps any console-subsystem grandchild the driver reaches
+  // for from flashing a window on the paired device. Stdio stays piped — the
+  // flag suppresses the console, never the pipes.
   const child = spawn(nodeBin(), args, {
     cwd: nm,
     env: { ...nodePathEnv(nm), QAGENT_EXPLORE_HEADED: "1" },
+    windowsHide: true,
   });
   activeChild = child;
   // Capture the driver's stderr so a launch failure (missing browser, bad
@@ -1255,6 +1260,25 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     };
     if (claudeConfigDir) claudeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;
     // Spawn the native `claude` binary directly (it is not a JS entry).
+    //
+    // windowsHide is LOAD-BEARING for the grandchildren, not just for `claude`
+    // itself (#421). Claude's Bash tool runs `browser-harness` (a console-
+    // subsystem Python CLI) once per step, and those were the windows seen
+    // flashing. Measured on Windows 11, from a console-less parent:
+    //
+    //   claude spawned WITHOUT windowsHide -> claude gets a VISIBLE console, and
+    //     every grandchild ATTACHES TO THAT SAME console window (same HWND) and
+    //     is visible. One flash per browser-harness call.
+    //   claude spawned WITH windowsHide (CREATE_NO_WINDOW) -> claude gets no
+    //     console (GetConsoleWindow() == 0), and a grandchild launched by a plain
+    //     CreateProcess we do NOT control (bash -> browser-harness) also gets
+    //     none. CREATE_NO_WINDOW is inherited down the whole subtree.
+    //
+    // So the flag propagates and no native shim is needed. Do NOT "fix" this by
+    // routing through `conhost.exe --headless`: measured, it replaces the child's
+    // stdout with terminal escape sequences, so the --output-format stream-json
+    // events below never arrive and authoring fails silently (#615). Piped stdio
+    // + windowsHide suppresses the console WITHOUT touching the pipes.
     claude = spawn(claudeCli(), claudeArgs, {
       cwd: workDir,
       env: claudeEnv,
