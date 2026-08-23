@@ -1,23 +1,35 @@
 // Long-lived, pre-authenticated automation Chrome for live spec-authoring (#400).
-// Args: baseUrl, port, profileDir, [sessionStoragePath].
+// Args: baseUrl, port, profileDir, [sessionStoragePath], [storageStatePath].
 //
 // Launches a real Chrome/Edge (NOT via Playwright's launcher, so no automation
 // fingerprint) on a FIXED --remote-debugging-port using a DEDICATED, persistent
 // --user-data-dir. A dedicated non-default profile is deliberate: it lets
 // browser-harness attach over CDP (BU_CDP_URL=http://127.0.0.1:<port>) without
 // the Chrome "Allow remote debugging" popup / default-profile lockdown (see
-// browser_harness/daemon.py:128-131,148). Auth is inherited from the persistent
-// profile — reuse the capture `browser-profile` dir (already logged in via the
-// manual-login capture flow), so cookies + localStorage are present.
+// browser_harness/daemon.py:128-131,148).
 //
-// sessionStorage (where MSAL/SPA auth tokens live) is NEVER persisted to a Chrome
-// profile on disk, so a profile-only relaunch lands unauthenticated for such apps.
-// When a `sessionStoragePath` is given AND Playwright is resolvable (agent side —
-// the API container ships no Playwright and passes no path), we attach over CDP
-// and register an init script that replays the saved sessionStorage for the
-// matching origin before app code runs — the same trick the run/explore paths use.
-// The Playwright connection is kept alive for the whole session so the init-script
-// registration persists for the tabs browser-harness opens.
+// AUTH COMES FROM THE CAPTURED SESSION, NOT FROM THE PROFILE (#638). The profile
+// is reused (its IdP cookies help a silent re-auth), but it must never be the
+// only source: it is mutable state that a FAILED authoring run poisons. Measured
+// on a real box — a run that landed on the login page left MSAL's cache cleared,
+// so every later run inherited a profile with `msal.version` and nothing else and
+// went straight back to the login page. `storageState.json` is the captured
+// truth, and it is the same material the spec-run path injects successfully
+// through `playwright.config.ts`.
+//
+// So, when Playwright is resolvable (agent side — the API container ships no
+// Playwright), we attach over CDP BEFORE the app is ever loaded and:
+//
+//   * add the captured cookies to the context, and
+//   * register an init script that restores the captured localStorage +
+//     sessionStorage for the matching origin, writing ONLY keys that are absent
+//     so a rotated live token is never clobbered.
+//
+// Both stores matter because MSAL's `cacheLocation` decides which one holds the
+// tokens: sessionStorage for some apps, localStorage for others (and neither is
+// persisted-then-trusted here). The Playwright connection is kept alive for the
+// whole session so the init-script registration persists for the tabs
+// browser-harness opens.
 //
 // Unlike capture_auth.cjs (a short snapshot loop) this stays ALIVE for the whole
 // authoring session and only tears Chrome down when the parent closes our stdin
@@ -29,7 +41,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const authState = require('./session_auth_state.cjs');
-const [, , baseUrl, portArg, profileDir, sessionStoragePath] = process.argv;
+const [, , baseUrl, portArg, profileDir, sessionStoragePath, storageStatePath] = process.argv;
 const PORT = parseInt(portArg, 10);
 
 process.on('unhandledRejection', (e) => console.error('authoring_browser unhandledRejection:', e && (e.message || e)));
@@ -96,26 +108,58 @@ function loadSessionStorage() {
   } catch { return null; }
 }
 
+// Load the captured `storageState.json` (Playwright's own format: `{cookies,
+// origins:[{origin, localStorage:[{name,value}]}]}`), reduced to the cookie list
+// plus a `{origin: {k: v}}` localStorage map. Null when unreadable/absent (#638).
+function loadStorageState() {
+  if (!storageStatePath) return null;
+  try {
+    return authState.storageStateToMaps(JSON.parse(fs.readFileSync(storageStatePath, 'utf-8')));
+  } catch { return null; }
+}
+
 // Require Playwright if available (agent side); null in the API container.
 function tryPlaywright() {
   try { return require('playwright').chromium; } catch { return null; }
 }
 
-// Arm sessionStorage replay and navigate the VISIBLE tab to baseUrl WITH the
-// token restored, so MSAL/SPA apps load authenticated. Critical ordering: the
-// init script must be registered BEFORE the first navigation to the app (that's
+// Restore the captured session and navigate the VISIBLE tab to baseUrl WITH the
+// auth in place, so MSAL/SPA apps load authenticated. Critical ordering: cookies
+// and the init script must land BEFORE the first navigation to the app (that's
 // why Chrome is launched at about:blank, not baseUrl). Returns the connected
 // Playwright browser (kept alive so the init-script registration + tab survive).
-async function armAuthAndNavigate(chromium, port, byOrigin) {
+async function armAuthAndNavigate(chromium, port, sessionByOrigin, state) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const ctx = browser.contexts()[0];
   if (!ctx) return browser;
-  await ctx.addInitScript((data) => {
+
+  // Captured cookies first — the profile may hold older ones, and addCookies
+  // overwrites by (name, domain, path).
+  if (state && state.cookies.length) {
     try {
-      const o = data && data[location.origin];
-      if (o) for (const k of Object.keys(o)) window.sessionStorage.setItem(k, o[k]);
-    } catch (e) {}
-  }, byOrigin);
+      await ctx.addCookies(state.cookies);
+      console.error('authoring_browser: restored', state.cookies.length, 'captured cookies');
+    } catch (e) {
+      console.error('authoring_browser: addCookies failed:', e && e.message);
+    }
+  }
+
+  const localByOrigin = (state && state.localByOrigin) || {};
+  await ctx.addInitScript((data) => {
+    // Only write keys that are ABSENT: this script runs on every navigation, and
+    // clobbering a token MSAL has since rotated would log the session back out
+    // (#638). Restoring what is missing is what makes the first load
+    // authenticated; after that the app owns its own cache.
+    const restore = (store, map) => {
+      if (!map) return;
+      for (const k of Object.keys(map)) {
+        try { if (store.getItem(k) === null) store.setItem(k, map[k]); } catch (e) {}
+      }
+    };
+    try { restore(window.localStorage, data && data.local && data.local[location.origin]); } catch (e) {}
+    try { restore(window.sessionStorage, data && data.session && data.session[location.origin]); } catch (e) {}
+  }, { local: localByOrigin, session: sessionByOrigin || {} });
+
   const page = ctx.pages()[0] || (await ctx.newPage());
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -123,7 +167,11 @@ async function armAuthAndNavigate(chromium, port, byOrigin) {
   } catch (e) {
     console.error('authoring_browser: navigate after replay failed:', e && e.message);
   }
-  console.error('authoring_browser: sessionStorage replay armed for', Object.keys(byOrigin).join(','));
+  const restored = [
+    Object.keys(localByOrigin).length ? 'localStorage' : '',
+    Object.keys(sessionByOrigin || {}).length ? 'sessionStorage' : '',
+  ].filter(Boolean).join(' + ') || 'cookies only';
+  console.error('authoring_browser: session restore armed (' + restored + ')');
   return browser;
 }
 
@@ -147,13 +195,24 @@ async function armAuthAndNavigate(chromium, port, byOrigin) {
     }
   } catch (e) { console.error('pref seed failed:', e && e.message); }
 
-  // If we can replay sessionStorage (agent side: Playwright resolvable + a saved
-  // map), launch to about:blank and let Playwright navigate AFTER arming the init
-  // script — so the app never loads before the token is restored. Otherwise launch
-  // straight to baseUrl (profile-only / API container).
+  // If we have ANY captured auth to restore (agent side: Playwright resolvable
+  // plus a storageState and/or a replayable sessionStorage map), launch to
+  // about:blank and let Playwright navigate AFTER arming the restore — so the app
+  // never loads before the session is in place. Otherwise launch straight to
+  // baseUrl (profile-only / API container).
+  //
+  // Gating on the sessionStorage map ALONE was the #638 regression: for an app
+  // whose MSAL cache lives in localStorage, the sanitizer legitimately empties
+  // that map, `chromium` fell to null, and the launcher quietly skipped the whole
+  // restore — injecting nothing and leaving auth to a profile a previous failed
+  // run had already emptied.
   const byOrigin = loadSessionStorage();
-  const chromium = byOrigin ? tryPlaywright() : null;
+  const state = loadStorageState();
+  const chromium = byOrigin || state ? tryPlaywright() : null;
   const launchUrl = chromium ? 'about:blank' : baseUrl;
+  if ((byOrigin || state) && !chromium) {
+    console.error('authoring_browser: captured session present but Playwright is not resolvable — launching profile-only');
+  }
 
   const child = spawn(exe, [
     `--remote-debugging-port=${PORT}`,
@@ -174,8 +233,8 @@ async function armAuthAndNavigate(chromium, port, byOrigin) {
   // signalling readiness so browser-harness attaches to a logged-in tab.
   let pw = null;
   if (chromium) {
-    try { pw = await armAuthAndNavigate(chromium, PORT, byOrigin); }
-    catch (e) { console.error('authoring_browser: replay failed:', e && e.message); }
+    try { pw = await armAuthAndNavigate(chromium, PORT, byOrigin, state); }
+    catch (e) { console.error('authoring_browser: session restore failed:', e && e.message); }
   }
 
   // Signal readiness on stdout so the parent proceeds. The daemon resolves

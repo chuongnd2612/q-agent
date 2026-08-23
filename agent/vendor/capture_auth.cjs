@@ -139,7 +139,10 @@ async function waitForCDP(port, timeoutMs) {
   await snapshot().catch(() => {});
   // Say plainly whether a login was actually captured. Saving whatever happened to
   // be there let the operator believe a half-finished login had been stored (#618).
-  if (authState.anyAuthenticated(sessionByOrigin)) {
+  // Both maps: an app with MSAL `cacheLocation: "localStorage"` keeps its tokens
+  // in localStorage and leaves only handshake leftovers in sessionStorage, so
+  // checking sessionStorage alone called a completed login "not captured" (#638).
+  if (authState.anyAuthenticatedAcross(localByOrigin, sessionByOrigin)) {
     console.error('capture: captured an authenticated session');
   } else {
     console.error('capture: NO authenticated session captured — the login did not complete before the browser closed. Sign in fully, wait for the app to load, then close the window.');

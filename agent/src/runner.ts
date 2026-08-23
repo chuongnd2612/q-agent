@@ -1220,7 +1220,17 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     const nm = agentNodeModules();
     launcher = spawn(
       nodeBin(),
-      [vendorAuthoringScript(), job.baseUrl, String(port), profileDir, sess ? sess.sessionStoragePath : ""],
+      [
+        vendorAuthoringScript(),
+        job.baseUrl,
+        String(port),
+        profileDir,
+        sess ? sess.sessionStoragePath : "",
+        // The captured storageState (cookies + localStorage) is the AUTHORITATIVE
+        // auth material — the profile alone is mutable state a failed run poisons
+        // (#638). Same file the run path feeds to playwright.config.ts.
+        sess ? sess.storageStatePath : "",
+      ],
       { env: nodePathEnv(nm), stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
     );
     activeChild = launcher;
