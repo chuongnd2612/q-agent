@@ -177,6 +177,13 @@ def test_get_case_spec_and_regenerate(client, db_session, monkeypatch):
 
     # The endpoint is fire-and-forget: it acknowledges and streams the result
     # over the run WS. The background worker persists the spec (seeded here).
+    #
+    # That means the worker's generation and the `_seed_spec` below overlap on the
+    # same case — which is how #604 was found: whichever pass lost the race used to
+    # die with `UNIQUE constraint failed: automation_specs.test_case_id`. Every
+    # interleaving is now safe (see `_get_or_create_spec` and
+    # `test_concurrent_generation_keeps_one_spec_row_per_case`), so this passes
+    # regardless of timing rather than depending on it.
     resp = client.post(f"/cases/{case.id}/spec/regenerate")
     assert resp.status_code == 200
     assert resp.json() == {"started": True, "caseId": case.id}
@@ -1015,3 +1022,61 @@ def test_automation_review_failure_does_not_block_gate_passed_spec(db_session, m
     db_session.commit()
 
     assert spec.status == "draft"
+
+
+def test_concurrent_generation_keeps_one_spec_row_per_case(db_session, monkeypatch):
+    """Two overlapping generations for the same case must not double-insert (#604).
+
+    ``AutomationSpec.test_case_id`` is ``unique=True``, and ``_generate_one``
+    resolves ``existing`` *before* the (slow, multi-Claude-call) generation and
+    inserts *after* it — a check-then-insert window wide enough for a second pass
+    on another session to land in between. That is reachable in production: the
+    per-run guard (``_generating``) and the per-case one (``_regenerating_cases``)
+    don't guard each other, so ``POST /runs/{id}/automation/generate`` and
+    ``POST /cases/{id}/spec/regenerate`` can both generate the same case.
+
+    The interleaving is forced deterministically here (the loser's generation call
+    runs the winner's whole pass to completion) rather than raced, so this pins the
+    behaviour instead of sampling it: the loser must adopt the winner's row.
+    """
+    import app.db as db_module
+    from app.models.run import Run
+    from app.models.testcase import AutomationSpec, TestCase
+    from app.routers import automation as automation_router
+    from app.services import claude_cli, spec_service
+
+    monkeypatch.setattr(claude_cli, "run_prompt", lambda *a, **k: CANNED_SPEC)
+
+    run, case = _seed_run_and_case(db_session)
+    db_session.commit()  # both sessions below open their own connection
+
+    loser = db_module.SessionLocal()
+    winner = db_module.SessionLocal()
+    real_generate = spec_service.generate_spec_code
+    calls = {"n": 0}
+
+    def generate_then_let_the_winner_commit(*args, **kwargs):
+        # Called after `_generate_one` has already read `existing` (=None) on the
+        # loser's session — exactly the window the UNIQUE violation needs.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            automation_router._generate_one(
+                winner, winner.get(Run, run.id), winner.get(TestCase, case.id)
+            )
+            winner.commit()
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(spec_service, "generate_spec_code", generate_then_let_the_winner_commit)
+
+    try:
+        automation_router._generate_one(loser, loser.get(Run, run.id), loser.get(TestCase, case.id))
+        loser.commit()
+    finally:
+        loser.close()
+        winner.close()
+
+    assert calls["n"] == 2, "both passes must have generated (the winner ran nested)"
+    rows = db_session.query(AutomationSpec).filter(AutomationSpec.test_case_id == case.id).all()
+    assert len(rows) == 1
+    assert rows[0].filename == "SUR-1428-TC-01.spec.ts"
+    assert rows[0].status == "draft"
