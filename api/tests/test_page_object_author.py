@@ -648,3 +648,192 @@ def test_is_sandbox_is_set_only_when_root_and_skipping_permissions(monkeypatch):
     monkeypatch.delattr(claude_cli.os, "geteuid", raising=False)
     assert claude_cli._running_as_root() is False
     assert not hasattr(_os, "geteuid") or True
+
+
+# ---------------------------------------------------------------------------
+# #617 — an already-satisfied plan makes NO agentic call
+# ---------------------------------------------------------------------------
+
+
+def _poison(monkeypatch) -> None:
+    """Both Claude entry points explode.
+
+    `run_prompt` is the single exec path every Claude call funnels through, and the
+    only writer of `ClaudeUsage` rows, so poisoning it (not just `run_agentic`) is
+    what makes "no call" a proof rather than a flag reading.
+    """
+
+    def explode(*a, **k):
+        raise AssertionError("an already-satisfied plan must not reach the Claude CLI")
+
+    monkeypatch.setattr(claude_cli, "run_prompt", explode)
+    monkeypatch.setattr(claude_cli, "run_agentic", explode)
+
+
+@requires_git
+def test_a_create_whose_targets_are_all_on_disk_makes_no_agentic_call(
+    db_session, gates, monkeypatch
+):
+    """#617: the cost leak. The reuse half worked — `normalize` marks an on-disk path
+    importable and fills `existingMethods` — but the entry stayed in `writable`, so the
+    editor bought a full agentic call (~60-115s live) to author files that were already
+    there and already complete. Observed on the live box: `pages/DashboardPage.ts` and
+    `pages/MyBenefitsPage.ts` on disk, plan still `create=2`, editor re-ran every run.
+    """
+    from app.models.claude_usage import ClaudeUsage
+
+    project = _project(db_session)
+    _write(aps.project_dir(project), "pages/UserPage.ts", USER_PAGE)
+    _poison(monkeypatch)
+
+    plan = _plan(project, [
+        {"name": "UserPage", "path": "pages/UserPage.ts", "action": "create",
+         "methods": ["open()"]},
+    ])
+    # #571's decision is untouched: the entry is still a `create`, still writable.
+    assert plan["counts"]["create"] == 1
+    assert plan["writable"] == ["pages/UserPage.ts"]
+    assert plan["importable"] == ["pages/UserPage.ts"]
+
+    refreshed, report = author.author_assets(
+        db_session, project, "RUN-1", "SUR-1428", plan, [_Case()]
+    )
+
+    assert report["ran"] is False
+    assert report["reason"] == "already satisfied by the project"
+    assert report["satisfied"] == ["pages/UserPage.ts"]
+    assert report["files"] == []
+    assert refreshed is plan
+    # The proof: no usage row, so no Claude call happened at all.
+    assert db_session.query(ClaudeUsage).count() == 0
+    assert _audit_rows(db_session) == []
+    # ...and nothing was stamped, so the plan is not falsely marked authored.
+    assert not plan.get("authoredAt")
+
+
+@requires_git
+def test_an_on_disk_target_with_no_planned_methods_is_nothing_to_author(
+    db_session, gates, monkeypatch
+):
+    """No methods planned + the file exists == there is nothing left to add."""
+    from app.models.claude_usage import ClaudeUsage
+
+    project = _project(db_session)
+    _write(aps.project_dir(project), "pages/UserPage.ts", USER_PAGE)
+    _poison(monkeypatch)
+
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts",
+                            "action": "extend"}])
+    _, report = author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()])
+
+    assert report["ran"] is False and report["reason"] == "already satisfied by the project"
+    assert db_session.query(ClaudeUsage).count() == 0
+
+
+@requires_git
+def test_an_extend_for_methods_the_file_already_has_makes_no_call(
+    db_session, gates, monkeypatch
+):
+    """Compared by method NAME, not signature: a plan writes `open` or `open(user)` while
+    `inventory()` renders `open()`, so a whole-signature comparison would never match and
+    the skip would never fire on real data."""
+    from app.models.claude_usage import ClaudeUsage
+
+    project = _project(db_session)
+    _write(aps.project_dir(project), "pages/UserPage.ts", USER_PAGE)
+    _poison(monkeypatch)
+
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts",
+                            "action": "extend", "methods": ["open", "async open(user)"]}])
+    assert plan["pages"][0]["existingMethods"] == ["open()"]
+    _, report = author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()])
+
+    assert report["ran"] is False and report["reason"] == "already satisfied by the project"
+    assert db_session.query(ClaudeUsage).count() == 0
+
+
+@requires_git
+def test_an_extend_asking_for_a_genuinely_new_method_still_authors(
+    db_session, gates, monkeypatch
+):
+    """The other half of the rule: the skip must not swallow a real capability gap."""
+    project = _project(db_session)
+    root = aps.project_dir(project)
+    _write(root, "pages/UserPage.ts", USER_PAGE)
+
+    calls = _editor(monkeypatch, lambda r: (r / "pages" / "UserPage.ts").write_text(
+        USER_PAGE.rstrip()[:-1] + "\n  async expectEmpty() {\n    return 1;\n  }\n}\n",
+        encoding="utf-8",
+    ))
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts", "action": "extend",
+                            "methods": ["open()", "expectEmpty()"]}])
+    refreshed, report = author.author_assets(
+        db_session, project, "RUN-1", "SUR-1428", plan, [_Case()]
+    )
+
+    assert len(calls) == 1, "one new method is enough to keep authoring"
+    assert report["ran"] is True and report["ok"] is True
+    assert "expectEmpty" in (root / "pages" / "UserPage.ts").read_text(encoding="utf-8")
+    assert "expectEmpty()" in (refreshed["pages"][0]["existingMethods"] or [])
+
+
+@requires_git
+def test_a_create_for_a_path_not_on_disk_still_authors(db_session, gates, monkeypatch):
+    """No regression for a fresh project: nothing on disk means everything is pending."""
+    project = _project(db_session)
+    root = aps.project_dir(project)
+    calls = _editor(monkeypatch, lambda r: _write(r, "pages/UserPage.ts", USER_PAGE))
+
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts", "action": "create",
+                            "methods": ["open()"]}])
+    assert plan["importable"] == [], "nothing is on disk yet"
+    _, report = author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()])
+
+    assert len(calls) == 1 and report["ok"] is True
+    assert (root / "pages" / "UserPage.ts").exists()
+
+
+@requires_git
+def test_a_mixed_plan_authors_only_the_outstanding_entry(db_session, gates, monkeypatch):
+    """A satisfied entry is dropped from the prompt; the outstanding one still drives it."""
+    project = _project(db_session)
+    root = aps.project_dir(project)
+    _write(root, "pages/UserPage.ts", USER_PAGE)
+
+    calls = _editor(monkeypatch, lambda r: _write(
+        r, "pages/OrderPage.ts", "export class OrderPage {\n  async open() {\n  }\n}\n",
+    ))
+    plan = _plan(project, [
+        {"name": "UserPage", "path": "pages/UserPage.ts", "action": "extend",
+         "methods": ["open()"]},
+        {"name": "OrderPage", "path": "pages/OrderPage.ts", "action": "create",
+         "methods": ["open()"]},
+    ])
+    _, report = author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()])
+
+    assert len(calls) == 1 and report["ok"] is True
+    prompt = calls[0]["prompt"]
+    assert "`pages/OrderPage.ts`" in prompt
+    assert "`pages/UserPage.ts`" not in prompt, "a satisfied entry is not re-authored"
+
+
+def test_pending_actions_compares_method_names_not_signatures():
+    """The unit-level rule, independent of disk: the name before `(`, casefolded."""
+    def _p(action, methods, existing, *, path="pages/UserPage.ts", on_disk=True):
+        return {
+            "feature": "f", "ticket": "SUR-1",
+            "specGroups": [{"name": "g", "testCases": ["TC-01"]}],
+            "pages": [{"name": "UserPage", "path": path, "action": action,
+                       "methods": methods, "existingMethods": existing}],
+            "components": [], "fixtures": [], "data": [], "utils": [],
+            "importable": [path] if on_disk else [],
+        }
+
+    # Argument-list formatting differs between the plan and `inventory()`.
+    assert author.pending_actions(_p("extend", ["fillUser(user: User)"], ["fillUser(user)"])) == []
+    # A genuinely new method survives.
+    assert len(author.pending_actions(
+        _p("extend", ["fillUser(u)", "reset()"], ["fillUser(user)"]))) == 1
+    # Not on disk => always pending, whatever the methods say.
+    assert len(author.pending_actions(
+        _p("create", ["open()"], ["open()"], on_disk=False))) == 1

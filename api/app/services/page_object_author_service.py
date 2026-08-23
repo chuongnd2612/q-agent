@@ -33,8 +33,12 @@ diagnosability, so an :func:`audit_service.record` entry is written **per file
 touched**, naming the plan action that motivated it.
 
 **Cost.** The editor is skipped entirely when the plan has no ``create``/
-``extend`` action — a reuse-only feature must never pay for an agentic call, and
-that is the slice's main cost control. It also runs **once per ticket**: the
+``extend`` action *left to satisfy* — a reuse-only feature must never pay for an
+agentic call, and that is the slice's main cost control. #617 widened it from
+"no action" to "no *outstanding* action": an entry whose path is already on disk
+and whose planned methods are all already in that file is nothing to author, so a
+project whose library has stabilised stops paying, which is the epic's own success
+metric (cost must FALL as the library grows). It also runs **once per ticket**: the
 plan file carries an ``authoredAt`` stamp, so the ticket's second case reuses the
 authored library instead of re-running the editor. Spend is bounded by the same
 ceilings as live authoring (``authoring_cost_budget_usd`` pre-flight plus the
@@ -79,20 +83,75 @@ def skipped(reason: str, **extra: Any) -> dict[str, Any]:
     return {"ran": False, "ok": True, "reason": reason, "files": [], **extra}
 
 
-def pending_actions(plan: dict | None) -> list[dict]:
-    """The plan's ``create``/``extend`` entries, flattened across asset groups.
+def _method_name(signature: str) -> str:
+    """The method NAME out of a signature — everything before ``(``, casefolded.
 
-    Empty means there is nothing to author, which is the signal to skip the
-    agentic call entirely (see the module docstring's cost note).
+    The plan and :func:`automation_project_service.inventory` render argument lists
+    differently (``bulkCreate(count)`` vs ``bulkCreate(count: string)``, and a plan
+    may name a method with no parens at all), so the whole signature is not a usable
+    key. The name is, and it is what "does this file already provide it?" turns on.
+    """
+    text = str(signature or "").split("(", 1)[0].strip()
+    if " " in text:  # tolerate a plan that wrote "async open"
+        text = text.rsplit(" ", 1)[-1]
+    return text.casefold()
+
+
+def _already_satisfied(entry: dict, on_disk: set[str]) -> bool:
+    """Is this ``create``/``extend`` entry already fully provided by the project (#617)?
+
+    The reuse half of epic #537 already works — :func:`normalize` marks any path found
+    on disk ``importable`` whatever the action claims, and fills ``existingMethods``
+    from the file itself. What did *not* work is the cost half: the same entry stayed
+    in ``writable``, so a plan whose targets are all on disk and all complete still
+    bought a full agentic Claude call (~60-115s observed) to author nothing.
+
+    This is deliberately **not** fixed in ``normalize``/``writable``/``duplicates``:
+    a same-path ``create`` is still not a near-duplicate (#571's decision stands, and
+    file content is still guarded by the additive-diff check). The question here is a
+    different one — *is there anything left to author?* — and it belongs where the
+    cost is incurred.
+    """
+    path = entry.get("path") or ""
+    if path not in on_disk:
+        return False  # nothing on disk to satisfy it: author it
+    planned = {name for name in (_method_name(m) for m in entry.get("methods") or []) if name}
+    if not planned:
+        return True  # the file exists and the plan named no method: nothing to add
+    existing = {_method_name(m) for m in entry.get("existingMethods") or []}
+    return planned <= existing
+
+
+def _split_actions(plan: dict | None) -> tuple[list[dict], list[dict]]:
+    """``(pending, satisfied)`` ``create``/``extend`` entries, flattened across groups.
+
+    ``satisfied`` is kept rather than discarded so the skip is *loggable*: "why didn't
+    it author?" has to be answerable from the logs, not by re-deriving the plan.
     """
     if not automation_planner_service.is_actionable(plan):
-        return []
-    out: list[dict] = []
+        return [], []
+    # `importable` IS the on-disk set: `normalize`/`refresh_plan` derive it from the
+    # real tree, never from the model's claim, so it is the honest disk oracle here.
+    on_disk = set((plan or {}).get("importable") or [])
+    pending: list[dict] = []
+    satisfied: list[dict] = []
     for group in automation_planner_service.ASSET_GROUPS:
         for entry in (plan or {}).get(group) or []:
             if entry.get("action") in AUTHORED_ACTIONS and entry.get("path"):
-                out.append({**entry, "group": group})
-    return out
+                target = {**entry, "group": group}
+                (satisfied if _already_satisfied(entry, on_disk) else pending).append(target)
+    return pending, satisfied
+
+
+def pending_actions(plan: dict | None) -> list[dict]:
+    """The plan's ``create``/``extend`` entries that still have something to author.
+
+    Empty means there is nothing to author, which is the signal to skip the
+    agentic call entirely (see the module docstring's cost note). An entry whose
+    path is already on disk **and** whose planned methods are all already in it is
+    not returned — see :func:`_already_satisfied`.
+    """
+    return _split_actions(plan)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +307,24 @@ def author_assets(
         ``report`` is ``{ran, ok, reason, files, ...}``; ``ran`` False means no
         Claude call was made at all.
     """
-    actions = pending_actions(plan)
+    actions, satisfied = _split_actions(plan)
     if not actions:
         # The cost control. A reuse-only feature (or a failed/empty plan) never
         # reaches the CLI, and this is observable: no usage row, no activity entry.
+        if satisfied:
+            # #617: every target is on disk and already complete — a previous run (or
+            # an earlier ticket) authored it. Generation still imports it, because
+            # `normalize` already made it importable; what it must not do is pay an
+            # agentic call to re-author what is already there.
+            logger.info(
+                "page-object author skipped for {} {}: already satisfied by the project ({})",
+                run_code, ticket_external_id,
+                ", ".join(entry["path"] for entry in satisfied),
+            )
+            return plan, skipped(
+                "already satisfied by the project",
+                satisfied=[entry["path"] for entry in satisfied],
+            )
         logger.info(
             "page-object author skipped for {} {}: no create/extend actions in the plan",
             run_code, ticket_external_id,
