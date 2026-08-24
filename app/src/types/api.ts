@@ -287,8 +287,25 @@ export interface Readiness {
   items: ReadinessItem[];
 }
 
+/** One case that the last generation pass could not produce a spec for (#641). */
+export interface GenerationFailure {
+  caseId: number;
+  code: string;
+  message: string;
+}
+
+/** Why the previous generation pass produced nothing (#641). Durable, so a
+ *  failure the user did not witness live is still answerable afterwards. */
+export interface GenerationError {
+  at: string;
+  attempted: number;
+  failures: GenerationFailure[];
+}
+
 export interface AutomationStatus {
   generating: boolean;
+  /** `null` once a pass completes with no failures. */
+  lastError?: GenerationError | null;
 }
 
 // ----------------------------------------------------- DOM exploration (ADR 0010)
