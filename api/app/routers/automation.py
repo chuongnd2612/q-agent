@@ -1518,6 +1518,10 @@ def get_case_authoring_state(
         "resumable": bool(session["claude_session_id"]),
         "guidancePending": len(session["guidance"]),
         "guidanceGiven": len(session["guidance_history"]),
+        # The turns themselves, not just how many (#644): the input for the NEXT
+        # resume is useless without seeing what was already said — a user would
+        # either repeat themselves or contradict an instruction they forgot.
+        "guidanceHistory": list(session["guidance_history"]),
         "costUsdSoFar": session["cost_usd_so_far"],
         "remainingBudgetUsd": session["remaining_budget_usd"],
         "resumeCount": session["resume_count"],

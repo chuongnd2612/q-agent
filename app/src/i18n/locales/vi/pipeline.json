@@ -167,7 +167,11 @@
       "pausedFreshHint": "Tiếp tục sẽ chạy lại một lượt mới có hướng dẫn: không giữ được ngữ cảnh Claude của phiên này.",
       "guidanceQueued": "Đã lưu làm hướng dẫn cho phiên viết spec đang tạm dừng",
       "budgetLeft": "Còn ${{amount}}",
-      "chatIsGuidance": "Case này đang được viết spec trực tiếp — tin nhắn của bạn được gửi làm hướng dẫn, không phải sửa spec."
+      "chatIsGuidance": "Case này đang được viết spec trực tiếp — tin nhắn của bạn được gửi làm hướng dẫn, không phải sửa spec.",
+      "guidanceSent_one": "Đã gửi {{count}} lượt hướng dẫn",
+      "guidanceSent_other": "Đã gửi {{count}} lượt hướng dẫn",
+      "guidancePlaceholder": "Nói cho Claude cần làm khác thế nào, rồi bấm Tiếp tục (Enter để gửi, Shift+Enter để xuống dòng)",
+      "continueWithGuidance": "Tiếp tục kèm hướng dẫn"
     },
     "heal": {
       "progressTitle": "Đang tự khắc phục {{caseCode}} — lần thử {{attempt}}/{{maxAttempts}}",

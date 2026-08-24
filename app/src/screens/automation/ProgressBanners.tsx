@@ -1,5 +1,5 @@
-import { Check, Pause, Play, Sparkles, Telescope } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Check, MessageSquare, Pause, Play, Sparkles, Telescope } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
@@ -185,22 +185,20 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
   const fail = (err: unknown) =>
     toast.error((err as { message?: string })?.message || String(err));
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-3">
+    <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.06] pt-3">
+      <div className="flex flex-wrap items-center gap-2">
       {paused ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
+        <PausedGuidance
+          busy={busy}
+          history={data.guidanceHistory}
+          givenCount={data.guidanceGiven ?? 0}
+          onContinue={(guidance) =>
             resume
-              .mutateAsync("")
+              .mutateAsync(guidance)
               .then(() => toast.success(t("progress.authoring.continuing")))
-              .catch(fail);
-          }}
-          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
-          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)" }}
-        >
-          <Play size={13} /> {t("progress.authoring.continue")}
-        </button>
+              .catch(fail)
+          }
+        />
       ) : (
         <button
           type="button"
@@ -228,6 +226,90 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
           })}
         </span>
       )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The paused state: what to type, and Continue (#644).
+ *
+ * #619 shipped resume-WITH-guidance and this control resumed with `""` every
+ * time, so the feature's actual value — telling Claude what it got wrong and
+ * continuing the SAME session with its context intact — had no way in from the
+ * product. Continuing with an empty box is still valid ("carry on as you were"),
+ * so the input never blocks the button.
+ */
+function PausedGuidance({
+  busy,
+  history,
+  givenCount,
+  onContinue,
+}: {
+  busy: boolean;
+  history: string[] | undefined;
+  givenCount: number;
+  onContinue: (guidance: string) => Promise<unknown>;
+}) {
+  const { t } = useTranslation("pipeline");
+  const [text, setText] = useState("");
+  const submit = () => {
+    if (busy) return;
+    const guidance = text.trim();
+    // Clear only after the server has taken it: on failure the user's words are
+    // still in the box to retry with, not lost.
+    void onContinue(guidance).then(() => setText(""));
+  };
+  // An older server reports only a count; a newer one sends the turns themselves.
+  const shown = history ?? [];
+  return (
+    <div className="flex w-full flex-col gap-2">
+      {(shown.length > 0 || givenCount > 0) && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-faint">
+            <MessageSquare size={11} strokeWidth={2.4} />
+            {t("progress.authoring.guidanceSent", { count: shown.length || givenCount })}
+          </div>
+          {shown.map((line, i) => (
+            <div
+              key={i}
+              className="rounded-[9px] border border-white/[0.07] bg-white/[0.03] px-2.5 py-1.5 text-[12px] leading-relaxed text-ink-dim"
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-col gap-2 md:flex-row md:items-end">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends, Shift+Enter breaks the line — the convention every
+            // chat input in the product already follows.
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          rows={2}
+          disabled={busy}
+          placeholder={t("progress.authoring.guidancePlaceholder")}
+          className="min-w-0 flex-1 resize-y rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2 text-[12.5px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-[rgba(139,92,246,.55)] disabled:opacity-60"
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={submit}
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold text-white disabled:opacity-50"
+          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)" }}
+        >
+          <Play size={13} />{" "}
+          {text.trim()
+            ? t("progress.authoring.continueWithGuidance")
+            : t("progress.authoring.continue")}
+        </button>
+      </div>
     </div>
   );
 }
