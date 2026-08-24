@@ -35,6 +35,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { useTour } from "@/store/tour";
 import { useEnsureSampleRun } from "@/hooks/queries";
+import { SetupChecklist } from "@/components/setup/SetupChecklist";
 
 /** A single core concept, rendered as a card in the concepts grid.
  * `key` indexes into the `gettingStarted.concepts.*` i18n subtree. */
@@ -118,6 +119,13 @@ export function GettingStarted() {
             {ensureSample.isPending ? t("gettingStarted.hero.preparingSample") : t("gettingStarted.hero.exploreSample")}
           </Button>
         </div>
+      </div>
+
+      {/* Live setup state, above the prose (#643): a new account's first question
+          is "what do I still need?", and the guide below can only answer it in
+          general terms. */}
+      <div className="mb-3.5">
+        <SetupChecklist />
       </div>
 
       {/* What is Q-Agent */}

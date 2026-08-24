@@ -18,6 +18,8 @@ import { PipelineRail } from "@/components/ui/PipelineRail";
 import { ApiError } from "@/lib/api";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useExecution, useRun, useSettings, useStartExecution } from "@/hooks/queries";
+import { SetupBlockers } from "@/components/setup/SetupBlockers";
+import { useSetupGuard } from "@/components/setup/useSetupGuard";
 import { useRunEvents } from "@/hooks/useRunEvents";
 import type { ExecutionResultOut, ExecutionTarget, ProgressEvent } from "@/types/api";
 
@@ -35,6 +37,7 @@ export function Execution() {
   const { data: execution, isLoading } = useExecution(runId);
   const { data: settings } = useSettings();
   const startExecution = useStartExecution(runId);
+  const guardSetup = useSetupGuard();
 
   // Manual-login prompt state, driven by the run WebSocket. When the backend
   // (or a Local Agent, whose events the server re-emits unchanged) opens a
@@ -71,6 +74,14 @@ export function Execution() {
     runningResult ?? (isDone ? results[results.length - 1] : undefined);
 
   const handleRun = () => {
+    // Pre-flight (#643): with "My machine" as the target (#161's deliberate
+    // default) an account that has never paired a device would just get a 409
+    // here. Refuse up front and say what to install instead — the 409 handler
+    // below stays as the server-side backstop.
+    guardSetup(["localAgent"], () => runNow());
+  };
+
+  const runNow = () => {
     // No per-run target: the backend resolves the workspace-wide
     // `executionTarget` setting (configured on the Settings screen).
     startExecution.mutate(
@@ -185,6 +196,10 @@ export function Execution() {
       <div className="mb-3.5 hidden md:block">
         <PipelineRail stage={4} />
       </div>
+
+      {/* Only the prerequisite this screen's action needs (#643) — listing the
+          authoring blockers here too would make both screens look broken. */}
+      <SetupBlockers only={["localAgent", "claudeCredential"]} />
 
       <div className="mb-3.5 grid grid-cols-[1.1fr_1fr] gap-2.5 md:gap-3.5">
         <div className="glass flex items-center gap-3 rounded-[18px] p-3 md:gap-5 md:p-[18px_22px]">

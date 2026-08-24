@@ -51,6 +51,7 @@ import type {
   ProjectConfigUpdate,
   ProjectKnowledgeOut,
   ProjectOut,
+  Readiness,
   RepoKnowledgeOut,
   ProviderGroupOut,
   ProviderKind,
@@ -513,6 +514,8 @@ export const api = {
       hubSsoEnabled: boolean;
       hubDataEnabled: boolean;
     }>("/health"),
+  // Setup readiness for the signed-in user (#642) — what still blocks a run.
+  readiness: () => get<Readiness>("/readiness"),
   capabilities: () =>
     get<{ claude: boolean; version: string }>("/capabilities"),
   aiActivity: () => get<AiActivity>("/ai/activity"),
