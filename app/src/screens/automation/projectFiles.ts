@@ -47,6 +47,51 @@ export function groupProjectFiles(files: ProjectFile[]): ProjectFileGroup[] {
     }));
 }
 
+/** One ticket's specs inside the Specs group; `ticket` is "" when the file does
+ *  not live under a ticket directory. */
+export type SpecTicketGroup = { ticket: string; files: ProjectFile[] };
+
+/**
+ * The ticket directory a spec lives in, or "" when it has none.
+ *
+ * Since #540 a project-backed spec's path is `tests/<TICKET>/<file>.spec.ts`, so
+ * the ticket is the segment after `tests/`. Anything shallower (a legacy bare
+ * name, or a spec written straight into `tests/`) has no ticket and must not be
+ * forced into a fake one.
+ */
+export function ticketOf(path: string): string {
+  const parts = path.split("/");
+  const i = parts.indexOf("tests");
+  // A ticket segment only exists when something follows it AND that something is
+  // itself a directory — `tests/foo.spec.ts` is a file, not a ticket.
+  if (i === -1 || parts.length < i + 3) return "";
+  return parts[i + 1];
+}
+
+/**
+ * Sub-group specs by their ticket directory, preserving the caller's order (#659).
+ *
+ * The tree rendered `baseName(path)` for every spec in one flat list, so four
+ * specs from three tickets looked ungrouped — the ticket was in the path all
+ * along and only visible on hover. Files with no ticket come last under "", so
+ * they render without a header rather than inventing one.
+ */
+export function groupSpecsByTicket(files: ProjectFile[]): SpecTicketGroup[] {
+  const byTicket = new Map<string, ProjectFile[]>();
+  for (const f of files) {
+    const ticket = ticketOf(f.path);
+    const bucket = byTicket.get(ticket);
+    if (bucket) bucket.push(f);
+    else byTicket.set(ticket, [f]);
+  }
+  const tickets = [...byTicket.keys()].sort((a, b) => {
+    if (a === "") return 1;
+    if (b === "") return -1;
+    return a.localeCompare(b, undefined, { numeric: true });
+  });
+  return tickets.map((ticket) => ({ ticket, files: byTicket.get(ticket) ?? [] }));
+}
+
 /** Last path segment of a project-relative path (`tests/X/Y.spec.ts` → `Y.spec.ts`). */
 export function baseName(path: string): string {
   const i = path.lastIndexOf("/");
