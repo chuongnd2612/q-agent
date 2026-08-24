@@ -61,6 +61,7 @@
         "title": "Login đã lưu",
         "why": "Dự án bật đăng nhập thủ công cần session đã lưu để vào được trang cần auth."
       }
-    }
+    },
+    "managed": "Quản lý trong EmeHub"
   }
 }

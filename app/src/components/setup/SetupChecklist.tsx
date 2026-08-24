@@ -60,29 +60,42 @@ function ChecklistRow({ item }: { item: ReadinessItem }) {
       <span
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full"
         style={
-          item.ready
+          // A managed item gets the neutral mark, not a tick: Q-Agent did not
+          // verify it, and a green tick would claim a check it never ran (#651).
+          item.ready && !item.managed
             ? { background: "rgba(16,185,129,.18)", color: "#6ee7b7" }
             : { background: "rgba(255,255,255,.06)", color: "#7a7a8c" }
         }
       >
-        {item.ready ? <Check size={13} strokeWidth={2.8} /> : <Icon size={12} strokeWidth={2.2} />}
+        {item.ready && !item.managed ? (
+          <Check size={13} strokeWidth={2.8} />
+        ) : (
+          <Icon size={12} strokeWidth={2.2} />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[13px] font-semibold">{t(`setup.items.${item.key}.title`)}</span>
           {/* An unmet item that blocks nothing right now is labelled optional
               rather than left looking like a failure. */}
-          {!item.ready && !item.required && (
+          {item.managed ? (
             <span className="rounded-full bg-white/[0.07] px-2 py-[1px] text-[10.5px] font-semibold text-faint">
-              {t("setup.optional")}
+              {t("setup.managed")}
             </span>
+          ) : (
+            !item.ready &&
+            !item.required && (
+              <span className="rounded-full bg-white/[0.07] px-2 py-[1px] text-[10.5px] font-semibold text-faint">
+                {t("setup.optional")}
+              </span>
+            )
           )}
         </div>
         <div className="mt-0.5 text-[12px] text-ink-dim">
           {item.detail || t(`setup.items.${item.key}.why`)}
         </div>
       </div>
-      {!item.ready &&
+      {(!item.ready || item.managed) &&
         (route ? (
           <Button variant="glass" size="sm" onClick={() => navigate(route)}>
             {t(`setup.fix.${item.fix}`)} <ArrowRight size={12} strokeWidth={2.4} />

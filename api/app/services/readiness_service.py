@@ -46,8 +46,23 @@ def _item(
     required: bool,
     fix: str,
     detail: str = "",
+    managed: bool = False,
 ) -> dict[str, Any]:
-    return {"key": key, "ready": ready, "required": required, "fix": fix, "detail": detail}
+    """One checklist row.
+
+    ``managed`` marks a setting whose authority is somewhere Q-Agent cannot see
+    (today: EmeHub). Such an item is never a blocker — asserting "missing" about
+    something we did not check is how #651 happened, and a false alarm on the
+    first row of the list is the fastest way to teach users to ignore the rest.
+    """
+    return {
+        "key": key,
+        "ready": ready,
+        "required": required,
+        "fix": fix,
+        "detail": detail,
+        "managed": managed,
+    }
 
 
 def _owned_configs(db: Session, user: User | None) -> list[ProjectConfig]:
@@ -117,12 +132,25 @@ def check(db: Session, user: User | None) -> dict[str, Any]:
     ]
 
     items = [
+        # Under hub management the local store is NOT where the credential lives:
+        # EmeHub is authoritative (#610) and Q-Agent materialises it per run, at
+        # run start, from a browser-minted hub token
+        # (`hub_credentials.prepare_run_credential`) — because hub agent tokens are
+        # 15-minute and session-bound (#497 §4b). A local miss therefore says
+        # nothing, and #651 was exactly that: this row claimed "no credential
+        # resolves" while the same screen showed live plan usage from the one that
+        # did. The server cannot verify the hub's answer without a hub token, so it
+        # reports who owns the setting instead of guessing at its state. A hub with
+        # no credential still fails at run start, where #641 now names the reason.
         _item(
             "claudeCredential",
             ready=has_credential,
-            required=True,
+            required=not hub_managed,
+            managed=hub_managed,
             fix=FIX_HUB if hub_managed else FIX_SETTINGS,
-            detail="" if has_credential else "No Claude credential resolves for this account.",
+            detail=""
+            if (has_credential or hub_managed)
+            else "No Claude credential resolves for this account.",
         ),
         _item(
             "providerConnection",
