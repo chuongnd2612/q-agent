@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 from sqlalchemy.orm import Session
 
 from app import crypto
@@ -388,26 +389,79 @@ def base_url_for(db: Session, ticket: Ticket, env: str = "") -> str:
 def resolve_project_key(db: Session, connection: ProviderConnection | None) -> str | None:
     """Best-effort map a **work-item connection** to its project key (ADR 0006).
 
-    Order: (1) the connection's configured project name if it has a config/knowledge
-    row; (2) the sole configured project when exactly one exists; else None. Reads
-    ``connection.config`` directly — no fragile ``config.project == key`` scan.
+    Order: (1) the connection's configured project name, matched against the known
+    keys **case-insensitively**; (2) the sole configured project when exactly one
+    exists; else None. Reads ``connection.config`` directly — no fragile
+    ``config.project == key`` scan.
+
+    Matching is by **id first** (#663): a project's config records the work-item
+    connection it was configured with (``work_item_connection_id``), so the link is
+    already there and needs no string comparison at all.
+
+    Name matching cannot be trusted here, and this install shows why: two
+    connections — ``surency`` and ``surency 2`` — both report
+    ``config.project == "Surency"``, because they point at the SAME Azure DevOps
+    project. No comparison of that string, however careful about case, can tell
+    which Q-Agent project a ticket belongs to. Their ids can.
+
+    It also explains the reported failure. The old code compared the provider's
+    name (``"Surency"``) to the config key (``"surency"``) EXACTLY, so it never
+    matched, and resolution silently rode on step (3) — "there is only one
+    project". Configuring a second project took that count to two, the fallback
+    returned None, and runs that had worked for months began failing with "No base
+    URL in the project context": a message about the wrong thing entirely, and no
+    visible connection to the change that caused it.
+
+    The name steps remain as fallbacks, for a project that is only INDEXED
+    (a ``ProjectKnowledge`` row with no config, hence no connection link).
+    Ambiguity there is refused rather than guessed: when two keys differ only by
+    case there is no way to tell which the provider meant, and picking one would
+    be a coin flip that reads another project's base URL.
     """
     if connection is not None:
-        cfg = connection.config or {}
-        candidate = cfg.get("project") or cfg.get("repo") or cfg.get("org") or ""
-        if candidate and (
-            get_config(db, candidate)
-            or db.query(ProjectKnowledge)
-            .filter(ProjectKnowledge.project_key == candidate)
-            .first()
-        ):
-            return candidate
+        # (1) The id link the user actually configured. Owner scoping comes for
+        # free: a config row pointing at THIS connection belongs to whoever owns
+        # the connection.
+        linked = (
+            db.query(ProjectConfig)
+            .filter(ProjectConfig.work_item_connection_id == connection.id)
+            .all()
+        )
+        if len(linked) == 1:
+            return linked[0].key
+        if len(linked) > 1:
+            # Two projects claiming one connection is a data error, not something
+            # to silently pick a winner from.
+            logger.warning(
+                "{} project configs share work-item connection {} ({}) — cannot resolve a project key",
+                len(linked),
+                connection.id,
+                ", ".join(sorted(c.key for c in linked)),
+            )
+            return None
 
-    keys = {c.key for c in db.query(ProjectConfig).all()}
-    keys |= {k.project_key for k in db.query(ProjectKnowledge).all() if k.project_key}
+        cfg = connection.config or {}
+        candidate = (cfg.get("project") or cfg.get("repo") or cfg.get("org") or "").strip()
+        if candidate:
+            known = _known_project_keys(db)
+            if candidate in known:
+                return candidate
+            folded = candidate.casefold()
+            matches = sorted(k for k in known if k.strip().casefold() == folded)
+            if len(matches) == 1:
+                return matches[0]
+
+    keys = _known_project_keys(db)
     if len(keys) == 1:
         return next(iter(keys))
     return None
+
+
+def _known_project_keys(db: Session) -> set[str]:
+    """Every project key the install knows — configured or merely indexed."""
+    keys = {c.key for c in db.query(ProjectConfig).all()}
+    keys |= {k.project_key for k in db.query(ProjectKnowledge).all() if k.project_key}
+    return keys
 
 
 def project_key_for_ticket(db: Session, ticket: Ticket) -> str | None:
