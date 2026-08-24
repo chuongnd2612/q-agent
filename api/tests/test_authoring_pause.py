@@ -892,3 +892,61 @@ def test_cancel_announces_a_terminal_phase_the_client_recognises(
     assert payload["phase"] == "cancelled"
     assert payload["case"] == ctx["case"].id
     assert "cancelled" in payload["message"].lower()
+
+
+# ------------------------------------------------------ verification (#657)
+def test_the_claim_ships_the_project_so_the_spec_can_be_run(client, db_session):
+    """#657: the fix is inert unless the bundle actually reaches the device.
+
+    Live-authored specs were finalized having never been executed — "authored"
+    meant a non-empty FILE existed. The agent now runs the spec through the real
+    execution path, but only if it has the project staged: the authoring workdir is
+    a bare temp dir, so without this bundle there is no package.json and no
+    `@q-agent/playwright-base`, and any run fails on the ENVIRONMENT rather than
+    telling anyone anything about the spec.
+    """
+    from app.models.automation_project import AutomationProject
+    from app.models.testcase import AutomationSpec as Spec
+
+    user = _make_user(db_session, "verify-owner@example.com")
+    token = _pair_device(db_session, user)
+    run, case, spec = _seed_case(db_session, owner_id=user.id)
+
+    project = AutomationProject(
+        project_key="surency", repo="surency-admin-hub", owner_id=user.id, slug="surency-admin-hub"
+    )
+    db_session.add(project)
+    db_session.commit()
+    db_session.refresh(project)
+    db_session.query(Spec).filter(Spec.id == spec.id).update({"project_id": project.id})
+    db_session.commit()
+
+    _enqueue(owner_id=user.id, case_id=case.id, run_id=run.id)
+    claim = client.post("/agent/authoring/next", headers={"Authorization": f"Bearer {token}"})
+    assert claim.status_code == 200, claim.text
+    body = claim.json()
+
+    assert body["project"] is not None, "no bundle ⇒ the device cannot verify the spec it authors"
+    assert "files" in body["project"] and "baseVersion" in body["project"]
+    # The verification must match the real run, so the headless setting is SENT,
+    # not guessed: a headless run can fail a bot-protected app whose spec is fine.
+    assert "headless" in body
+
+
+def test_a_case_with_no_project_still_claims(client, db_session):
+    """#657: verification is a bonus, never a gate.
+
+    A legacy case with no automation project must still be authorable — the agent
+    reports it as unverified rather than refusing the work.
+    """
+    user = _make_user(db_session, "no-project@example.com")
+    token = _pair_device(db_session, user)
+    run, case, _spec = _seed_case(db_session, owner_id=user.id)
+
+    _enqueue(owner_id=user.id, case_id=case.id, run_id=run.id)
+    body = client.post(
+        "/agent/authoring/next", headers={"Authorization": f"Bearer {token}"}
+    ).json()
+
+    assert body["project"] is None
+    assert body["specFilename"], "the claim itself must still be complete"

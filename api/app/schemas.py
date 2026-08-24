@@ -421,6 +421,17 @@ class AuthoringClaimOut(ApiModel):
     case_id: int
     run_id: int | None = None
     spec_filename: str
+    # The automation project, so the agent can RUN the spec it just authored
+    # before reporting it (#657). Same bundle shape the execution claim sends —
+    # the verification has to go through the real execution path, because a
+    # verification that differs from the real run can pass while the run fails,
+    # which is the failure being fixed. ``None`` ⇒ nothing to stage, so the agent
+    # cannot verify and says so instead of implying it checked.
+    project: dict | None = None
+    # Headless setting the real execution would use. Sent rather than guessed: a
+    # headless run can fail a bot-protected app whose spec is perfectly good, and
+    # a verification that disagrees with execution is worse than none.
+    headless: bool = True
     sidecar_filename: str = "discovered.json"
     system_prompt: str
     task_prompt: str

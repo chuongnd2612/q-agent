@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import * as api from "./api";
-import { buildPassArgs, findTranscript, pauseWaitVerdict, planPass, sessionIdFrom } from "./authoringResume";
+import { authoringVerdict, buildPassArgs, findTranscript, pauseWaitVerdict, planPass, sessionIdFrom } from "./authoringResume";
 import { emit } from "./bus";
 import { AgentConfig } from "./config";
 import { ensureChromium } from "./ensureBrowser";
@@ -1160,6 +1160,79 @@ async function getFreePort(): Promise<number> {
  * Requires `claude` + `browser-harness` on the agent machine's PATH and a
  * pre-authenticated `browser-profile` for the origin (from manual-login capture).
  */
+/** How many times Claude may be handed its own failing spec to fix (#657).
+ *
+ * Bounded on purpose: each attempt is a Claude pass plus a Playwright run, and the
+ * session budget already caps spend — this caps WALL-CLOCK on a spec that cannot
+ * be made to pass, so a hopeless case ends with an honest report instead of
+ * grinding until the budget dies. */
+const AUTHORING_VERIFY_ATTEMPTS = 2;
+
+/** Stage the automation project into an authoring workdir; false when there is
+ *  none to stage (older server), which disables verification. */
+function stageAuthoringProject(workDir: string, job: api.AuthoringJob): boolean {
+  if (!job.project) return false;
+  const staged = materializeProject(workDir, job.project);
+  if (staged.overCap) {
+    console.error(
+      `Automation project bundle too large to stage for authoring (${staged.bytes} bytes) — ` +
+        "the spec will be authored but cannot be verified here."
+    );
+    return false;
+  }
+  console.log(
+    `Staged automation project for authoring (bundle v${job.project.baseVersion || "?"}): ` +
+      `${staged.files} file(s), ${staged.bytes} bytes`
+  );
+  if (staged.skipped.length) {
+    console.error(`Refused ${staged.skipped.length} unsafe bundle path(s): ${staged.skipped.join(", ")}`);
+  }
+  if (installBaseFramework(workDir) === "unavailable") {
+    console.error(
+      "@q-agent/playwright-base is not bundled with this agent build — the authored spec cannot be " +
+        "verified here. Update the Local Agent."
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Run the just-authored spec the way EXECUTION runs it, and report the outcome.
+ *
+ * Deliberately the same four calls the run path makes — `writeConfig`,
+ * `applyFixtures`, `runPlaywright` — rather than a lookalike: a verification that
+ * differs from the real run can pass while the real run fails, which is the whole
+ * problem being fixed. `headless` comes from the server for the same reason;
+ * guessing it here would trade one false result for another (a headless run can
+ * fail a bot-protected app whose spec is perfectly good).
+ */
+async function verifyAuthoredSpec(
+  workDir: string,
+  job: api.AuthoringJob,
+  auth: { storageState: string; sessionStoragePath: string }
+): Promise<{ passed: boolean; output: string }> {
+  writeConfig(workDir, 1, job.headless !== false, job.baseUrl, auth.storageState, {
+    liveReporterPath: vendorLiveReporter(),
+    captureVideo: false,
+  });
+  const replaySession = Boolean(
+    auth.storageState &&
+      auth.sessionStoragePath &&
+      fs.existsSync(auth.sessionStoragePath) &&
+      fs.statSync(auth.sessionStoragePath).size > 0
+  );
+  applyFixtures(
+    workDir,
+    auth.sessionStoragePath || path.join(workDir, "sessionStorage.json"),
+    replaySession
+  );
+  const result = await runPlaywright(workDir, 1, job.specFilename);
+  const output = `${result.stdout}
+${result.stderr}`.trim();
+  return { passed: result.code === 0, output };
+}
+
 export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJob): Promise<void> {
   let origin = job.origin;
   if (!origin && job.baseUrl) {
@@ -1199,6 +1272,12 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
   }
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "qagent-authoring-"));
+  // Stage the automation project here (#657) so the spec Claude writes can be RUN
+  // in place, through the same tree the execution path uses. Without it the
+  // workdir is bare — no package.json, no @q-agent/playwright-base — and any
+  // attempt to run the spec fails on the ENVIRONMENT, which reads as a broken
+  // spec. Absent `project` (older server) ⇒ no verification, said out loud below.
+  const projectStaged = stageAuthoringProject(workDir, job);
   const port = await getFreePort();
   let launcher: ChildProcess | null = null;
   // A REF cell, not a plain `let`: the Claude child is now (re)assigned inside
@@ -1526,13 +1605,94 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     // 3) Read emitted artifacts.
     const specPath = path.join(workDir, job.specFilename);
     const sidecarPath = path.join(workDir, job.sidecarFilename || "discovered.json");
-    const code = fs.existsSync(specPath) ? fs.readFileSync(specPath, "utf-8") : "";
+    let code = fs.existsSync(specPath) ? fs.readFileSync(specPath, "utf-8") : "";
     let discovered: unknown = { routes: [], selectors: [] };
     if (fs.existsSync(sidecarPath)) {
       try { discovered = JSON.parse(fs.readFileSync(sidecarPath, "utf-8")); } catch { /* keep default */ }
     }
-    const ok = code.trim().length > 0;
+    // 3b) VERIFY (#657). Until now "authored" meant a non-empty FILE existed —
+    //     never that it worked. Claude drives the app through CDP coordinate
+    //     clicks; the spec runs as Playwright locators, and that gap is where a
+    //     live-authored spec fails on its first real execution (the classic
+    //     symptom: `toHaveURL` failing right after a click that navigated
+    //     nowhere, because `locator.click()` "succeeds" whenever it clicks
+    //     anything at all). So run it here, and hand Claude its own failure.
+    let verified: boolean | null = null;
+    let verifyOutput = "";
+    if (code.trim() && projectStaged && !aborted) {
+      for (let attempt = 0; attempt <= AUTHORING_VERIFY_ATTEMPTS; attempt++) {
+        emitStep(attempt === 0 ? "▶ running the authored spec…" : `▶ re-running after fix ${attempt}…`);
+        const run = await verifyAuthoredSpec(workDir, job, {
+          // The same captured session the run path injects (#638) — verifying
+          // against a DIFFERENT auth than execution uses would defeat the point.
+          storageState: sess ? sess.storageStatePath : "",
+          sessionStoragePath: sess ? sess.sessionStoragePath : "",
+        });
+        verifyOutput = run.output;
+        if (run.passed) {
+          verified = true;
+          emitStep("✓ the authored spec passes");
+          break;
+        }
+        verified = false;
+        const tail = verifyOutput.slice(-1500);
+        emitStep(`✗ the authored spec failed${attempt < AUTHORING_VERIFY_ATTEMPTS ? " — asking Claude to fix it" : ""}`);
+        if (attempt === AUTHORING_VERIFY_ATTEMPTS) break;
+        if (job.maxBudgetUsd > 0 && costUsd >= job.maxBudgetUsd) {
+          emitStep("⏹ no authoring budget left to fix it — reporting the failure as it stands");
+          break;
+        }
+        // Same session, so Claude still has the live page in context and can go
+        // look again rather than re-deriving the whole case from the prompt.
+        await runPass(
+          buildPassArgs({
+            prompt:
+              `The spec you wrote FAILED when it was run. Fix it.
+
+` +
+              `Playwright output:
+${tail}
+
+` +
+              `Read the failure literally. A \`toHaveURL\` failure right after a click almost ` +
+              `always means the click navigated nowhere, so the click TARGET is wrong — go back to ` +
+              `the live page, find the element that really navigates (usually a link inside the ` +
+              `row), verify it through the locator the spec will use, and emit that. Do not loosen ` +
+              `an assertion you cannot satisfy. Rewrite ${job.specFilename} in place.`,
+            model: job.model,
+            systemPromptFile: systemFile,
+            workDir,
+            budgetUsd: Math.max(0, job.maxBudgetUsd - costUsd),
+            // Resume the SAME session when the transcript is still there: Claude
+            // then still has the live page and its own reasoning in context and
+            // can go look again, instead of re-deriving the case from scratch.
+            sessionArgs:
+              claudeSessionId && findTranscript(claudeConfigDir, claudeSessionId)
+                ? ["--resume", claudeSessionId]
+                : [],
+          })
+        );
+        const refreshed = fs.existsSync(specPath) ? fs.readFileSync(specPath, "utf-8") : "";
+        if (refreshed.trim()) code = refreshed;
+      }
+    }
+    // "Authored" now means the spec RAN and passed. When verification could not
+    // run at all (an older server sends no project bundle) fall back to the old
+    // meaning — but say so in the summary rather than implying it was checked.
+    const verdict = authoringVerdict({ hasCode: Boolean(code.trim()), verified });
+    const ok = verdict.ok;
     let summary = finalResult || "";
+    if (verified === true) summary = `${summary}
+[verified] the authored spec passed when run.`.trim();
+    else if (verified === false)
+      summary =
+        `${summary}
+[NOT verified] the authored spec still fails when run:
+` +
+        `${verifyOutput.slice(-1200)}`.trim();
+    else if (code.trim())
+      summary = `${summary}
+[not verified] no automation project was staged, so the spec was not run here.`.trim();
     // Say it in the RESULT too, not just the live trail: a user reading the spec
     // later must be able to tell that their guidance was replayed into a fresh
     // pass rather than carried by the original reasoning context (#619).

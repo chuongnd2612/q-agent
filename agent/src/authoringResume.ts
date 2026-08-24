@@ -252,3 +252,26 @@ export function pauseWaitVerdict(state: {
   return null;
 }
 
+/**
+ * What "authored" means once the spec is actually run (#657).
+ *
+ * It used to mean a non-empty FILE existed. That is why every live-authored spec
+ * seemed to work and then failed on its first real execution: Claude drives the
+ * app through CDP coordinate clicks, the spec runs as Playwright locators, and
+ * nothing ever exercised the second one. So a spec that RAN and failed is not
+ * authored — reporting it as such hands the user a broken spec labelled done.
+ *
+ * `verified === null` is the honest middle: verification could not run at all
+ * (an older server ships no project bundle to stage). That still counts as
+ * authored — refusing would break every install whose server predates this — but
+ * the note must say it was not checked rather than imply it was.
+ */
+export function authoringVerdict(input: {
+  hasCode: boolean;
+  verified: boolean | null;
+}): { ok: boolean; checked: boolean } {
+  if (!input.hasCode) return { ok: false, checked: false };
+  if (input.verified === false) return { ok: false, checked: true };
+  return { ok: true, checked: input.verified === true };
+}
+

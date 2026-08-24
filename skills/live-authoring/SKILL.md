@@ -49,6 +49,23 @@ selector that exists on the live DOM**, in this order:
 Read the element's real attributes live (via `js(...)` or the AX tree) to choose — do not assume a
 `data-testid` exists; confirm it does before using it.
 
+**Verify the SELECTOR, not the pixel.** `click_at_xy(x, y)` lands on whatever element sits at that
+coordinate — often an inner `<a>` — while the spec will click the *selector you recorded*, whose
+centre may be a container the app ignores. Proving the coordinate works proves nothing about the
+locator. So for every interaction, and above all for one that must NAVIGATE, dispatch the click on
+the recorded selector itself and confirm the effect:
+
+```
+js("document.querySelector('[data-testid=\"employer-row\"]').click()")   # the selector the spec will use
+wait_for_load(); page_info()                                              # did the URL actually change?
+```
+
+If the recorded selector does nothing, it is the WRONG selector: find the descendant that does
+(usually the row's link — `js("...closest('a')")` or the AX tree's `link` node), record THAT, and
+re-verify. A step whose navigation you have not seen happen through the emitted selector is not
+verified, and the spec's next `toHaveURL` will fail while the click itself silently "passes" —
+Playwright's `click()` succeeds whenever it clicks *something*.
+
 ## Create test data if it does not exist
 
 If a step depends on data that is not present (e.g. the case acts on "an existing draft claim" and
@@ -116,7 +133,23 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
      context. **Never mock or bypass auth** — no route-mocking of identity/session endpoints, no
      `VITE_BYPASS_AUTH`, no fabricated `storageState`, no "Auth note" prose.
    - Use the **real selectors you verified live** (with the strategy priority above). Bake in the
-     real base URL, routes, and any test data you created.
+     real base URL, route TEMPLATES, and any test data you created.
+   - **Never bake in an id the app generated at runtime.** A record's own id (`/employers/57da884a-…`)
+     is not test data you control — it is whatever the app minted, and asserting it couples the spec
+     to one row existing today. Derive it instead, or assert the SHAPE:
+
+     ```ts
+     // NO — a discovered GUID frozen into a constant
+     await expect(page).toHaveURL(`${BASE}/employers/57da884a-751d-c6c3-4718-3a21ee0356f2`);
+     // YES — assert you navigated to *a* detail page
+     await expect(page).toHaveURL(/\/employers\/[0-9a-f-]{36}$/);
+     // …or capture what the app gave you, then use that
+     const employerId = new URL(page.url()).pathname.split('/').pop();
+     ```
+
+     Same rule for choosing the row: after a search identified a specific record, click the row that
+     MATCHES it (`.filter({ hasText: EMPLOYER_NAME })`), never `.nth(0)` — index after a search
+     assumes an ordering the app never promised.
    - Every "Expected Result" becomes a **web-first assertion** (`await expect(locator).toBeVisible()`,
      `.toHaveText(…)`, `.toHaveURL(…)`, or a base helper such as `expectVisible(…)`) — rely on
      auto-waiting. **No `page.waitForTimeout(...)`** or any hard sleep. Deterministic and independent —
@@ -135,10 +168,37 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
 }
 ```
 
+## RUN the spec you just wrote — before you report anything
+
+Driving the app successfully is **not** evidence that the spec passes. You drove it with CDP calls;
+the spec runs as Playwright code with the locators you recorded, which is a different execution path
+— that gap is where live-authored specs fail on their very first real run (#657). The only thing that
+settles it is running the file.
+
+**You do not run it yourself — the agent does, on the real execution path.** As soon as you finish,
+your spec is executed with the same Playwright config, authenticated session and CLI that a normal
+run uses. Do not try to invoke Playwright by hand: only the agent knows where its bundled CLI and the
+staged project live, so a hand-rolled command fails on the ENVIRONMENT and tells you nothing about
+your spec.
+
+What that means for you:
+
+- **If it passes**, you are done.
+- **If it fails, you will be handed the Playwright output and asked to fix the spec in place.** Read
+  the failure literally. A `toHaveURL` failure immediately after a click almost always means the
+  click navigated nowhere — so the click TARGET is wrong, not the assertion. Go back to the live
+  page, find the element that really navigates (usually a link inside the row), verify it through the
+  locator the spec will use, and emit THAT. Never "fix" a failure by loosening an assertion you
+  cannot satisfy, and never delete the step that fails.
+- **If it genuinely cannot pass** (a real product defect, an impossible step, or the budget runs
+  out): say so plainly in the summary. A spec reported as authored but never seen to pass is exactly
+  what this section exists to prevent.
+
 ## Final output
 
 After writing both files, respond with a short plain-text summary: which steps you performed, any
-test data you created, and the pass/fail of each expected result. If you could **not** make the test
+test data you created, the result of the `playwright test` run above, and the pass/fail of each
+expected result. If you could **not** make the test
 pass live (e.g. a genuine product defect, or a step is impossible), do not fabricate a passing spec —
 say so clearly in the summary and still write the discovery sidecar with whatever you verified.
 
