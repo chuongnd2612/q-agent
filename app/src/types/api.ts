@@ -980,6 +980,10 @@ export interface AuthoringStateOut {
   resumable?: boolean;
   guidancePending?: number;
   guidanceGiven?: number;
+  /** The guidance turns already sent this session (#644), oldest first — so a
+   *  user resuming a second time can see what they already said instead of
+   *  repeating it. Optional: an older server sends only the counts above. */
+  guidanceHistory?: string[];
   costUsdSoFar?: number;
   remainingBudgetUsd?: number;
   resumeCount?: number;

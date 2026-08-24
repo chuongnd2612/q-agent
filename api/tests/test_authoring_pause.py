@@ -650,3 +650,71 @@ def test_a_claim_resets_the_pause_ledger_from_any_earlier_life(client, db_sessio
     assert claimed.cost_usd_so_far == pytest.approx(0.0)
     assert claimed.resume_count == 0
     assert claimed.pause_requested is False
+
+
+def test_the_state_endpoint_returns_the_guidance_already_sent(client, live_authoring):
+    """#644: the paused UI needs the turns themselves, not just how many.
+
+    The state endpoint reported `guidanceGiven` as a COUNT, which is exactly the
+    information a user resuming a second time cannot use: without seeing what they
+    already said they either repeat it or contradict an instruction they forgot.
+    (Until #644 the Continue control also sent `""` every time, so this history was
+    always empty in practice — the field is what makes the input worth having.)
+    """
+    ctx = live_authoring
+    client.post(
+        f"/agent/authoring/{ctx['session_id']}/paused",
+        json={"claudeSessionId": "claude-abc-123", "costUsd": 0.0},
+        headers=ctx["headers"],
+    )
+
+    first = "The dashboard needs a hard reload before the widget appears"
+    assert (
+        client.post(
+            f"/cases/{ctx['case'].id}/authoring/continue", json={"guidance": first}
+        ).status_code
+        == 200
+    )
+    # Hand it over, so it moves from pending into history.
+    client.post(f"/agent/authoring/{ctx['session_id']}/resume", headers=ctx["headers"])
+
+    state = client.get(f"/cases/{ctx['case'].id}/authoring").json()
+    assert state["guidanceHistory"] == [first]
+    assert state["guidanceGiven"] == 1
+
+    # A second turn accumulates rather than replacing — the history is the whole
+    # conversation, which is the point.
+    client.post(
+        f"/agent/authoring/{ctx['session_id']}/paused",
+        json={"claudeSessionId": "claude-abc-123", "costUsd": 0.0},
+        headers=ctx["headers"],
+    )
+    second = "Assert on the total, not the row count"
+    client.post(f"/cases/{ctx['case'].id}/authoring/continue", json={"guidance": second})
+    client.post(f"/agent/authoring/{ctx['session_id']}/resume", headers=ctx["headers"])
+
+    state = client.get(f"/cases/{ctx['case'].id}/authoring").json()
+    assert state["guidanceHistory"] == [first, second]
+
+
+def test_continuing_with_no_guidance_is_still_valid(client, live_authoring):
+    """#644: an empty box means "carry on as you were", not a validation error.
+
+    The input must never block Continue — that would make the new field a
+    regression for the plain resume that worked before it existed.
+    """
+    ctx = live_authoring
+    client.post(
+        f"/agent/authoring/{ctx['session_id']}/paused",
+        json={"claudeSessionId": "claude-abc-123", "costUsd": 0.0},
+        headers=ctx["headers"],
+    )
+    resp = client.post(f"/cases/{ctx['case'].id}/authoring/continue", json={"guidance": ""})
+    assert resp.status_code == 200, resp.text
+
+    directive = client.post(
+        f"/agent/authoring/{ctx['session_id']}/resume", headers=ctx["headers"]
+    ).json()
+    assert directive["action"] == "resume"
+    assert directive["guidance"] == []
+    assert client.get(f"/cases/{ctx['case'].id}/authoring").json()["guidanceHistory"] == []

@@ -167,7 +167,11 @@
       "pausedFreshHint": "Continue will start a fresh guided pass: this session's Claude context could not be preserved.",
       "guidanceQueued": "Saved as guidance for the paused authoring session",
       "budgetLeft": "${{amount}} left",
-      "chatIsGuidance": "This case is being authored live — your message is sent as guidance, not a spec edit."
+      "chatIsGuidance": "This case is being authored live — your message is sent as guidance, not a spec edit.",
+      "guidanceSent_one": "{{count}} guidance turn sent",
+      "guidanceSent_other": "{{count}} guidance turns sent",
+      "guidancePlaceholder": "Tell Claude what to do differently, then Continue (Enter to send, Shift+Enter for a new line)",
+      "continueWithGuidance": "Continue with guidance"
     },
     "heal": {
       "progressTitle": "Self-healing {{caseCode}} — attempt {{attempt}}/{{maxAttempts}}",
