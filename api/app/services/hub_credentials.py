@@ -39,8 +39,13 @@ returned to the SPA.
 from __future__ import annotations
 
 import json
+import stat
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
+from app.config import settings
+from app.db import utcnow
 from app.logging import logger
 from app.services import claude_credentials, hub_client
 
@@ -228,6 +233,12 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
         )
 
     config_dir = claude_credentials.materialize_raw(material, claude_credentials.hub_run_key(run_id))
+    # Mint the grant while the browser's token is still fresh (#667). Without it
+    # the material above is all the run will ever have: a change of account in
+    # EmeHub could not reach a run already under way, because a background worker
+    # has no token to ask with. Best-effort — a hub that cannot mint one leaves
+    # the run on the pinned material, exactly as before.
+    _store_grant(run_id, hub_token)
     # Metadata only — never the material, and never the path's contents.
     logger.info(
         "run {} will use the hub-resolved Claude credential (hub source: {}, status: {}, dir: {})",
@@ -237,3 +248,137 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
         config_dir.name,
     )
     return SOURCE_HUB
+
+
+# --------------------------------------------------------------- grants (#667)
+#: How stale the materialised credential may be before it is re-resolved.
+#:
+#: "Always take it from the hub" in practice, without a hub round-trip per Claude
+#: invocation: `claude_cli` resolves the environment for every call, and a
+#: multi-case generation pass makes many. A minute is far below the time it takes
+#: a person to change the account in EmeHub and come back, so the change is picked
+#: up on the next action either way.
+CREDENTIAL_MAX_AGE = timedelta(seconds=60)
+
+
+def _grant_path(run_id: int) -> Path:
+    """Where a run's credential grant lives — beside the config dirs, not IN one.
+
+    Deliberately not inside ``hub-run-<id>/``: that directory is handed to the
+    Claude CLI as ``CLAUDE_CONFIG_DIR``, and putting an unrelated secret in a
+    directory another program owns is how a stray file becomes someone's bug.
+    """
+    return settings.workspace_dir / "claude-config" / "hub-grants" / f"{run_id}.json"
+
+
+def _store_grant(run_id: int, hub_token: str) -> None:
+    """Mint and persist a credential grant for ``run_id``. Never raises."""
+    try:
+        payload = hub_client.mint_credential_grant(hub_token, run_id)
+        grant = str((payload or {}).get("grant") or "")
+        if not grant:
+            logger.warning("run {} got no grant back from the hub — staying on pinned material", run_id)
+            return
+        expires_in = int((payload or {}).get("expiresIn") or 0)
+        path = _grant_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "grant": grant,
+                    "expiresAt": (utcnow() + timedelta(seconds=expires_in)).isoformat()
+                    if expires_in
+                    else "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:  # pragma: no cover - no-op on Windows shares
+            pass
+        # Metadata only: the grant itself is a secret.
+        logger.info("run {} holds a hub credential grant for {}s", run_id, expires_in or "?")
+    except Exception as exc:  # noqa: BLE001 - a grant is an upgrade, never a gate
+        logger.warning("run {} could not mint a hub credential grant: {}", run_id, exc)
+
+
+def _load_grant(run_id: int) -> str | None:
+    """The run's unexpired grant, or None."""
+    try:
+        raw = json.loads(_grant_path(run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    grant = str(raw.get("grant") or "")
+    if not grant:
+        return None
+    expires_at = str(raw.get("expiresAt") or "")
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= utcnow():
+                return None
+        except ValueError:
+            return None
+    return grant
+
+
+def discard_grant(run_id: int) -> None:
+    """Forget a run's grant (best-effort)."""
+    try:
+        _grant_path(run_id).unlink(missing_ok=True)
+    except OSError:  # pragma: no cover
+        pass
+
+
+def refresh_run_credential(run_id: int) -> bool:
+    """Re-resolve the run's Claude credential from the hub. True when it changed.
+
+    This is what makes a change of account in EmeHub reach a run that is already
+    under way (#667). It runs on background worker threads, which is only legal
+    because the grant exists: it was minted from the browser's token at run start
+    and lives long enough (240 minutes by default) to carry the run.
+
+    Every failure is swallowed and leaves the pinned material in place. The
+    credential is a *dependency* of the work, not the work itself — a hub blip
+    must not fail a generation pass that has perfectly good material on disk.
+    """
+    if not hub_client.enabled():
+        return False
+    config_dir = claude_credentials.hub_run_config_dir(run_id)
+    if config_dir is None:
+        return False  # nothing pinned ⇒ this run never resolved from the hub
+    creds_file = config_dir / ".credentials.json"
+    try:
+        age = utcnow() - datetime.fromtimestamp(creds_file.stat().st_mtime, tz=timezone.utc)
+        if age < CREDENTIAL_MAX_AGE:
+            return False
+    except OSError:
+        return False
+    grant = _load_grant(run_id)
+    if grant is None:
+        return False
+
+    try:
+        payload = hub_client.resolve_claude_credential(grant)
+        material = _extract_material(payload if isinstance(payload, dict) else {})
+        status = str((payload or {}).get("status") or "")
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning("run {} could not refresh its hub credential: {}", run_id, exc)
+        return False
+    if material is None or not _status_is_usable(status):
+        logger.warning(
+            "run {} kept its pinned credential — the hub now reports status {}",
+            run_id,
+            status or "none",
+        )
+        return False
+
+    before = creds_file.read_text(encoding="utf-8") if creds_file.exists() else ""
+    claude_credentials.materialize_raw(material, claude_credentials.hub_run_key(run_id))
+    changed = before.strip() != material.strip()
+    if changed:
+        # Worth an INFO: "which account did this run use?" must stay answerable
+        # from the logs, and now the answer can change mid-run.
+        logger.info("run {} picked up a DIFFERENT Claude credential from the hub", run_id)
+    return changed
+

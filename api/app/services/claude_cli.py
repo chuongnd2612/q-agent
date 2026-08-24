@@ -242,9 +242,12 @@ def _resolve_claude_env() -> tuple[dict[str, str], int | None]:
     ``claude login`` fallback (ADR 0001).
 
     When the ambient run resolved its credential from EmeHub at run start (#499),
-    that already-materialized dir wins. This is a **filesystem** check — the hub
-    is never called from here, because here is a background worker thread with no
-    fresh hub token (agent tokens live 15 minutes and are session-bound).
+    that already-materialized dir wins, after a rate-limited refresh against the
+    hub using the run's credential GRANT (#667). The grant is what makes a hub
+    call legal here: a background worker has no fresh agent token (those live 15
+    minutes and are session-bound), but the grant was minted from the browser's
+    token at run start and carries the run. A refresh that fails for any reason
+    leaves the already-materialized material in place.
     """
     from app.db import SessionLocal
     from app.services import claude_credentials, hub_client, run_context
@@ -254,6 +257,19 @@ def _resolve_claude_env() -> tuple[dict[str, str], int | None]:
     if hub_client.enabled():
         run_id = run_context.get_run()
         if run_id is not None:
+            # Re-resolve from the hub first (#667). The docstring above used to say
+            # this was impossible here — a background worker has no fresh hub token
+            # — and it was, until the run started carrying a credential GRANT
+            # minted from the browser's token at run start. Without this, changing
+            # the Claude account in EmeHub could not reach a run already under way:
+            # the material was pinned at creation and read from disk forever after.
+            #
+            # Best-effort by design: it is rate-limited internally, and every
+            # failure leaves the pinned material in place, so a hub blip cannot
+            # fail a pass that has perfectly good credentials on disk.
+            from app.services import hub_credentials
+
+            hub_credentials.refresh_run_credential(run_id)
             hub_dir = claude_credentials.hub_run_config_dir(run_id)
             if hub_dir is not None:
                 return {**os.environ, "CLAUDE_CONFIG_DIR": str(hub_dir)}, owner_id

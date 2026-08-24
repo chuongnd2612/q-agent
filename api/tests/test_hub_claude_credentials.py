@@ -404,3 +404,129 @@ def test_create_run_without_a_hub_token_is_unchanged(hub_on, client, seed_ticket
     assert resp.status_code == 409
     assert "No EmeHub token" in resp.json()["detail"]
     assert not route.called
+
+
+# ------------------------------------------------- picking up a change (#667)
+GRANT = f"{HUB}/auth/agent-grant"
+
+
+def _grant_response(expires_in: int = 14400) -> dict:
+    return {
+        "grant": "grant-fake-667",
+        "audience": "qagent-credential",
+        "scope": "claude:resolve",
+        "runId": "1",
+        "expiresIn": expires_in,
+    }
+
+
+def _age_out(run_id: int) -> None:
+    """Backdate the materialised credential past the refresh window.
+
+    The window exists so `claude_cli` (which resolves the environment for EVERY
+    Claude call) does not hit the hub once per call; a test that did not age the
+    file would silently assert nothing, because the refresh would decline as
+    "recent enough".
+    """
+    import os
+    import time
+
+    path = claude_credentials.hub_run_config_dir(run_id) / ".credentials.json"
+    old = time.time() - hub_credentials.CREDENTIAL_MAX_AGE.total_seconds() - 60
+    os.utime(path, (old, old))
+
+
+@respx.mock
+def test_a_changed_hub_account_reaches_a_run_already_under_way(hub_on):
+    """#667: the whole point — change the account in EmeHub, the run follows.
+
+    The credential used to be resolved once and pinned at run start, so a change
+    could only ever affect a NEW run. A background worker had no way to ask the
+    hub: agent tokens live 15 minutes and are session-bound. The run now carries a
+    credential GRANT, minted from the browser's token while it was fresh, and that
+    makes the later call legal.
+    """
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response()))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    assert hub_credentials.prepare_run_credential(1, "hub-token") == hub_credentials.SOURCE_HUB
+    assert FAKE_ACCESS_TOKEN in _materialized(1)
+
+    # The user connects a different Claude account in EmeHub.
+    changed = _hub_payload()
+    changed["credentials"] = changed["credentials"].replace(FAKE_ACCESS_TOKEN, "sk-ant-oat01-SECOND")
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=changed))
+
+    _age_out(1)
+    assert hub_credentials.refresh_run_credential(1) is True
+    assert "sk-ant-oat01-SECOND" in _materialized(1)
+
+
+@respx.mock
+def test_the_refresh_is_rate_limited(hub_on):
+    """#667: `claude_cli` resolves the env per call, so this must not be per call."""
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response()))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    hub_credentials.prepare_run_credential(1, "hub-token")
+
+    calls_before = respx.calls.call_count
+    # Freshly materialised ⇒ declines without touching the hub.
+    assert hub_credentials.refresh_run_credential(1) is False
+    assert respx.calls.call_count == calls_before
+
+
+@respx.mock
+def test_a_hub_blip_leaves_the_pinned_credential_alone(hub_on):
+    """#667: the credential is a dependency of the work, not the work.
+
+    A generation pass with perfectly good material on disk must not fail because
+    the hub had a bad minute.
+    """
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response()))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    hub_credentials.prepare_run_credential(1, "hub-token")
+
+    respx.get(RESOLVE).mock(return_value=httpx.Response(503, text="down"))
+    _age_out(1)
+    assert hub_credentials.refresh_run_credential(1) is False
+    assert FAKE_ACCESS_TOKEN in _materialized(1), "the run lost credentials it already had"
+
+
+@respx.mock
+def test_an_expired_grant_stops_the_refresh(hub_on):
+    """#667: a grant dies with the hub session; expiry must not be papered over."""
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response(expires_in=-1)))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    hub_credentials.prepare_run_credential(1, "hub-token")
+
+    _age_out(1)
+    calls_before = respx.calls.call_count
+    assert hub_credentials.refresh_run_credential(1) is False
+    assert respx.calls.call_count == calls_before, "an expired grant must not be sent to the hub"
+
+
+@respx.mock
+def test_a_run_still_starts_when_the_hub_cannot_mint_a_grant(hub_on):
+    """#667: the grant is an upgrade, never a gate.
+
+    A hub that refuses to mint one leaves the run on pinned material — exactly the
+    behaviour before this existed — rather than failing a run that has a perfectly
+    good credential.
+    """
+    respx.post(GRANT).mock(return_value=httpx.Response(500, text="nope"))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+
+    assert hub_credentials.prepare_run_credential(1, "hub-token") == hub_credentials.SOURCE_HUB
+    assert FAKE_ACCESS_TOKEN in _materialized(1)
+    _age_out(1)
+    assert hub_credentials.refresh_run_credential(1) is False
+
+
+@respx.mock
+def test_the_grant_is_never_logged(hub_on, log_sink):
+    """#667: a grant reaches the credential routes — it is a secret like any other."""
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response()))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    hub_credentials.prepare_run_credential(1, "hub-token")
+
+    assert not any("grant-fake-667" in line for line in log_sink)
+    assert not any(FAKE_ACCESS_TOKEN in line for line in log_sink)
