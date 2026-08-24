@@ -68,7 +68,13 @@ from app.schemas import (
     TicketOut,
     TicketPageOut,
 )
-from app.services import audit_service, connection_service, hub_client, hub_workspace
+from app.services import (
+    audit_service,
+    connection_service,
+    hub_client,
+    hub_workspace,
+    ticket_facets,
+)
 from app.services.adapters.base import ProviderError
 from app.services.ownership import owned, stamp_owner
 
@@ -456,12 +462,6 @@ def list_tickets(
     )
 
 
-def _distinct(values: list[Any]) -> list[str]:
-    """Sorted, de-duplicated, blank-free strings — one column's offerable values."""
-    seen = {str(value).strip() for value in values if str(value or "").strip()}
-    return sorted(seen, key=str.casefold)
-
-
 # NOTE: declared BEFORE ``GET /{external_id}`` on purpose. FastAPI matches routes
 # in declaration order, so the other way round this path would be swallowed as a
 # ticket whose external id is the literal string "filter-options".
@@ -482,22 +482,14 @@ def ticket_filter_options(
     already hold, so it answers whether or not EmeHub is reachable (#491) and
     whether or not the connection has a credential.
     """
-    query = owned(db.query(Ticket), Ticket, user)
-    if connection_id:
-        query = query.filter(Ticket.connection_id == connection_id)
-    if provider_kind:
-        query = query.filter(Ticket.provider_kind == provider_kind)
-    rows = query.all()
-
-    labels: list[Any] = []
-    for row in rows:
-        if isinstance(row.labels, list):
-            labels.extend(row.labels)
+    facets = ticket_facets.derive(
+        db, user, connection_id=connection_id, provider_kind=provider_kind
+    )
 
     # Hub-managed is asked of the *connection* first: a mirrored connection with
     # no tickets yet is still the hub's to manage, and answering False there
     # would show a Sync button that cannot work until the first row arrives.
-    hub_managed = any(row.hub_ticket_id for row in rows)
+    hub_managed = facets.any_hub_ticket
     if not hub_managed and connection_id:
         # Owner-scoped like everything else here: an unscoped lookup would let a
         # caller probe another user's connection id and learn whether it is
@@ -509,15 +501,15 @@ def ticket_filter_options(
         hub_managed = bool(conn and conn.hub_connection_id)
 
     return TicketFilterOptionsOut(
-        work_item_types=_distinct([row.work_item_type for row in rows]),
-        states=_distinct([row.status for row in rows]),
-        area_paths=_distinct([row.area_path for row in rows]),
-        sprints=_distinct([row.sprint for row in rows]),
-        epics=_distinct([row.epic for row in rows]),
-        assignees=_distinct([row.assignee for row in rows]),
-        priorities=_distinct([row.priority for row in rows]),
-        labels=_distinct(labels),
-        ticket_count=len(rows),
+        work_item_types=facets.work_item_types,
+        states=facets.states,
+        area_paths=facets.area_paths,
+        sprints=facets.sprints,
+        epics=facets.epics,
+        assignees=facets.assignees,
+        priorities=facets.priorities,
+        labels=facets.labels,
+        ticket_count=facets.ticket_count,
         hub_managed=hub_managed,
     )
 

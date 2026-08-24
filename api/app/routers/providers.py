@@ -43,11 +43,13 @@ from app.models.provider_connection import (
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import (
+    AreaPathOut,
     AvailableReposOut,
     ConnectionCreate,
     ConnectionOut,
     ConnectionProjectOut,
     ConnectionUpdate,
+    EpicOut,
     ProviderGroupOut,
     SettingsOut,
     SettingsUpdate,
@@ -55,7 +57,7 @@ from app.schemas import (
     TestConnectionResult,
     WorkItemMetadataOut,
 )
-from app.services import audit_service, hub_client, settings_store
+from app.services import audit_service, hub_client, settings_store, ticket_facets
 from app.services.adapters import get_adapter
 from app.services.adapters.base import ProviderError
 from app.services.ownership import get_owned_or_404, owned, stamp_owner
@@ -248,6 +250,47 @@ def test_connection(
     )
 
 
+def _has_usable_credential(decrypted: dict[str, str]) -> bool:
+    """Can a provider call be attempted at all for this connection?
+
+    Decided on the **credential**, not on ``hub_connection_id``: a connection may
+    be hub-linked *and* locally credentialed, and the only question that matters
+    to a provider call is whether there is a secret to authenticate it with. A
+    hub-mirrored connection has permanently empty secrets by design — the hub
+    never releases the PAT — so this is False for it, for good (#655).
+    """
+    return any(str(value or "").strip() for value in decrypted.values())
+
+
+def _facet_fallback(
+    db: Session,
+    user: User | None,
+    conn: ProviderConnection,
+    picker: str,
+) -> ticket_facets.TicketFacets:
+    """Ticket-derived facets for a connection that cannot call its provider.
+
+    Emits the tell-tale (#655). Facets read off tickets are only as complete as
+    the mirror, so "the picker is missing Sprint 8" must be diagnosable from the
+    log rather than mysterious — this integration's signature failure is the call
+    succeeding with quietly incomplete data (#507/#514/#598). The counts are the
+    tell: `tickets=0` means nothing is mirrored yet, a low `sprints=` next to a
+    healthy `tickets=` means the mirror is narrower than the project.
+    """
+    facets = ticket_facets.derive(db, user, connection_id=conn.id)
+    logger.info(
+        "{} for connection {} ({}) served from mirrored tickets, not the provider: "
+        "no usable credential (hub_connection_id={}). Facets are only as complete "
+        "as the mirror — {}",
+        picker,
+        conn.id,
+        conn.kind,
+        conn.hub_connection_id,
+        facets.counts_summary(),
+    )
+    return facets
+
+
 @router.get("/connections/{connection_id}/sprints", response_model=list[SprintOut])
 def list_connection_sprints(
     connection_id: int,
@@ -256,12 +299,25 @@ def list_connection_sprints(
 ) -> list[SprintOut]:
     """Real sprints/iterations for a work-item connection's project.
 
+    With a usable credential this is the provider's own iteration list, which is
+    richer than the rows (it includes sprints that exist but hold no ticket yet).
+    Without one — a hub-mirrored connection never gets a PAT — it falls back to
+    the sprints present on the mirrored tickets, because the alternative was an
+    empty picker next to rows that plainly show a sprint (#655).
+
     Resilient: an unconfigured/unsupported connection yields an empty list so the
     sprint picker degrades gracefully rather than erroring the UI.
     """
     conn = _get_connection_or_404(db, connection_id, user)
     _require_capability(conn, WORK_ITEM)
     decrypted = {key: crypto.decrypt(value) for key, value in (conn.secrets or {}).items()}
+    if not _has_usable_credential(decrypted):
+        facets = _facet_fallback(db, user, conn, "Sprint list")
+        # ``path`` is what the Tickets filter submits and ``GET /tickets`` matches
+        # with ``Ticket.sprint == sprint``, so it must be the row value verbatim —
+        # not a synthesised ``Project\Sprint`` iteration path, which would
+        # populate the dropdown and then filter to zero rows.
+        return [SprintOut(id=name, name=name, path=name) for name in facets.sprints]
     try:
         adapter = get_adapter(conn.kind, conn.config or {}, decrypted)
         sprints = adapter.list_sprints()
@@ -303,11 +359,29 @@ def connection_work_item_metadata(
 ) -> WorkItemMetadataOut:
     """Filter options (area paths, work item types, states) for a work-item connection.
 
+    Provider-sourced when a credential exists (richer: the full area-path tree);
+    otherwise derived from the mirrored tickets, since a hub-mirrored connection
+    can never make the provider call (#655).
+
     Resilient: unconfigured/unsupported connections yield empty lists.
     """
     conn = _get_connection_or_404(db, connection_id, user)
     _require_capability(conn, WORK_ITEM)
     decrypted = {key: crypto.decrypt(value) for key, value in (conn.secrets or {}).items()}
+    if not _has_usable_credential(decrypted):
+        facets = _facet_fallback(db, user, conn, "Work-item metadata")
+        return WorkItemMetadataOut(
+            # ``path`` is the value the Area path filter submits (matched with
+            # ``startswith``), so it stays the row value verbatim; ``name`` is
+            # just the leaf, for a readable label.
+            area_paths=[
+                AreaPathOut(id=path, name=path.rsplit("\\", 1)[-1], path=path)
+                for path in facets.area_paths
+            ],
+            work_item_types=facets.work_item_types,
+            states=facets.states,
+            epics=[EpicOut(key=epic, name=epic) for epic in facets.epics],
+        )
     try:
         adapter = get_adapter(conn.kind, conn.config or {}, decrypted)
         meta = adapter.list_work_item_metadata()

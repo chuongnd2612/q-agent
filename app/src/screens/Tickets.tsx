@@ -49,7 +49,11 @@ import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
 import type { ConnectionOut, ProviderKind, TicketFilters, TicketOut } from "@/types/api";
 
-const PRIORITY_OPTIONS = ["High", "Medium", "Low"].map((p) => ({ value: p, label: p }));
+// Last-resort priority values, used only when no ticket is loaded yet. They are a
+// guess about the provider's vocabulary — Azure DevOps spells priorities `1`..`4`,
+// not `High`/`Medium`/`Low` — so whenever the rows can answer, they do (#655): a
+// hardcoded value the rows never carry is a dropdown entry that filters to zero.
+const FALLBACK_PRIORITY_OPTIONS = ["High", "Medium", "Low"].map((p) => ({ value: p, label: p }));
 
 const PAGE_SIZE = 10;
 
@@ -301,6 +305,11 @@ export function Tickets() {
   const stateOptions = (metadata?.states ?? []).map((s) => ({ value: s, label: s }));
   const typeOptions = (metadata?.workItemTypes ?? []).map((t) => ({ value: t, label: t }));
   const epicOptions = (metadata?.epics ?? []).map((e) => ({ value: e.key, label: e.name }));
+  // Priority has no provider metadata endpoint, so it comes off the rows.
+  const priorityOptions =
+    filterOptions?.priorities?.length
+      ? filterOptions.priorities.map((p) => ({ value: p, label: p }))
+      : FALLBACK_PRIORITY_OPTIONS;
 
   const onPickSprint = (path: string | null) => {
     const sprint = path ? (sprints ?? []).find((s) => s.path === path) : null;
@@ -454,7 +463,7 @@ export function Tickets() {
           />
           <Select
             value={ticketPriority}
-            options={PRIORITY_OPTIONS}
+            options={priorityOptions}
             placeholder={t("filters.priority")}
             onChange={setTicketPriority}
           />
