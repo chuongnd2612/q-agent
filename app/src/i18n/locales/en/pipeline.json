@@ -110,6 +110,11 @@
       "generate": "Generate automation",
       "none": "No approved, automatable cases in this run. Approve non-Manual test cases in the Review Center, then generate automation here."
     },
+    "genFailed": {
+      "title": "Generation failed for {{failed}} of {{attempted}} case(s)",
+      "retry": "Try again",
+      "at": "Last attempt {{at}}"
+    },
     "repo": {
       "title": "Target repositories",
       "description": "Automation reads each work item's repository knowledge base. Claude guessed a default — override per item if needed.",

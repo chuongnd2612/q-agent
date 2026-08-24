@@ -54,6 +54,14 @@ class Run(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     cancelled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     failed_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Why the last automation-generation pass produced nothing (#641). JSON:
+    # `{"at": iso, "attempted": n, "failures": [{"caseId", "code", "message"}]}`.
+    # Per-case failures used to exist ONLY as a WebSocket progress event, so a
+    # user who wasn't watching the screen at that moment saw the generic "No
+    # automation yet" and could not tell a blocked prerequisite (no paired agent,
+    # no project base URL) from "there was nothing to generate". Cleared at the
+    # start of every pass, so a green pass never leaves a stale error behind.
+    last_generation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Per-user ownership (#91) — data is per-user private. Nullable until the
     # cleanup issue (#98) backfills every row and enforces non-null.
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)

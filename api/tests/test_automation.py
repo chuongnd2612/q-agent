@@ -1080,3 +1080,109 @@ def test_concurrent_generation_keeps_one_spec_row_per_case(db_session, monkeypat
     assert len(rows) == 1
     assert rows[0].filename == "SUR-1428-TC-01.spec.ts"
     assert rows[0].status == "draft"
+
+
+def _wait_for_pass(run_id, tries=100):
+    """Block until the background generation pass for `run_id` has finished.
+
+    Waits on the in-process guard rather than polling an endpoint. `client` shares
+    ONE session with the test (conftest overrides `get_db`), so a tight polling
+    loop contends with the worker's own writes on the same SQLite file and can
+    starve the very pass being waited for — a poll that makes the thing it
+    measures slower. The POST registers the run in `_generating` before it
+    returns, so this cannot miss the start.
+    """
+    from app.routers import automation as automation_router
+
+    for _ in range(tries):
+        time.sleep(0.05)
+        if not automation_router.is_generating(run_id):
+            return True
+    return False
+
+
+def test_generation_failure_is_readable_after_the_pass(client, db_session, monkeypatch):
+    """#641: a per-case failure must outlive the WebSocket event that announced it.
+
+    Before this, `_run_generation` logged the exception, published it as an
+    `automation.progress` message, and persisted NOTHING — then flipped the run to
+    `automation` exactly like a successful pass. A user who was not staring at the
+    screen at that instant got the generic "No automation yet" empty state, which
+    reads as "nothing to generate" even when a case was eligible and the real
+    cause was a one-click prerequisite ("No local agent paired").
+    """
+    from app.routers import automation as automation_router
+
+    run, case = _seed_run_and_case(db_session)
+
+    # Fail exactly the way the real blocked prerequisites do — the ValueErrors
+    # raised inside `_enqueue_agent_authoring`.
+    def boom(*_a, **_k):
+        raise ValueError("No local agent paired — start your local agent to author live.")
+
+    monkeypatch.setattr(automation_router, "_generate_one", boom)
+
+    assert client.post(f"/runs/{run.id}/automation/generate").status_code == 200
+    assert _wait_for_pass(run.id), "the generation pass never finished"
+
+    status = client.get(f"/runs/{run.id}/automation/status").json()
+    last = status["lastError"]
+    assert last is not None, "the failure was not persisted — it is WS-only again"
+    assert last["attempted"] == 1
+    assert len(last["failures"]) == 1
+    failure = last["failures"][0]
+    assert failure["caseId"] == case.id
+    assert failure["code"] == case.code
+    assert "No local agent paired" in failure["message"]
+    assert last["at"]
+
+    # No spec row is fabricated for a failed case: an empty spec would put an
+    # empty code editor on screen and make the case look generated.
+    assert client.get(f"/runs/{run.id}/automation").json() == []
+
+
+def test_a_successful_pass_clears_a_previous_failure(client, db_session, monkeypatch):
+    """#641: the error must not outlive the condition that caused it.
+
+    A persisted error that is never cleared is worse than none: the banner would
+    keep accusing a run that has since generated fine. Negative control for the
+    test above — it fails if the pass writes the error but never resets it.
+    """
+    from app.routers import automation as automation_router
+    from app.services import claude_cli
+
+    run, case = _seed_run_and_case(db_session)
+
+    def boom(*_a, **_k):
+        raise ValueError("No base URL in the project context — configure it before live authoring.")
+
+    original_generate_one = automation_router._generate_one
+    monkeypatch.setattr(automation_router, "_generate_one", boom)
+    assert client.post(f"/runs/{run.id}/automation/generate").status_code == 200
+    # Waiting for the pass to LEAVE `_generating` also matters for the retry
+    # below: the double-trigger guard silently ignores a generate that arrives
+    # while a pass is still in flight, so a premature retry would no-op.
+    assert _wait_for_pass(run.id), "the failing pass never finished"
+    failed = client.get(f"/runs/{run.id}/automation/status").json()
+    assert failed["lastError"] is not None
+    assert "No base URL" in failed["lastError"]["failures"][0]["message"]
+
+    # Now let the same run generate for real. Restore the ONE attribute that was
+    # patched — NOT `monkeypatch.undo()`, which also reverts the `workspace_dir`
+    # fixture's own patches (it redirects `db.SessionLocal` at the temp database
+    # with the same function-scoped monkeypatch). Undoing that points the
+    # background worker's session at the developer's real workspace DB while the
+    # request path keeps using the overridden shared session, so the retry pass
+    # finds no such run, returns silently, and the test fails for a reason that
+    # has nothing to do with the code under test.
+    monkeypatch.setattr(automation_router, "_generate_one", original_generate_one)
+    monkeypatch.setattr(claude_cli, "run_prompt", lambda *a, **k: CANNED_SPEC)
+    assert client.post(f"/runs/{run.id}/automation/generate").status_code == 200
+
+    assert _wait_for_pass(run.id), "the retry pass never finished"
+    # The pass's own observable effect, so this can't pass on a window where the
+    # retry simply hasn't done anything yet.
+    assert len(client.get(f"/runs/{run.id}/automation").json()) == 1
+
+    status = client.get(f"/runs/{run.id}/automation/status").json()
+    assert status["lastError"] is None, "a green pass left the previous failure on screen"

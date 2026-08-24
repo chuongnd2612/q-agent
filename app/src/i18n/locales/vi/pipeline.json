@@ -110,6 +110,11 @@
       "generate": "Tạo tự động hóa",
       "none": "Không có trường hợp kiểm thử đã duyệt, có thể tự động hóa trong lần chạy này. Hãy duyệt các trường hợp kiểm thử không phải Thủ công trong Trung tâm Đánh giá, sau đó tạo tự động hóa tại đây."
     },
+    "genFailed": {
+      "title": "Tạo tự động hóa thất bại ở {{failed}}/{{attempted}} trường hợp",
+      "retry": "Thử lại",
+      "at": "Lần thử gần nhất {{at}}"
+    },
     "repo": {
       "title": "Kho lưu trữ mục tiêu",
       "description": "Tự động hóa đọc cơ sở tri thức kho lưu trữ của mỗi hạng mục công việc. Claude đã đoán một giá trị mặc định — ghi đè cho từng hạng mục nếu cần.",
