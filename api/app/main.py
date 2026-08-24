@@ -28,6 +28,7 @@ from app.routers import (
     health,
     projects,
     providers,
+    readiness,
     reports,
     review,
     runs,
@@ -417,6 +418,7 @@ def create_app() -> FastAPI:
         reports,
         comments,
         agent,
+        readiness,
     ):
         app.include_router(module.router, dependencies=[Depends(bind_audit_actor)])
 
