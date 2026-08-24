@@ -16,6 +16,7 @@ import {
   activeNavPath,
   type NavItem,
 } from "@/components/shell/navConfig";
+import { useHubDataEnabled } from "@/hooks/queries";
 
 /** The global (non-run) sidebar: brand header, two global nav groups, account
  * footer. Structurally the pre-split sidebar, minus the run-scoped items. */
@@ -46,11 +47,21 @@ export function GlobalSidebar() {
   const displayRole = user?.role ?? "";
   const hasIdentity = displayName.length > 0;
   const isAdmin = user?.role === "admin";
+  // The ADMIN section is Q-Agent administering ITSELF — users, the Claude
+  // credential, the shared workspace, the audit trail. Under hub management
+  // EmeHub owns all of that (#651 for the credential, SSO/JIT for users), so
+  // showing it here offers settings that either do nothing or fight the hub.
+  //
+  // Gated on `resolved` as well: the flag arrives from `/health`, and rendering a
+  // RESTRICTED section for a moment before hiding it is worse than showing it a
+  // beat late — so it appears only once we know the hub does NOT own it.
+  const { enabled: hubManaged, resolved: hubResolved } = useHubDataEnabled();
+  const showAdmin = isAdmin && hubResolved && !hubManaged;
 
   // Single-active navigation (see activeNavPath): pick the ONE item whose path
   // is the longest boundary-aware match, so a nested admin route under
   // /settings/* highlights only its own item — never its "Settings" ancestor.
-  const allNav = [...PRIMARY_NAV, ...SECONDARY_NAV, ...(isAdmin ? ADMIN_NAV : [])];
+  const allNav = [...PRIMARY_NAV, ...SECONDARY_NAV, ...(showAdmin ? ADMIN_NAV : [])];
   const activePath = activeNavPath(allNav, pathname);
   const isActive = (path: string): boolean => path === activePath;
 
@@ -213,7 +224,7 @@ export function GlobalSidebar() {
         {PRIMARY_NAV.map(renderItem)}
         <hr className="mx-1.5 my-2 border-0 border-t border-white/[0.06]" />
         {SECONDARY_NAV.map(renderItem)}
-        {isAdmin && (
+        {showAdmin && (
           <>
             <div className="flex items-center gap-2 px-2.5 pb-2 pt-3.5">
               <span className="text-[10px] font-semibold tracking-[0.11em] text-[#5c5c6e]">

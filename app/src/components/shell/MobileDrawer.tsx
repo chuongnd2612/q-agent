@@ -12,7 +12,7 @@ import {
   type NavItem,
 } from "@/components/shell/navConfig";
 import { runColor, runEffectiveStatus, runRateLabel } from "@/components/dashboard/runStatus";
-import { useRun } from "@/hooks/queries";
+import { useHubDataEnabled, useRun } from "@/hooks/queries";
 import { useRunRouteId } from "@/hooks/useRunRouteId";
 import { useLogout } from "@/hooks/useLogout";
 import { useAuth } from "@/store/auth";
@@ -37,6 +37,16 @@ export function MobileDrawer() {
   const { data: run } = useRun(runId ?? null);
   const user = useAuth((s) => s.user);
   const isAdmin = user?.role === "admin";
+  // The ADMIN section is Q-Agent administering ITSELF — users, the Claude
+  // credential, the shared workspace, the audit trail. Under hub management
+  // EmeHub owns all of that (#651 for the credential, SSO/JIT for users), so
+  // showing it here offers settings that either do nothing or fight the hub.
+  //
+  // Gated on `resolved` as well: the flag arrives from `/health`, and rendering a
+  // RESTRICTED section for a moment before hiding it is worse than showing it a
+  // beat late — so it appears only once we know the hub does NOT own it.
+  const { enabled: hubManaged, resolved: hubResolved } = useHubDataEnabled();
+  const showAdmin = isAdmin && hubResolved && !hubManaged;
   const logout = useLogout();
 
   const inRun = runId != null;
@@ -45,7 +55,7 @@ export function MobileDrawer() {
     ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase()
     : "";
 
-  const allNav = [...PRIMARY_NAV, ...SECONDARY_NAV, ...(isAdmin ? ADMIN_NAV : [])];
+  const allNav = [...PRIMARY_NAV, ...SECONDARY_NAV, ...(showAdmin ? ADMIN_NAV : [])];
   const activePath = activeNavPath(allNav, pathname);
 
   const go = (path: string) => {
@@ -184,7 +194,7 @@ export function MobileDrawer() {
               {SECONDARY_NAV.map(renderItem)}
             </nav>
 
-            {isAdmin && !inRun && (
+            {showAdmin && !inRun && (
               <>
                 <div className="flex items-center gap-2 px-1 pb-2 pt-4">
                   <span className="text-[10px] font-semibold tracking-[0.11em] text-[#5c5c6e]">{t("sections.admin")}</span>
