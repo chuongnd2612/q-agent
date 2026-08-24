@@ -41,6 +41,7 @@ import { TargetRepoPanel } from "./automation/TargetRepoPanel";
 import { ExportProjectPanel } from "./automation/ExportProjectPanel";
 import { ThinkingBanner, GeneratingBanner, HealProgressBanner, ExploreProgressBanner, AuthoringProgressBanner } from "./automation/ProgressBanners";
 import { NoAutomationEmptyState } from "./automation/EmptyState";
+import { GenerationFailureBanner } from "./automation/GenerationFailureBanner";
 import { SpecList } from "./automation/SpecList";
 import { ProductDefectBanner, BlockedBanner } from "./automation/banners";
 import { SpecCodePanel } from "./automation/SpecCodePanel";
@@ -125,6 +126,7 @@ export function Automation() {
   // immediately. Derive the running state from the persisted server status so it
   // survives navigation and blocks re-triggering.
   const generating = (autoStatus?.generating ?? false) || generateAutomation.isPending;
+  const lastGenerationError = autoStatus?.lastError ?? null;
 
   // Live generation, self-heal, and DOM-exploration progress from the run's WS stream.
   const { genProgress, healProgress, exploreProgress, authoringProgress } = useAutomationEvents(runId, generating);
@@ -740,11 +742,25 @@ export function Automation() {
       {/* AI chat panel — edit the selected spec conversationally (portals to body). */}
       <SpecChatPanel runId={runId} spec={selectedSpec} />
 
+      {/* Why the last pass produced nothing (#641) — shown whether or not any
+          spec exists, since a partial failure matters too. */}
+      {!generating && lastGenerationError && (
+        <GenerationFailureBanner
+          error={lastGenerationError}
+          generating={generating}
+          onRetry={startGenerate}
+        />
+      )}
+
       {!thinking && specs && specs.length === 0 && (
         <NoAutomationEmptyState
           automatableCount={automatableCount}
           generating={generating}
           onGenerate={startGenerate}
+          // A failed pass already explains itself in the banner above; without
+          // this the empty state would add "no approved, automatable cases",
+          // contradicting it (#641).
+          failed={Boolean(lastGenerationError)}
         />
       )}
 

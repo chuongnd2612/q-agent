@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -1046,6 +1047,11 @@ def _run_generation(run_id: int, force: bool = False) -> None:
                 agent_authoring_service.drop_queued_cases(existing_case_ids)
             total = len(cases)
             cancelled = False
+            # A fresh pass owns the verdict: clear the previous one now so a green
+            # pass can never leave a stale failure on screen (#641).
+            run.last_generation_error = None
+            db.commit()
+            failures: list[dict] = []
             # One plan per ticket in this pass, collected so the pass can be logged
             # as a single reuse/extend/create tally — the epic's success metric (#544).
             pass_plans: dict[str, dict] = {}
@@ -1065,6 +1071,13 @@ def _run_generation(run_id: int, force: bool = False) -> None:
                 except Exception as exc:  # noqa: BLE001 - surface per-case, never abort the pass
                     db.rollback()
                     logger.error("Automation generation failed for case {}: {}", case.id, exc)
+                    # Durable, not just streamed (#641): the WS event below is gone
+                    # the moment nobody is looking at the screen, and the pass ends
+                    # by flipping the run to `automation` exactly like a successful
+                    # one — so without this the reason is unrecoverable.
+                    failures.append(
+                        {"caseId": case.id, "code": case.code, "message": str(exc)}
+                    )
                     hub.publish(
                         str(run_id),
                         "automation.progress",
@@ -1075,6 +1088,15 @@ def _run_generation(run_id: int, force: bool = False) -> None:
                             "total": total,
                         },
                     )
+            if failures:
+                run.last_generation_error = json.dumps(
+                    {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "attempted": total,
+                        "failures": failures,
+                    }
+                )
+                db.commit()
             if pass_plans:
                 automation_planner_service.log_pass_counts(run.code, pass_plans.values())
             # Flip the run to 'automation' and announce it — unless cancelled
@@ -1191,13 +1213,30 @@ def list_automation(
 def automation_status(
     run_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
 ) -> dict:
-    """Whether a generation pass is currently running for this run.
+    """Whether a generation pass is currently running, and why the last one failed.
 
     Lets the UI restore the 'generating' state after navigating away/back and
     keep the Generate button disabled instead of re-triggering.
+
+    ``lastError`` carries the previous pass's per-case failures (#641). It is here,
+    on the endpoint the screen already polls to restore `generating`, for the same
+    reason: a failure the user did not witness live must still be answerable
+    afterwards. ``None`` once a pass completes with no failures.
     """
-    get_owned_or_404(db, Run, run_id, user)
-    return {"generating": is_generating(run_id)}
+    run = get_owned_or_404(db, Run, run_id, user)
+    # The generation pass runs in a background thread on its OWN session, so this
+    # session's identity-mapped copy of the run can predate the write by
+    # construction. Expire the column so the read below hits the database instead
+    # of returning the value as it was when this session first loaded the row.
+    db.expire(run, ["last_generation_error"])
+    last_error: dict | None = None
+    if run.last_generation_error:
+        try:
+            last_error = json.loads(run.last_generation_error)
+        except (TypeError, ValueError):
+            # A malformed record must not break the screen that reports it.
+            last_error = None
+    return {"generating": is_generating(run_id), "lastError": last_error}
 
 
 @router.get("/cases/{case_id}/spec")

@@ -9,15 +9,20 @@ import { Button } from "@/components/ui/Button";
  * @param automatableCount Number of approved, non-Manual cases ready to automate.
  * @param generating Whether generation is currently in flight (disables the button).
  * @param onGenerate Kicks off incremental generation.
+ * @param failed The last pass failed and a banner above already says why (#641),
+ *   so this must not also claim there is nothing to automate — the two together
+ *   read as a contradiction, and "nothing approved" is the wrong half.
  */
 export function NoAutomationEmptyState({
   automatableCount,
   generating,
   onGenerate,
+  failed = false,
 }: {
   automatableCount: number;
   generating: boolean;
   onGenerate: () => void;
+  failed?: boolean;
 }) {
   const { t } = useTranslation("pipeline");
   return (
@@ -40,7 +45,7 @@ export function NoAutomationEmptyState({
             <Sparkles size={16} strokeWidth={2.2} /> {t("spec.empty.generate")}
           </Button>
         </>
-      ) : (
+      ) : failed ? null : (
         <p className="m-0 max-w-[420px] text-[13.5px] leading-relaxed text-ink-dim">
           {t("spec.empty.none")}
         </p>
