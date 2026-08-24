@@ -28,6 +28,7 @@ import {
   MANUAL_NAV_NOTE,
   buildPassArgs,
   findTranscript,
+  pauseWaitVerdict,
   planPass,
   sessionIdFrom,
 } from "../src/authoringResume";
@@ -318,3 +319,27 @@ test("the paused post hands over the session id and the SESSION-total cost", asy
   assert.equal(seen, "http://127.0.0.1:8787/agent/authoring/s1/paused");
   assert.deepEqual(body, { claudeSessionId: "sess-3", costUsd: 0.42 });
 });
+
+/**
+ * #645: a pause is worth holding only while the browser it preserves is alive.
+ * If the user closes Chrome, a later Continue cannot resume against it and
+ * browser-harness has nothing to attach to — but nothing noticed, so the device
+ * sat in its poll loop and the case stayed wedged until the server expired the
+ * pause an hour later.
+ */
+test("a closed browser stops the wait, and says so", () => {
+  assert.equal(pauseWaitVerdict({ browserGone: false, pastHardCap: false }), null);
+  assert.deepEqual(pauseWaitVerdict({ browserGone: true, pastHardCap: false }), {
+    reason: "browser-closed",
+  });
+  assert.deepEqual(pauseWaitVerdict({ browserGone: false, pastHardCap: true }), {
+    reason: "pause-expired",
+  });
+  // Ordering is load-bearing: with both true, "you closed the browser" is the
+  // honest reason. Reporting the timeout instead sends the user off to look at
+  // expiry settings for something they did themselves.
+  assert.deepEqual(pauseWaitVerdict({ browserGone: true, pastHardCap: true }), {
+    reason: "browser-closed",
+  });
+});
+

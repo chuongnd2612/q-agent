@@ -227,3 +227,28 @@ export function buildPassArgs(opts: {
     String(opts.budgetUsd),
   ];
 }
+
+/**
+ * Why a parked session should stop waiting, or `null` to keep waiting (#645).
+ *
+ * The pause exists to keep a browser open for the user to drive. If they CLOSE
+ * that browser, the thing being preserved is gone: a later Continue cannot resume
+ * against a dead Chrome, and browser-harness has nothing to attach to. Before
+ * this, nothing noticed — the device sat in its poll loop and the session stayed
+ * `paused` until the server expired it an hour later, with the case wedged and
+ * nothing for the user to click.
+ *
+ * Pure so the ordering can be tested: the browser check comes FIRST, because when
+ * both the browser is gone and the hard cap has passed, "you closed the browser"
+ * is the honest reason and "pause expired" is a guess that sends the user looking
+ * at timeouts.
+ */
+export function pauseWaitVerdict(state: {
+  browserGone: boolean;
+  pastHardCap: boolean;
+}): { reason: string } | null {
+  if (state.browserGone) return { reason: "browser-closed" };
+  if (state.pastHardCap) return { reason: "pause-expired" };
+  return null;
+}
+

@@ -1033,12 +1033,21 @@ def _run_generation(run_id: int, force: bool = False) -> None:
         try:
             cases = _eligible_cases_query(db, run_id).all()
             if not force:
+                # "Already generated" means a spec with CODE. A row with none is a
+                # placeholder (`_enqueue_agent_authoring` writes one at
+                # status="running" before the device authors anything), and if the
+                # session then dies — cancelled, abandoned, browser closed — the
+                # empty row would make the case permanently invisible to a retry
+                # while looking generated (#645, the shape #641 also hit).
                 existing_case_ids = {
                     case_id
-                    for (case_id,) in db.query(AutomationSpec.test_case_id)
+                    for (case_id, code) in db.query(
+                        AutomationSpec.test_case_id, AutomationSpec.code
+                    )
                     .join(TestCase, AutomationSpec.test_case_id == TestCase.id)
                     .filter(TestCase.run_id == run_id)
                     .all()
+                    if (code or "").strip()
                 }
                 cases = [c for c in cases if c.id not in existing_case_ids]
                 # Evict any stale queued live-authoring sessions for cases that
@@ -1557,6 +1566,65 @@ def pause_case_authoring(
             ),
         )
     return {"ok": True, "outcome": outcome, "status": session["status"]}
+
+
+@router.post("/cases/{case_id}/authoring/cancel")
+def cancel_case_authoring(
+    case_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+) -> dict:
+    """Stop live-authoring this case now, and leave it re-runnable (#645).
+
+    Until this existed the only exits were timeouts measured in hours
+    (``PAUSE_EXPIRES_AFTER`` = 1h, ``STALE_CLAIM_AFTER`` = 3h), so a session the
+    user was done with — classically: they closed the Chrome window while it was
+    paused — held the case in a live state with nothing to click.
+
+    Idempotent: cancelling a case with no live session returns ``cancelled: false``
+    rather than 409, because the user's intent is already satisfied and an error
+    would only invite them to retry something that already happened.
+    """
+    from app.services import agent_authoring_service
+
+    _get_case_and_run_or_404(db, case_id, user)
+    snapshot = agent_authoring_service.cancel_case(case_id, user.id if user else None)
+    if snapshot is None:
+        return {"cancelled": False}
+
+    # The placeholder spec `_enqueue_agent_authoring` created is `status="running"`
+    # with no code. Leaving it that way spins the UI forever AND makes the case
+    # invisible to a retry, so mark it failed with the reason. Not deleted: the row
+    # is what the screen hangs the reason and the Regenerate button off.
+    spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+    if spec is not None and not (spec.code or "").strip():
+        spec.status = "failed"
+        spec.block_reason = "Live authoring was cancelled — regenerate this case to author it again."
+        db.add(spec)
+        db.commit()
+        db.refresh(spec)
+
+    run_id = snapshot.get("run_id")
+    if run_id is not None:
+        # Same channel the trail already listens on, so an open screen stops
+        # spinning instead of waiting for a step that will never arrive.
+        hub.publish(
+            str(run_id),
+            "authoring.progress",
+            {
+                "case": case_id,
+                "phase": "cancelled",
+                "message": "Live authoring cancelled — regenerate this case to run it again.",
+            },
+        )
+        if spec is not None:
+            hub.publish(str(run_id), "spec.regenerated", {"caseId": case_id, "spec": _spec_out(spec)})
+
+    audit_service.record(
+        category="ai",
+        actor_type="user",
+        action="Cancelled live authoring",
+        target=str(case_id),
+    )
+    return {"cancelled": True, "was": snapshot["status"]}
 
 
 @router.post("/cases/{case_id}/authoring/continue")

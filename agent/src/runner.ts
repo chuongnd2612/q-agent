@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import * as api from "./api";
-import { buildPassArgs, findTranscript, planPass, sessionIdFrom } from "./authoringResume";
+import { buildPassArgs, findTranscript, pauseWaitVerdict, planPass, sessionIdFrom } from "./authoringResume";
 import { emit } from "./bus";
 import { AgentConfig } from "./config";
 import { ensureChromium } from "./ensureBrowser";
@@ -1129,6 +1129,10 @@ function resumeAbortMessage(reason: string): string {
       return "This session has been resumed too many times — wrapping up.";
     case "session-gone":
       return "The run was stopped — closing the browser.";
+    case "cancelled":
+      return "Cancelled — closing the browser.";
+    case "browser-closed":
+      return "The browser was closed, so this session cannot continue — wrapping up with whatever was authored.";
     default:
       return `Cannot continue (${reason || "unknown"}) — closing the browser.`;
   }
@@ -1235,6 +1239,10 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     );
     activeChild = launcher;
     let launcherErr = "";
+    // Chrome going away is a first-class signal, not just cleanup: while paused it
+    // means the user closed the window the pause existed to keep open (#645).
+    let launcherExited = false;
+    launcher.on("exit", () => { launcherExited = true; });
     launcher.stderr?.on("data", (d) => { launcherErr += String(d); });
     const ready = await new Promise<boolean>((resolve) => {
       const to = setTimeout(() => resolve(false), AUTHORING_CDP_READY_TIMEOUT_MS);
@@ -1435,9 +1443,14 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
       for (;;) {
         const directive = await api.pollAuthoringResume(cfg, job.sessionId);
         if (directive.action !== "wait") return directive;
-        if (Date.now() > deadline) {
-          return { ...directive, action: "abort", reason: "pause-expired" };
-        }
+        // The pause is only worth holding while the browser it preserves is still
+        // there (#645). `launcherExited` flips when Chrome goes away — including
+        // when the USER closes the window, which is the whole point.
+        const verdict = pauseWaitVerdict({
+          browserGone: launcherExited,
+          pastHardCap: Date.now() > deadline,
+        });
+        if (verdict) return { ...directive, action: "abort", reason: verdict.reason };
         await new Promise((r) => setTimeout(r, AUTHORING_RESUME_POLL_MS));
       }
     };

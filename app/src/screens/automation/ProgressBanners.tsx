@@ -1,9 +1,10 @@
-import { Check, MessageSquare, Pause, Play, Sparkles, Telescope } from "lucide-react";
+import { Check, MessageSquare, Pause, Play, Sparkles, Telescope, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
   useAuthoringState,
+  useCancelAuthoring,
   useContinueAuthoring,
   usePauseAuthoring,
   useSettings,
@@ -179,9 +180,10 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
   const { data } = useAuthoringState(caseId, caseId > 0);
   const pause = usePauseAuthoring(caseId);
   const resume = useContinueAuthoring(caseId);
+  const cancel = useCancelAuthoring(caseId);
   if (!data?.active) return null;
   const paused = data.status === "paused";
-  const busy = pause.isPending || resume.isPending;
+  const busy = pause.isPending || resume.isPending || cancel.isPending;
   const fail = (err: unknown) =>
     toast.error((err as { message?: string })?.message || String(err));
   return (
@@ -212,6 +214,26 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
           {data.pausePending ? t("progress.authoring.pausing") : t("progress.authoring.pause")}
         </button>
       )}
+      {/* Cancel is available in EVERY live state (#645), not just paused: before it
+          existed the only exits were timeouts of one to three hours, so a session
+          the user was done with held the case with nothing to click. */}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          cancel
+            .mutateAsync()
+            .then((res) =>
+              res.cancelled
+                ? toast.success(t("progress.authoring.cancelled"))
+                : toast.message(t("progress.authoring.cancelNothing")),
+            )
+            .catch(fail);
+        }}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(244,63,94,.28)] bg-[rgba(244,63,94,.12)] px-2.5 py-1.5 text-[12px] font-semibold text-[#fb7185] disabled:opacity-50"
+      >
+        <XCircle size={13} /> {t("progress.authoring.cancel")}
+      </button>
       <span className="min-w-0 flex-1 text-[11px] text-muted">
         {paused
           ? data.resumable
