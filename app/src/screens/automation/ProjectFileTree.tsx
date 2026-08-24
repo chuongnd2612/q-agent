@@ -3,13 +3,22 @@ import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
 import { PathTooltip } from "./PathTooltip";
-import { baseName, kindLabelKey, type ProjectFileGroup } from "./projectFiles";
+import type { ProjectFile } from "@/types/api";
+import {
+  baseName,
+  groupSpecsByTicket,
+  kindLabelKey,
+  type ProjectFileGroup,
+} from "./projectFiles";
 
 /**
  * The automation project's file list, shown beside the spec editor (#543).
  *
  * Files are grouped by `kind` so the layering is legible at a glance (#537 doc
- * §20's ownership model). Exactly one row — `specPath` — is the **editable** spec
+ * §20's ownership model), and **specs are sub-grouped by their ticket** (#659):
+ * their paths are `tests/<TICKET>/…`, but the list rendered only basenames, so
+ * specs from several tickets read as one undifferentiated pile and the ticket was
+ * visible on hover alone. Exactly one row — `specPath` — is the **editable** spec
  * and selecting it returns to the normal editor; every other row opens read-only
  * and is marked with a lock, since editing support files must route through the
  * quality gate rather than straight to disk.
@@ -53,29 +62,38 @@ export function ProjectFileTree({
               defaultOpen={g.kind === "spec" || holdsSelection}
             >
               <div className="mb-1 flex flex-col gap-0.5">
-                {g.files.map((f) => {
-                  const active = f.path === selectedPath;
-                  const editable = f.path === specPath;
-                  return (
-                    <PathTooltip key={f.path} label={f.path}>
-                      <button
-                        type="button"
-                        onClick={() => onSelect(f.path)}
-                        aria-current={active ? "true" : undefined}
-                        className="flex items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left hover:bg-white/5"
-                        style={active ? { background: "rgba(139,92,246,.14)" } : undefined}
-                      >
-                        <FileCode size={13} color={active ? "#a78bfa" : "#8b8b9e"} />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-soft">
-                          {baseName(f.path)}
-                        </span>
-                        {!editable && (
-                          <Lock size={11} className="shrink-0 text-faint" aria-hidden="true" />
+                {g.kind === "spec"
+                  ? groupSpecsByTicket(g.files).map((tg) => (
+                      <div key={tg.ticket || "__none"} className="flex flex-col gap-0.5">
+                        {/* A file with no ticket directory renders bare — inventing a
+                            header for it would be a label with nothing behind it. */}
+                        {tg.ticket && (
+                          <div className="px-2.5 pb-0.5 pt-1 font-mono text-[10.5px] font-semibold tracking-wider text-faint">
+                            {tg.ticket}
+                          </div>
                         )}
-                      </button>
-                    </PathTooltip>
-                  );
-                })}
+                        <div className={tg.ticket ? "flex flex-col gap-0.5 pl-2" : "flex flex-col gap-0.5"}>
+                          {tg.files.map((f) => (
+                            <FileRow
+                              key={f.path}
+                              file={f}
+                              active={f.path === selectedPath}
+                              editable={f.path === specPath}
+                              onSelect={onSelect}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  : g.files.map((f) => (
+                      <FileRow
+                        key={f.path}
+                        file={f}
+                        active={f.path === selectedPath}
+                        editable={f.path === specPath}
+                        onSelect={onSelect}
+                      />
+                    ))}
               </div>
             </CollapsibleSection>
           );
@@ -84,3 +102,36 @@ export function ProjectFileTree({
     </GlassCard>
   );
 }
+
+/** One file row. Extracted so the ticket-grouped and flat branches cannot drift
+ *  apart — the lock, the active style and the tooltip must be identical. */
+function FileRow({
+  file,
+  active,
+  editable,
+  onSelect,
+}: {
+  file: ProjectFile;
+  active: boolean;
+  editable: boolean;
+  onSelect: (path: string) => void;
+}) {
+  return (
+    <PathTooltip label={file.path}>
+      <button
+        type="button"
+        onClick={() => onSelect(file.path)}
+        aria-current={active ? "true" : undefined}
+        className="flex items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left hover:bg-white/5"
+        style={active ? { background: "rgba(139,92,246,.14)" } : undefined}
+      >
+        <FileCode size={13} color={active ? "#a78bfa" : "#8b8b9e"} />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-soft">
+          {baseName(file.path)}
+        </span>
+        {!editable && <Lock size={11} className="shrink-0 text-faint" aria-hidden="true" />}
+      </button>
+    </PathTooltip>
+  );
+}
+
