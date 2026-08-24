@@ -61,6 +61,7 @@
         "title": "Captured login",
         "why": "A project set to manual login needs a saved session to reach authenticated pages."
       }
-    }
+    },
+    "managed": "Managed in EmeHub"
   }
 }

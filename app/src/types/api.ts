@@ -278,6 +278,11 @@ export interface ReadinessItem {
   required: boolean;
   fix: ReadinessFix;
   detail: string;
+  /** The setting's authority is somewhere Q-Agent cannot see (today: EmeHub), so
+   *  its state is unknown rather than met or unmet (#651). Never a blocker —
+   *  claiming "missing" about something we did not check is what made the
+   *  Automation screen demand a Claude credential that was plainly working. */
+  managed?: boolean;
 }
 
 export interface Readiness {

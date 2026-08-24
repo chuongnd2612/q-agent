@@ -173,3 +173,51 @@ def test_a_manual_auth_project_without_a_capture_blocks(client, db_session, auth
     assert captured["ready"] is False
     assert captured["required"] is True
     assert payload["ready"] is False
+
+
+def test_the_hub_owned_credential_is_never_reported_missing(client, db_session, auth_on, monkeypatch):
+    """#651: don't assert a blocker on a setting whose authority we cannot see.
+
+    Under hub management EmeHub owns the Claude credential and Q-Agent materialises
+    it PER RUN from a browser-minted hub token — it is never in the local store, so
+    `resolve_effective_config_dir` legitimately finds nothing. Reporting that as a
+    blocker put "No Claude credential resolves for this account" on the Automation
+    screen while the same screen showed live plan usage from the credential that
+    plainly did resolve.
+
+    That is the exact failure #642 set out to avoid (an alarm on something that
+    doesn't matter), landing on the first row of the list — which teaches users to
+    scroll past the rows that do matter.
+    """
+    import app.config as config_module
+
+    user = _make_user(db_session, "hubcred@example.com")
+    monkeypatch.setattr(config_module.settings, "hub_data_enabled", True)
+
+    payload = client.get("/readiness", headers=_headers(user)).json()
+    item = _item(payload, "claudeCredential")
+
+    assert item["managed"] is True, "the hub-owned credential must be marked managed"
+    assert item["required"] is False, "a state we did not verify must not block"
+    assert item["detail"] == "", "do not claim a credential is missing when we didn't look"
+    assert item["fix"] == "hub", "the fix lives in EmeHub, not Q-Agent's Settings"
+    # And it is not a blocker. Asserting the aggregate `ready` here would test the
+    # wrong thing: this account also has no provider connection, so `ready` is
+    # legitimately false for a reason that has nothing to do with the credential.
+    blocking = [i["key"] for i in payload["items"] if i["required"] and not i["ready"]]
+    assert "claudeCredential" not in blocking
+    assert payload["hubManaged"] is True
+
+
+def test_without_hub_management_a_missing_credential_still_blocks(client, db_session, auth_on):
+    """#651 negative control: the local check keeps its teeth when it IS the authority."""
+    user = _make_user(db_session, "localcred@example.com")
+
+    payload = client.get("/readiness", headers=_headers(user)).json()
+    item = _item(payload, "claudeCredential")
+
+    assert item.get("managed") is False
+    assert item["required"] is True
+    assert item["ready"] is False
+    assert "No Claude credential" in item["detail"]
+    assert payload["ready"] is False

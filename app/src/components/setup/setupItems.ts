@@ -35,9 +35,16 @@ export function fixRoute(fix: ReadinessFix): string | null {
   }
 }
 
-/** Items that actually block work: unmet AND relevant under current settings. */
+/**
+ * Items that actually block work: unmet, relevant under current settings, and
+ * not owned by somewhere we cannot see.
+ *
+ * The `managed` exclusion is belt-and-braces with the server (which already
+ * reports such an item as not required): a blocker must never be raised on a
+ * state Q-Agent did not verify (#651).
+ */
 export function blockers(items: ReadinessItem[] | undefined): ReadinessItem[] {
-  return (items ?? []).filter((i) => i.required && !i.ready);
+  return (items ?? []).filter((i) => i.required && !i.ready && !i.managed);
 }
 
 /** The blocker for a specific key, or null — for a pre-flight check on one action. */
