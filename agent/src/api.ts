@@ -98,17 +98,75 @@ export async function fetchWithTimeout(
   }
 }
 
+/**
+ * Turn a failed `fetch` into something the operator can act on (#661).
+ *
+ * Node's `fetch` throws a bare `TypeError: fetch failed` and puts the real reason
+ * — DNS, refused connection, TLS, timeout — in `err.cause`, which both the
+ * desktop pairing dialog and the CLI dropped. The user was left with two words
+ * that name the API that failed rather than anything about their machine, and
+ * pairing is the one screen with no logs to fall back on.
+ *
+ * Exported and pure so the mapping is unit-testable without a network.
+ */
+export function describeFetchError(err: unknown, url: string): string {
+  const top = err instanceof Error ? err.message : String(err);
+  // Walk the chain: undici nests the real error one or two levels down.
+  const causes: string[] = [];
+  let cause: unknown = (err as { cause?: unknown })?.cause;
+  let code = "";
+  for (let depth = 0; cause && depth < 4; depth++) {
+    const c = cause as { message?: string; code?: string; cause?: unknown };
+    if (!code && c.code) code = c.code;
+    if (c.message && !causes.includes(c.message)) causes.push(c.message);
+    cause = c.cause;
+  }
+  const hint = HINTS[code] || "";
+  return [
+    `${top} (${url})`,
+    causes.length ? `cause: ${causes.join(" ← ")}` : "",
+    code ? `code: ${code}` : "",
+    hint,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** What each network failure usually means here, in the operator's terms. */
+const HINTS: Record<string, string> = {
+  ENOTFOUND: "the host does not resolve from this machine — check the server URL and DNS",
+  EAI_AGAIN: "DNS lookup failed temporarily — check the network or VPN",
+  ECONNREFUSED: "nothing is listening there — check the URL, port and that the server is up",
+  ECONNRESET: "the connection was reset — a proxy or firewall may be interfering",
+  ETIMEDOUT: "the connection timed out — a firewall or VPN is likely blocking it",
+  UND_ERR_CONNECT_TIMEOUT: "the connection timed out — a firewall or VPN is likely blocking it",
+  CERT_HAS_EXPIRED: "the server's TLS certificate has expired",
+  DEPTH_ZERO_SELF_SIGNED_CERT: "a self-signed certificate — a corporate proxy is intercepting TLS",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE:
+    "the certificate chain could not be verified — a corporate proxy is likely intercepting TLS",
+  SELF_SIGNED_CERT_IN_CHAIN:
+    "a self-signed certificate in the chain — a corporate proxy is intercepting TLS",
+};
+
 /** Redeem a one-time pairing code for a durable device token (the `pair` command). */
 export async function redeemDevice(
   serverUrl: string,
   code: string,
   name: string
 ): Promise<{ deviceToken: string; deviceId: number }> {
-  const res = await fetch(`${serverUrl}/agent/devices/redeem`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, name }),
-  });
+  const url = `${serverUrl}/agent/devices/redeem`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name }),
+    });
+  } catch (err) {
+    // Pairing is the one screen with no logs behind it, so the message it shows
+    // has to carry the reason itself (#661).
+    throw new Error(describeFetchError(err, url));
+  }
   await throwIfNotOk(res);
   return (await res.json()) as { deviceToken: string; deviceId: number };
 }
