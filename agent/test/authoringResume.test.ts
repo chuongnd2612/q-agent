@@ -26,6 +26,7 @@ import { afterEach, test } from "node:test";
 import * as api from "../src/api";
 import {
   MANUAL_NAV_NOTE,
+  authoringVerdict,
   buildPassArgs,
   findTranscript,
   pauseWaitVerdict,
@@ -341,5 +342,24 @@ test("a closed browser stops the wait, and says so", () => {
   assert.deepEqual(pauseWaitVerdict({ browserGone: true, pastHardCap: true }), {
     reason: "browser-closed",
   });
+});
+
+/**
+ * #657: "authored" used to mean a non-empty FILE existed — never that the spec
+ * worked. That is why a live-authored spec looked fine and then failed on its
+ * first real execution: authoring drives the app with CDP coordinate clicks while
+ * the spec runs Playwright locators, and nothing exercised the second one.
+ */
+test("a spec that ran and failed is not authored", () => {
+  assert.deepEqual(authoringVerdict({ hasCode: true, verified: true }), { ok: true, checked: true });
+  assert.deepEqual(authoringVerdict({ hasCode: true, verified: false }), { ok: false, checked: true });
+  assert.deepEqual(authoringVerdict({ hasCode: false, verified: null }), { ok: false, checked: false });
+
+  // `null` is "could not check" (an older server stages no project), NOT "failed".
+  // Treating it as a failure would break every install whose server predates
+  // verification; the caller must instead say it was not checked.
+  assert.deepEqual(authoringVerdict({ hasCode: true, verified: null }), { ok: true, checked: false });
+  // And an empty file is never authored, however the verification went.
+  assert.equal(authoringVerdict({ hasCode: false, verified: true }).ok, false);
 });
 

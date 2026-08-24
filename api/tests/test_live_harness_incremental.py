@@ -408,3 +408,52 @@ def test_the_live_authoring_skill_documents_the_plan_block_it_is_handed():
     assert "IMPORTABLE" in text and "NOT ON DISK" in text
     assert "writable" in text, "the skill must honour the plan's writable boundary"
     assert "../../pages/" in text, "specs live two levels deep"
+
+
+def test_the_live_authoring_skill_requires_running_the_spec_it_writes():
+    """#657: driving the app is not evidence the spec passes.
+
+    A live-authored spec was accepted having never been executed. The only gate in
+    the pipeline is `playwright test --list` + `tsc` (see `automation_gate`), which
+    proves the file collects and typechecks — not that it works. The first real
+    execution then failed on `toHaveURL` because the emitted click never navigated.
+
+    This pins the instruction, not Claude's compliance: it fails if the "run it"
+    requirement is ever dropped from the skill. Whether the model obeys can only be
+    seen on a real authoring run against a paired device.
+    """
+    from app.services import skills
+
+    skills.load_skill.cache_clear()
+    text = skills.load_skill("live-authoring", include_template=True) or ""
+
+    assert "your spec is executed with the same Playwright config" in text, (
+        "the skill must say the spec gets RUN — and that the agent does it on the real path"
+    )
+    assert "Do not try to invoke Playwright by hand" in text, (
+        "only the agent knows where its bundled CLI lives; a hand-rolled command tests the env"
+    )
+    assert "evidence that the spec passes" in text, (
+        "the skill must say why driving the app is insufficient — the reason is the fix"
+    )
+    # And it must not let a never-run spec be reported as authored.
+    assert "reported as authored but never seen to pass" in text
+
+
+def test_the_live_authoring_skill_bans_baking_in_runtime_ids():
+    """#657: a discovered record id is not test data the spec controls.
+
+    The skill used to say "bake in ... any test data you created", under which a
+    GUID the APP minted (`/employers/57da884a-…`) became a constant — coupling the
+    spec to one row existing at index 0 with that id. Selecting `.nth(0)` after a
+    search that named a specific record has the same shape.
+    """
+    from app.services import skills
+
+    skills.load_skill.cache_clear()
+    text = skills.load_skill("live-authoring", include_template=True) or ""
+
+    assert "Never bake in an id the app generated at runtime" in text
+    assert "never `.nth(0)`" in text, "index-after-search must be called out as a bug"
+    # The selector, not the pixel: the coordinate/locator gap is the actual defect.
+    assert "Verify the SELECTOR, not the pixel" in text

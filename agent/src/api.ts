@@ -479,6 +479,16 @@ export interface AuthoringJob {
    * local `claude` uses the app's Settings credential instead of a separate
    * `claude login`. Empty ⇒ fall back to the agent's own local login. */
   claudeCredentials?: string;
+  /** The automation project, so the authored spec can be RUN here before it is
+   * reported as authored (#657). Same bundle the execution claim carries — the
+   * verification must go through the real execution path, not a lookalike.
+   * Absent from an older server ⇒ no verification is possible and the outcome
+   * says so, rather than silently meaning "a file exists". */
+  project?: ProjectBundle;
+  /** Headless setting the real execution would use, so the verification run
+   * matches it. Guessing here would trade one false result for another: a
+   * headless run can fail a bot-protected app whose spec is fine. */
+  headless?: boolean;
 }
 
 /** Claim the next queued authoring session, or null (204) if none. */

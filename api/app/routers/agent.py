@@ -937,7 +937,43 @@ def agent_authoring_next(
                 creds = creds_file.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 - creds are optional; log and continue
         logger.warning("Authoring claim: could not resolve Claude credential: {}", exc)
+    # Ship the automation project so the agent can RUN the spec it authors, in the
+    # same tree the execution path uses (#657). Until this existed "authored" meant
+    # a non-empty file existed — the spec's first real execution was the user's,
+    # which is why a live-authored spec looked fine and then failed on `toHaveURL`.
+    # Best-effort: the authoring still works without a bundle, it just cannot be
+    # verified on the device, and the agent reports it as unverified rather than
+    # implying it was checked.
+    project_bundle: dict | None = None
+    try:
+        case = db.get(TestCase, claim["case_id"])
+        spec = (
+            db.query(AutomationSpec).filter(AutomationSpec.test_case_id == claim["case_id"]).first()
+            if case is not None
+            else None
+        )
+        project = (
+            db.get(AutomationProject, spec.project_id)
+            if spec is not None and spec.project_id
+            else None
+        )
+        if project is not None:
+            payload, total_bytes = agent_project_bundle.bundle_payload(project)
+            if total_bytes <= agent_project_bundle.BUNDLE_MAX_BYTES:
+                project_bundle = payload
+            else:
+                logger.warning(
+                    "Authoring claim: project {} bundle is over cap ({} bytes) — "
+                    "the spec will be authored but not verified on the device",
+                    project.id,
+                    total_bytes,
+                )
+    except Exception as exc:  # noqa: BLE001 - verification is a bonus, never a gate
+        logger.warning("Authoring claim: could not build the project bundle: {}", exc)
+
     return AuthoringClaimOut(
+        project=project_bundle,
+        headless=bool(settings_store.load_settings().get("headless", True)),
         session_id=claim["session_id"],
         base_url=claim["base_url"],
         origin=claim["origin"],
