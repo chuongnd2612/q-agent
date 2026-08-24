@@ -306,6 +306,26 @@ def list_projects(hub_token: str) -> list[dict[str, Any]]:
     return get_json("/projects", hub_token)
 
 
+def mint_credential_grant(hub_token: str, run_id: int) -> dict[str, Any]:
+    """Exchange a live agent token for a run-scoped Claude-credential grant (#667).
+
+    The hub built this for exactly the problem Q-Agent had: an agent token lives
+    15 minutes and cannot be refreshed, so a run that needs the credential after
+    minute 15 had no legal way to ask — which is why the material was resolved
+    once and pinned to disk, and why changing the account in EmeHub then had no
+    effect on a run already under way.
+
+    A grant is minted ONCE, at run start, while the token is still fresh, and then
+    carries the run (240 minutes by default, hub-side setting). It is deliberately
+    narrow: it reaches only the three credential routes, its audience is never
+    registerable, it cannot mint another grant, and it dies with the hub session.
+
+    Returns the hub's response — ``grant``, ``audience``, ``scope``, ``runId``,
+    ``expiresIn``. The grant is a secret: never log it, never return it to the SPA.
+    """
+    return post_json("/auth/agent-grant", hub_token, {"runId": str(run_id)})
+
+
 def resolve_claude_credential(hub_token: str) -> dict[str, Any]:
     """Claude credential material, already resolved own → shared → none.
 
