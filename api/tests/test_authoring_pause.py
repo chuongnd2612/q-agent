@@ -864,3 +864,31 @@ def test_cancel_is_owner_scoped(client, live_authoring, db_session):
         config_module.settings.auth_required = False
 
     assert db_session.query(AgentAuthoringSession).count() == 1, "another user's session was cancelled"
+
+
+def test_cancel_announces_a_terminal_phase_the_client_recognises(
+    client, live_authoring, monkeypatch
+):
+    """#653: the phase name is a contract with the SPA, so pin it.
+
+    #645 added `phase: "cancelled"` on the server and the client's reducer only
+    treated `done`/`failed` as terminal, so after a cancel the trail kept its
+    `working…` spinner and the header kept saying `authoring…` for a session that
+    had already been deleted. The client now handles `cancelled`; this fails if the
+    phase is ever renamed or the event dropped, which is the half a frontend with
+    no test harness cannot pin for itself.
+    """
+    from app.ws import hub
+
+    published: list[tuple] = []
+    monkeypatch.setattr(hub, "publish", lambda *a: published.append(a))
+
+    ctx = live_authoring
+    assert client.post(f"/cases/{ctx['case'].id}/authoring/cancel").json()["cancelled"] is True
+
+    progress = [p for p in published if p[1] == "authoring.progress"]
+    assert progress, "cancel published no progress event — the trail would spin forever"
+    payload = progress[-1][2]
+    assert payload["phase"] == "cancelled"
+    assert payload["case"] == ctx["case"].id
+    assert "cancelled" in payload["message"].lower()
