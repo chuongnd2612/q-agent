@@ -20,5 +20,47 @@
   "delete": "Delete",
   "edit": "Edit",
   "retry": "Retry",
-  "unsavedChanges": "You have unsaved changes"
+  "unsavedChanges": "You have unsaved changes",
+  "setup": {
+    "optional": "Optional",
+    "checklist": {
+      "title": "Setup checklist",
+      "subtitle": "Finish these and a run works end to end.",
+      "allSet": "Everything a run needs is in place.",
+      "progress": "{{done}} of {{total}} done"
+    },
+    "blockers": {
+      "title_one": "1 thing is missing before this can run",
+      "title_other": "{{count}} things are missing before this can run"
+    },
+    "fix": {
+      "settings": "Open Settings",
+      "project": "Open Projects",
+      "hub": "Manage in EmeHub",
+      "hubNoLink": "Managed in EmeHub",
+      "install-agent": "Install the agent"
+    },
+    "items": {
+      "claudeCredential": {
+        "title": "Claude credential",
+        "why": "Every AI step — analysis, generation, self-heal — needs one."
+      },
+      "providerConnection": {
+        "title": "Ticket provider",
+        "why": "Connect Jira, Azure DevOps or GitHub to import work items."
+      },
+      "localAgent": {
+        "title": "Local Agent",
+        "why": "Runs on your machine, live authoring and live self-heal all execute through it."
+      },
+      "projectBaseUrl": {
+        "title": "Project base URL",
+        "why": "Live authoring drives the real app, so it needs an address to open."
+      },
+      "capturedLogin": {
+        "title": "Captured login",
+        "why": "A project set to manual login needs a saved session to reach authenticated pages."
+      }
+    }
+  }
 }

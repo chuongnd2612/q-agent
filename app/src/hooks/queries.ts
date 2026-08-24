@@ -27,6 +27,7 @@ import type {
   KnowledgeBuildRequest,
   ProjectConfigUpdate,
   ProviderKind,
+  Readiness,
   RunCreate,
   RunOut,
   SettingsUpdate,
@@ -39,6 +40,24 @@ import type {
 } from "@/types/api";
 
 // -------------------------------------------------------------- health
+/**
+ * Setup readiness (#642/#643): what this account still needs before a run works.
+ *
+ * Polled rather than fetched once, because the blockers are fixed OUTSIDE this
+ * screen — pairing an agent, capturing a login, connecting a provider — and a
+ * checklist that keeps showing a solved problem is the fastest way to teach the
+ * user to ignore it. `Readiness` is cheap (four small queries server-side).
+ */
+export const useReadiness = () =>
+  useQuery({
+    queryKey: queryKeys.readiness,
+    queryFn: api.readiness,
+    refetchInterval: 30_000,
+    // Losing it on a transient blip would flip banners off and back on, which
+    // reads as flicker; keep the last answer while refetching.
+    placeholderData: (prev: Readiness | undefined) => prev,
+  });
+
 export const useCapabilities = () =>
   useQuery({ queryKey: queryKeys.capabilities, queryFn: api.capabilities });
 

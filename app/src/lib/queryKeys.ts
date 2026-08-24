@@ -2,6 +2,7 @@
 
 export const queryKeys = {
   capabilities: ["capabilities"] as const,
+  readiness: ["readiness"] as const,
   aiStats: ["aiStats"] as const,
   claudeCredentialsStatus: ["claudeCredentials", "status"] as const,
   providers: ["providers"] as const,

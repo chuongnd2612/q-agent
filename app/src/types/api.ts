@@ -263,6 +263,30 @@ export interface ProjectKnowledgeOut {
   source?: "local" | "hub";
 }
 
+/** Where an unmet setup item is fixed (#642). Stable keys, so routing stays the
+ *  frontend's business — under hub management the fix lives in EmeHub, not here. */
+export type ReadinessFix = "settings" | "project" | "hub" | "install-agent";
+
+/** One prerequisite for a working run (#642).
+ *
+ *  `required` is settings-dependent: an unpaired Local Agent blocks nothing when
+ *  runs execute on the server, and nagging about it would train the user to
+ *  ignore the whole checklist. */
+export interface ReadinessItem {
+  key: string;
+  ready: boolean;
+  required: boolean;
+  fix: ReadinessFix;
+  detail: string;
+}
+
+export interface Readiness {
+  /** True when every *required* item is met — the question the UI actually asks. */
+  ready: boolean;
+  hubManaged: boolean;
+  items: ReadinessItem[];
+}
+
 export interface AutomationStatus {
   generating: boolean;
 }

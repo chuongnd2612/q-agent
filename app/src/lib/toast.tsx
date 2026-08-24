@@ -76,18 +76,29 @@ function ToastIcon({ type, accent }: { type: QType; accent: string }) {
   );
 }
 
+/** A toast's optional call to action. Rendered inline — `sonner.custom` draws
+ *  ONLY the node it is given, so an `action` passed in the options object is
+ *  silently dropped. The Execution screen's "pair a Local Agent" CTA had been
+ *  passing one since it was written and it never appeared on screen (#643). */
+interface ToastAction {
+  label: ReactNode;
+  onClick: () => void;
+}
+
 function QToast({
   id,
   type,
   title,
   sub,
   duration,
+  action,
 }: {
   id: number | string;
   type: QType;
   title: ReactNode;
   sub?: ReactNode;
   duration: number;
+  action?: ToastAction;
 }) {
   const a = ACCENTS[type];
   const { t } = useTranslation("commands");
@@ -137,6 +148,30 @@ function QToast({
           <span style={{ fontSize: 11.5, color: "#9a9aac", lineHeight: 1.3 }}>{sub}</span>
         ) : null}
       </div>
+
+      {action ? (
+        <button
+          type="button"
+          onClick={() => {
+            action.onClick();
+            sonner.dismiss(id);
+          }}
+          style={{
+            flexShrink: 0,
+            alignSelf: "center",
+            padding: "5px 10px",
+            borderRadius: 9,
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: "pointer",
+            color: a.color,
+            background: a.bg,
+            border: `1px solid ${a.border}`,
+          }}
+        >
+          {action.label}
+        </button>
+      ) : null}
 
       <button
         type="button"
@@ -191,8 +226,20 @@ function show(type: QType, title: ReactNode, opts?: ExternalToast) {
   const duration = typeof opts?.duration === "number" ? opts.duration : DEFAULT_DURATION;
   // sonner allows `description` to be a render function — resolve it to a node.
   const sub = typeof opts?.description === "function" ? opts.description() : opts?.description;
+  // Pull `action` out of the options and hand it to QToast: sonner renders only
+  // our node, so leaving it in `opts` means it is never drawn (#643).
+  const action = opts?.action as ToastAction | undefined;
   return sonner.custom(
-    (id) => <QToast id={id} type={type} title={title} sub={sub} duration={duration} />,
+    (id) => (
+      <QToast
+        id={id}
+        type={type}
+        title={title}
+        sub={sub}
+        duration={duration}
+        action={action && typeof action.onClick === "function" ? action : undefined}
+      />
+    ),
     { ...opts, duration },
   );
 }

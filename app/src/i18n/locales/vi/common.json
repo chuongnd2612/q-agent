@@ -20,5 +20,47 @@
   "delete": "Xóa",
   "edit": "Chỉnh sửa",
   "retry": "Thử lại",
-  "unsavedChanges": "Bạn có thay đổi chưa lưu"
+  "unsavedChanges": "Bạn có thay đổi chưa lưu",
+  "setup": {
+    "optional": "Không bắt buộc",
+    "checklist": {
+      "title": "Danh sách thiết lập",
+      "subtitle": "Hoàn tất những mục này là chạy được trọn luồng.",
+      "allSet": "Đã có đủ mọi thứ để chạy.",
+      "progress": "Xong {{done}}/{{total}}"
+    },
+    "blockers": {
+      "title_one": "Còn thiếu 1 thứ trước khi chạy được",
+      "title_other": "Còn thiếu {{count}} thứ trước khi chạy được"
+    },
+    "fix": {
+      "settings": "Mở Cài đặt",
+      "project": "Mở Dự án",
+      "hub": "Quản lý trong EmeHub",
+      "hubNoLink": "Được quản lý trong EmeHub",
+      "install-agent": "Cài agent"
+    },
+    "items": {
+      "claudeCredential": {
+        "title": "Thông tin Claude",
+        "why": "Mọi bước AI — phân tích, tạo spec, tự sửa — đều cần."
+      },
+      "providerConnection": {
+        "title": "Nguồn ticket",
+        "why": "Kết nối Jira, Azure DevOps hoặc GitHub để lấy work item."
+      },
+      "localAgent": {
+        "title": "Local Agent",
+        "why": "Chạy trên máy bạn; live authoring và live self-heal đều đi qua nó."
+      },
+      "projectBaseUrl": {
+        "title": "Base URL của dự án",
+        "why": "Live authoring điều khiển app thật nên cần địa chỉ để mở."
+      },
+      "capturedLogin": {
+        "title": "Login đã lưu",
+        "why": "Dự án bật đăng nhập thủ công cần session đã lưu để vào được trang cần auth."
+      }
+    }
+  }
 }

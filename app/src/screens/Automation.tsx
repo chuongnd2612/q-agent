@@ -49,6 +49,8 @@ import { ExploreReview } from "./automation/ExploreReview";
 import { diffLines } from "./automation/lineDiff";
 import { SpecChatPanel } from "./automation/chat/SpecChatPanel";
 import { useUI } from "@/store/ui";
+import { SetupBlockers } from "@/components/setup/SetupBlockers";
+import { useSetupGuard } from "@/components/setup/useSetupGuard";
 import { RegenSummary, deriveTags } from "./automation/RegenSummary";
 import { ProjectFileTree } from "./automation/ProjectFileTree";
 import { ProjectFilePanel } from "./automation/ProjectFilePanel";
@@ -63,6 +65,7 @@ export function Automation() {
   const { data: cases } = useRunCases(runId);
   const generateAutomation = useGenerateAutomation(runId);
   const regenerateSpec = useRegenerateSpec(runId);
+  const guardSetup = useSetupGuard();
   const updateSpec = useUpdateSpec(runId);
   const startExecution = useStartExecution(runId);
   const { data: autoStatus } = useAutomationStatus(runId);
@@ -169,6 +172,15 @@ export function Automation() {
   // approved cases get specs while already-generated (and possibly edited) ones
   // are left untouched.
   const startGenerate = () => {
+    // Pre-flight (#643). These are exactly the prerequisites whose silent failure
+    // #641 had to make readable after the fact — `_enqueue_agent_authoring`
+    // raises for a missing agent or base URL, the pass ends looking like a
+    // successful one, and the screen said "No automation yet". Refusing here
+    // turns that into an answer before the click.
+    guardSetup(["claudeCredential", "localAgent", "projectBaseUrl"], () => generateNow());
+  };
+
+  const generateNow = () => {
     generateAutomation.mutate(false, {
       onError: (e) =>
         toast.error(e instanceof Error ? e.message : t("automation.generationFailedToStart")),
@@ -694,6 +706,10 @@ export function Automation() {
       <div className="mb-4 hidden md:block">
         <PipelineRail stage={3} />
       </div>
+
+      {/* Only what generation itself needs (#643) — the Execution screen reports
+          its own, so neither page accuses the other of being broken. */}
+      <SetupBlockers only={["claudeCredential", "localAgent", "projectBaseUrl"]} />
 
       {showRepoPanel && (
         <TargetRepoPanel
