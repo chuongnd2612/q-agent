@@ -885,6 +885,10 @@ export const api = {
     post<{ ok: boolean; outcome: string }>(`/cases/${caseId}/authoring/continue`, {
       guidance,
     }),
+  /** Stop live-authoring this case now, leaving it re-runnable (#645). Idempotent
+   *  — `cancelled: false` means there was nothing live, which is not an error. */
+  cancelAuthoring: (caseId: number) =>
+    post<{ cancelled: boolean; was?: string }>(`/cases/${caseId}/authoring/cancel`, {}),
   updateSpec: (caseId: number, code: string) =>
     patch<AutomationSpecOut>(`/cases/${caseId}/spec`, { code }),
   healSpec: (caseId: number) =>

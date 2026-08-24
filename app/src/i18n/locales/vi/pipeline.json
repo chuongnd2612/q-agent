@@ -171,7 +171,10 @@
       "guidanceSent_one": "Đã gửi {{count}} lượt hướng dẫn",
       "guidanceSent_other": "Đã gửi {{count}} lượt hướng dẫn",
       "guidancePlaceholder": "Nói cho Claude cần làm khác thế nào, rồi bấm Tiếp tục (Enter để gửi, Shift+Enter để xuống dòng)",
-      "continueWithGuidance": "Tiếp tục kèm hướng dẫn"
+      "continueWithGuidance": "Tiếp tục kèm hướng dẫn",
+      "cancel": "Huỷ",
+      "cancelled": "Đã huỷ live authoring — tạo lại case này để chạy lần nữa.",
+      "cancelNothing": "Không có phiên nào đang chạy để huỷ."
     },
     "heal": {
       "progressTitle": "Đang tự khắc phục {{caseCode}} — lần thử {{attempt}}/{{maxAttempts}}",

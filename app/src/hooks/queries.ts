@@ -1025,6 +1025,23 @@ export const useContinueAuthoring = (caseId: number) => {
   });
 };
 
+/** Cancel a live-authoring session (#645). Invalidates the specs list too: the
+ *  cancelled case's placeholder spec becomes `failed` with the reason, which is
+ *  what the screen shows instead of a spinner that never resolves. */
+export const useCancelAuthoring = (caseId: number) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.cancelAuthoring(caseId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.authoringState(caseId) });
+      // Coarse on purpose: the control is rendered in two places that don't both
+      // know the run id, and cancelling is a rare, deliberate action — one extra
+      // refetch is cheaper than threading `runId` through for it.
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+};
+
 export const useUpdateSpec = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({

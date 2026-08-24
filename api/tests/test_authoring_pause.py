@@ -34,6 +34,7 @@ durable pause state and the sweep are under test.
 from __future__ import annotations
 
 import importlib
+import time
 from datetime import timedelta
 
 import pytest
@@ -718,3 +719,148 @@ def test_continuing_with_no_guidance_is_still_valid(client, live_authoring):
     assert directive["action"] == "resume"
     assert directive["guidance"] == []
     assert client.get(f"/cases/{ctx['case'].id}/authoring").json()["guidanceHistory"] == []
+
+
+# ------------------------------------------------------------------ cancel (#645)
+def test_cancel_frees_a_running_session_and_stops_the_device(client, live_authoring, db_session):
+    """#645: cancel needs nothing from the agent, so it works on deployed devices.
+
+    Deleting the row IS the cancel: the device posts a progress event per Claude
+    step, and that endpoint answers 404 once the row is gone — which the agent
+    already treats as "the run was stopped, abort". Pinning the 404 here is
+    pinning the mechanism, not just the status code: without it cancel would need
+    an agent release, and the state it rescues users from otherwise lasts an hour.
+    """
+    ctx = live_authoring
+    assert _step(client, ctx) == {"ok": True, "control": ""}
+
+    resp = client.post(f"/cases/{ctx['case'].id}/authoring/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"cancelled": True, "was": "running"}
+
+    assert db_session.query(AgentAuthoringSession).count() == 0
+    # The device's next step post is told the session is gone.
+    gone = client.post(
+        f"/agent/authoring/{ctx['session_id']}/events",
+        json={"event": "authoring.progress", "payload": {"phase": "step", "message": "clicked"}},
+        headers=ctx["headers"],
+    )
+    assert gone.status_code == 404
+
+
+def test_cancel_tells_a_paused_device_to_tear_down(client, live_authoring, db_session):
+    """#645: the reported case — paused, browser open, user wants out.
+
+    The paused device polls the resume directive, and `abort` is what closes
+    Chrome. Before cancel existed the only answer was `wait` until
+    PAUSE_EXPIRES_AFTER (an hour) had passed.
+    """
+    ctx = live_authoring
+    client.post(
+        f"/agent/authoring/{ctx['session_id']}/paused",
+        json={"claudeSessionId": "claude-abc-123", "costUsd": 0.1},
+        headers=ctx["headers"],
+    )
+    assert (
+        client.post(f"/agent/authoring/{ctx['session_id']}/resume", headers=ctx["headers"]).json()[
+            "action"
+        ]
+        == "wait"
+    )
+
+    assert client.post(f"/cases/{ctx['case'].id}/authoring/cancel").json() == {
+        "cancelled": True,
+        "was": "paused",
+    }
+
+    directive = client.post(
+        f"/agent/authoring/{ctx['session_id']}/resume", headers=ctx["headers"]
+    ).json()
+    assert directive["action"] == "abort"
+    assert directive["reason"] == "session-gone"
+
+
+def test_cancel_is_idempotent(client, live_authoring):
+    """#645: cancelling twice is not an error — the intent is already satisfied."""
+    ctx = live_authoring
+    assert client.post(f"/cases/{ctx['case'].id}/authoring/cancel").json()["cancelled"] is True
+    second = client.post(f"/cases/{ctx['case'].id}/authoring/cancel")
+    assert second.status_code == 200
+    assert second.json() == {"cancelled": False}
+
+
+def test_a_cancelled_case_is_re_runnable(client, live_authoring, db_session):
+    """#645: the point of cancelling is being able to run it again.
+
+    Two things had to be true and neither was: the case's UNIQUE session slot must
+    be free so a fresh session can be queued, and the placeholder spec row (which
+    `_enqueue_agent_authoring` writes at status="running" with NO code) must not
+    make the case look already-generated to an incremental pass — the same
+    invisible-retry shape as #641.
+    """
+    from app.routers.automation import _eligible_cases_query
+    from app.models.testcase import AutomationSpec as Spec
+
+    ctx = live_authoring
+    client.post(f"/cases/{ctx['case'].id}/authoring/cancel")
+
+    spec = db_session.query(Spec).filter(Spec.test_case_id == ctx["case"].id).one()
+    db_session.refresh(spec)
+    assert spec.status == "failed"
+    assert "cancelled" in spec.block_reason.lower()
+    assert not (spec.code or "").strip()
+
+    assert ctx["case"].id in {c.id for c in _eligible_cases_query(db_session, ctx["run"].id).all()}
+
+    # Drive a REAL incremental pass (force=False) and record which cases it hands
+    # to generation. Asserting a locally-recomputed skip set here would only test
+    # the test: negative-controlled by reverting the empty-spec exclusion, which
+    # leaves `attempted` empty.
+    from app.routers import automation as automation_router
+
+    attempted: list[int] = []
+
+    def spy(_db, _run, case, **_kwargs):
+        attempted.append(case.id)
+        raise ValueError("stop here — the skip decision is what is under test")
+
+    original = automation_router._generate_one
+    automation_router._generate_one = spy
+    try:
+        assert client.post(f"/runs/{ctx['run'].id}/automation/generate").status_code == 200
+        for _ in range(100):
+            time.sleep(0.05)
+            if not automation_router.is_generating(ctx["run"].id):
+                break
+    finally:
+        automation_router._generate_one = original
+
+    assert attempted == [ctx["case"].id], (
+        "an empty placeholder spec hid the cancelled case from an incremental retry"
+    )
+
+    # And the session slot is free, so a fresh authoring session can be queued.
+    _enqueue(owner_id=ctx["user"].id, case_id=ctx["case"].id, run_id=ctx["run"].id)
+    assert _row(db_session).status == "queued"
+
+
+def test_cancel_is_owner_scoped(client, live_authoring, db_session):
+    """#645: one user must not be able to cancel another's authoring session."""
+    import app.config as config_module
+
+    ctx = live_authoring
+    other = _make_user(db_session, "not-the-owner@example.com")
+
+    # With the guard ON the caller is a real user, so ownership actually applies —
+    # with the suite default the caller is None and this would pass vacuously.
+    config_module.settings.auth_required = True
+    try:
+        headers = {
+            "Authorization": f"Bearer {auth_service.create_access_token(other, sid='other-sid')}"
+        }
+        resp = client.post(f"/cases/{ctx['case'].id}/authoring/cancel", headers=headers)
+        assert resp.status_code == 404, resp.text
+    finally:
+        config_module.settings.auth_required = False
+
+    assert db_session.query(AgentAuthoringSession).count() == 1, "another user's session was cancelled"

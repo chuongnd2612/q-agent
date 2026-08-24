@@ -171,7 +171,10 @@
       "guidanceSent_one": "{{count}} guidance turn sent",
       "guidanceSent_other": "{{count}} guidance turns sent",
       "guidancePlaceholder": "Tell Claude what to do differently, then Continue (Enter to send, Shift+Enter for a new line)",
-      "continueWithGuidance": "Continue with guidance"
+      "continueWithGuidance": "Continue with guidance",
+      "cancel": "Cancel",
+      "cancelled": "Live authoring cancelled — regenerate this case to run it again.",
+      "cancelNothing": "There was nothing live to cancel."
     },
     "heal": {
       "progressTitle": "Self-healing {{caseCode}} — attempt {{attempt}}/{{maxAttempts}}",

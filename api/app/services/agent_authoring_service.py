@@ -396,6 +396,53 @@ def drop_queued_cases(case_ids: set[int]) -> int:
         return int(removed or 0)
 
 
+def cancel_case(case_id: int, owner_id: int | None = None) -> dict | None:
+    """Cancel the live authoring session for one case; ``None`` if there is none.
+
+    Deleting the row IS the cancel, and it needs nothing from the agent (#645):
+
+    * a ``running`` device posts a progress event per Claude step, and
+      ``/agent/authoring/{id}/events`` answers 404 once the row is gone — which
+      the agent already treats as "the run was stopped, abort";
+    * a ``paused`` device polls :func:`take_resume_directive`, which answers
+      ``abort``/``session-gone`` for a missing row, and the agent already tears
+      Chrome down on any non-``resume`` directive.
+
+    So cancel works on devices that are already deployed, rather than waiting for
+    a release — which matters because the state it rescues users from (a pause
+    holding a browser open) lasts an hour otherwise.
+
+    Returns the cancelled session's dict so the caller can audit and announce it.
+    Cancelling nothing is not an error: the endpoint is idempotent, because the
+    user's intent ("stop this") is already satisfied.
+    """
+    with _session() as db:
+        # Narrow by owner only when there IS one, matching `live_session_for_case`
+        # and `_lookup`. `_owner_filter`'s strict `owner_id IS NULL` belongs to the
+        # agent-facing queue, where the device's own identity is the key; using it
+        # here would make cancel a no-op on an auth-disabled install, whose rows
+        # carry a real owner while the caller is None. The ownership guarantee for
+        # this path comes from `_get_case_and_run_or_404` in the router.
+        query = db.query(AgentAuthoringSession).filter(
+            AgentAuthoringSession.case_id == case_id
+        )
+        if owner_id is not None:
+            query = query.filter(AgentAuthoringSession.owner_id == owner_id)
+        row = query.first()
+        if row is None:
+            return None
+        snapshot = _as_dict(row)
+        db.delete(row)
+        db.commit()
+    logger.info(
+        "Live authoring CANCELLED (session={} case={} was={})",
+        snapshot["session_id"],
+        case_id,
+        snapshot["status"],
+    )
+    return snapshot
+
+
 def purge_run(run_id: int) -> int:
     """Drop every pending authoring session for a run and return how many were removed.
 
