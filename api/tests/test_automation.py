@@ -384,13 +384,39 @@ def _add_case(db_session, run, *, code, ticket="SUR-2001"):
 
 
 def _wait_for_specs(client, run_id, count):
-    """Poll the run's spec list until it reaches ``count`` (background gen)."""
+    """Poll the run's spec list until it reaches ``count`` (background gen).
+
+    A spec appearing does NOT mean the pass has ended — see
+    :func:`_wait_for_generation_to_end` before triggering another generate.
+    """
     for _ in range(60):
         specs = client.get(f"/runs/{run_id}/automation").json()
         if len(specs) >= count:
             return specs
         time.sleep(0.05)
     return client.get(f"/runs/{run_id}/automation").json()
+
+
+def _wait_for_generation_to_end(run_id, tries=200):
+    """Block until the background generation pass for ``run_id`` has finished.
+
+    Required before asking for a SECOND pass: `generate_automation` ignores a
+    request while `run_id` is still in `_generating`, silently and with a 200, so a
+    generate that arrives too early is a no-op and the case it was meant to
+    produce simply never appears. Waiting for a spec to show up is not the same
+    thing — the pass writes its first spec well before it ends.
+
+    Waits on the in-process guard rather than polling an endpoint: `client` shares
+    one session with the test, so a tight polling loop contends with the worker's
+    writes on the same SQLite file and slows the very pass being awaited.
+    """
+    from app.routers import automation as automation_router
+
+    for _ in range(tries):
+        if not automation_router.is_generating(run_id):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def test_generate_is_incremental_and_preserves_edits(client, db_session, monkeypatch):
@@ -409,9 +435,14 @@ def test_generate_is_incremental_and_preserves_edits(client, db_session, monkeyp
     edited = "import { test } from '@playwright/test';\n\ntest('hand edited', async () => {});\n"
     assert client.patch(f"/cases/{case_a.id}/spec", json={"code": edited}).status_code == 200
 
-    # Approve a second case, then generate again (incremental by default).
+    # Approve a second case, then generate again (incremental by default). The
+    # first pass must be OVER before asking for another: the double-trigger guard
+    # drops a concurrent generate with a 200 and no pass, so without this the
+    # second request is a silent no-op and case B is never generated.
+    assert _wait_for_generation_to_end(run.id), "the first pass never finished"
     case_b = _add_case(db_session, run, code="TC-02")
     assert client.post(f"/runs/{run.id}/automation/generate").status_code == 200
+    assert _wait_for_generation_to_end(run.id), "the second pass never finished"
     _wait_for_specs(client, run.id, 2)
 
     # Case A keeps the manual edit; case B was generated fresh.

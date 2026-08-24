@@ -180,3 +180,136 @@ def test_spec_prompt_bakes_real_values_when_context_present(db_session, monkeypa
     assert "/groups" in prompt
     # The old "use placeholders" instruction is gone when context is present.
     assert "reasonable placeholders" not in prompt
+
+
+# ------------------------------------------------- project-key resolution (#663)
+def _ado_connection(db_session, project: str, name: str = "surency"):
+    """A work-item connection naming its provider project, as ADO reports it."""
+    from app.models.provider_connection import ProviderConnection
+
+    conn = ProviderConnection(
+        kind="ado",
+        name=name,
+        config={"project": project, "baseUrl": "https://dev.azure.com/DDKS"},
+    )
+    db_session.add(conn)
+    db_session.commit()
+    db_session.refresh(conn)
+    return conn
+
+
+def test_the_connection_id_link_decides_which_project_a_ticket_belongs_to(db_session):
+    """#663: resolve by id, because the provider's name cannot tell them apart.
+
+    Reproduces the reported install: TWO Q-Agent projects wired to two different
+    connections that both point at the SAME Azure DevOps project, so both report
+    `config.project == "Surency"`. No comparison of that string — case-sensitive or
+    not — can decide which project a ticket belongs to. The id link the user
+    configured can.
+    """
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    conn_a = _ado_connection(db_session, "Surency", name="surency")
+    conn_b = _ado_connection(db_session, "Surency", name="surency 2")
+    db_session.add(
+        ProjectConfig(
+            key="surency",
+            base_url="https://one.example.com",
+            work_item_connection_id=conn_a.id,
+        )
+    )
+    db_session.add(
+        ProjectConfig(
+            key="surency 3",
+            base_url="https://three.example.com",
+            work_item_connection_id=conn_b.id,
+        )
+    )
+    db_session.commit()
+
+    assert project_config_service.resolve_project_key(db_session, conn_a) == "surency"
+    assert project_config_service.resolve_project_key(db_session, conn_b) == "surency 3"
+
+
+def test_two_projects_claiming_one_connection_is_refused(db_session):
+    """#663: a data error must not be resolved by picking a winner."""
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    conn = _ado_connection(db_session, "Surency")
+    db_session.add(ProjectConfig(key="a", work_item_connection_id=conn.id))
+    db_session.add(ProjectConfig(key="b", work_item_connection_id=conn.id))
+    db_session.commit()
+
+    assert project_config_service.resolve_project_key(db_session, conn) is None
+
+
+def test_a_provider_project_matches_its_key_case_insensitively(db_session):
+    """#663: ADO says "Surency", the config key is "surency" — same project.
+
+    The comparison was exact, so this never matched and resolution silently fell
+    through to the "only one project exists" fallback instead.
+    """
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    db_session.add(ProjectConfig(key="surency", base_url="https://hub-dev.surency.com/"))
+    db_session.commit()
+
+    conn = _ado_connection(db_session, "Surency")
+    assert project_config_service.resolve_project_key(db_session, conn) == "surency"
+
+
+def test_adding_a_second_project_does_not_break_the_first(db_session):
+    """#663: the regression this fixes, reproduced.
+
+    With one project the sole-project fallback masked the failed exact match. Add a
+    second and the fallback returns None, so `projectKey` comes back empty, the
+    case context has no base URL, and generation fails with "No base URL in the
+    project context" — months after the run last worked, and with no visible
+    connection to the change that caused it.
+    """
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    db_session.add(ProjectConfig(key="surency", base_url="https://hub-dev.surency.com/"))
+    db_session.commit()
+    conn = _ado_connection(db_session, "Surency")
+    assert project_config_service.resolve_project_key(db_session, conn) == "surency"
+
+    # The user configures a SECOND project. The first must keep resolving.
+    db_session.add(ProjectConfig(key="surency 3", base_url="https://hub-dev.surency.com"))
+    db_session.commit()
+    assert project_config_service.resolve_project_key(db_session, conn) == "surency"
+
+
+def test_an_exact_key_wins_over_a_case_variant(db_session):
+    """#663: never "correct" a key that is already right."""
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    db_session.add(ProjectConfig(key="Surency", base_url="https://exact.example.com"))
+    db_session.add(ProjectConfig(key="surency", base_url="https://lower.example.com"))
+    db_session.commit()
+
+    conn = _ado_connection(db_session, "Surency")
+    assert project_config_service.resolve_project_key(db_session, conn) == "Surency"
+
+
+def test_keys_differing_only_by_case_are_refused_not_guessed(db_session):
+    """#663: two candidates, no way to tell which the provider meant.
+
+    Guessing would be a coin flip that writes into the wrong project's config, so
+    resolution declines — and the caller's error names the real problem instead of
+    silently using someone else's base URL.
+    """
+    from app.models.project_config import ProjectConfig
+    from app.services import project_config_service
+
+    db_session.add(ProjectConfig(key="surency", base_url="https://one.example.com"))
+    db_session.add(ProjectConfig(key="SURENCY", base_url="https://two.example.com"))
+    db_session.commit()
+
+    conn = _ado_connection(db_session, "Surency")
+    assert project_config_service.resolve_project_key(db_session, conn) is None
