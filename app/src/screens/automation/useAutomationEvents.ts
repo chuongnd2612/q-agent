@@ -166,7 +166,13 @@ export function useAutomationEvents(runId: number, generating: boolean) {
       };
       const caseId = p.case ?? p.caseId ?? 0;
       const message = (p.message ?? "").trim();
-      const terminal = p.phase === "done" || p.phase === "failed";
+      // `cancelled` is terminal too (#653). It was added server-side by #645 and
+      // not here, so after a cancel `done` stayed false and everything hanging off
+      // it — the `working…` spinner, the `authoring…` badge, the Pause/Continue
+      // controls — kept reporting work in progress for a session that had already
+      // been deleted.
+      const cancelled = p.phase === "cancelled";
+      const terminal = p.phase === "done" || p.phase === "failed" || cancelled;
       // #619: `paused` means the device stopped Claude but kept Chrome, the temp
       // workdir and CLAUDE_CONFIG_DIR alive. It is NOT terminal — the trail must
       // stay, minus the "working…" spinner, and the Continue control appears.
@@ -194,7 +200,9 @@ export function useAutomationEvents(runId: number, generating: boolean) {
         // (the in-panel trail vanishes once the code replaces it).
         const cost = typeof p.costUsd === "number" ? ` · $${p.costUsd.toFixed(2)}` : "";
         if (p.phase === "done") toast.success(`${t("progress.authoring.authored")}${cost}`);
-        else toast.error(`${t("progress.authoring.failed")}${cost}`);
+        // A cancel is not a failure, and the mutation that asked for it already
+        // confirmed it — a second, red toast would read as "it went wrong".
+        else if (!cancelled) toast.error(`${t("progress.authoring.failed")}${cost}`);
         // The spec + cases changed on the server — refresh so the row reflects it.
         qc.invalidateQueries({ queryKey: queryKeys.specs(runId) });
         qc.invalidateQueries({ queryKey: queryKeys.runCases(runId) });
