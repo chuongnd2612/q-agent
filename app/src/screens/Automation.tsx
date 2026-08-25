@@ -732,10 +732,10 @@ export function Automation() {
         />
       )}
 
-      {/* Export the project to a remote the customer owns (#549) — user-triggered,
-          never automatic. Only for a project-backed run: a legacy spec has no
+      {/* Export the project — Version 2, currently a coming-soon placeholder (#680).
+          Only for a project-backed run: a legacy spec has no
           `projectId`, so there is no git repo to push and the panel is hidden. */}
-      <ExportProjectPanel runId={runId} projectId={exportableProjectId} />
+      <ExportProjectPanel projectId={exportableProjectId} />
 
       {thinking && <ThinkingBanner runCode={run?.code} thinkStep={thinkStep} />}
 
