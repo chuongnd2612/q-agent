@@ -18,7 +18,7 @@ import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
@@ -2004,6 +2004,51 @@ def automation_export_preflight(
     project = _export_project_or_404(db, run, projectId, user)
     return automation_export_service.export_preflight(
         db, project, suggested_remote=_suggested_remote(db, project)
+    )
+
+
+@router.get("/runs/{run_id}/automation/export/zip")
+def export_automation_project_zip(
+    run_id: int,
+    projectId: int | None = None,  # noqa: N803 - query param mirrors the JSON body field
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> Response:
+    """Download the automation project as a ZIP (#686 — the v1 export).
+
+    Deliberately the *simple* export: no repository connection, no PAT, no branch
+    policy, no network. The remote push (below) needs all four and is v2; a user who
+    just wants the suite should not have to configure any of it.
+
+    Ownership goes through the same ``_export_project_or_404`` as the push, so asking
+    for another user's project is a 404 rather than a download. Returns the whole
+    archive in one response rather than streaming: an automation suite is text in the
+    low megabytes, and a single body keeps ``Content-Length`` — and therefore the
+    browser's progress and the client's error handling — honest.
+    """
+    run = get_owned_or_404(db, Run, run_id, user)
+    project = _export_project_or_404(db, run, projectId, user)
+    try:
+        payload = automation_export_service.export_to_zip(project)
+    except automation_export_service.ExportError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    filename = automation_export_service.zip_filename(project)
+    audit_service.record(
+        category="automation",
+        action="Exported the automation project as a ZIP",
+        target=f"{run.code} · {project.slug}",
+        detail={"filename": filename, "bytes": len(payload)},
+    )
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # The SPA reads the filename off this header, and it is not exposed to
+            # cross-origin JS by default — the download would otherwise be saved
+            # under a generated name that says nothing about which project it is.
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
     )
 
 

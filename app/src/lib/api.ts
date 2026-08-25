@@ -337,6 +337,12 @@ async function request<T>(
   path: string,
   init?: RequestInit,
   retried = false,
+  // `"raw"` hands back the `Response` itself instead of parsing JSON — the only
+  // way a binary download (the automation ZIP) can ride this function, and the
+  // point of riding it is that it already carries the bearer token, the 401→refresh
+  // replay, the timeout and the reachability flag. A hand-rolled `fetch` would have
+  // none of those (a trap this project has hit before — see CLAUDE.md).
+  parse: "json" | "raw" = "json",
 ): Promise<T> {
   const authPath = isAuthPath(path);
   // `/auth/*` keeps its own prefix rather than riding under API_BASE, so the
@@ -397,7 +403,7 @@ async function request<T>(
   // once and replay the request.
   if (res.status === 401 && !authPath && !retried) {
     const outcome = await tryRefresh();
-    if (outcome === "refreshed") return request<T>(path, init, true);
+    if (outcome === "refreshed") return request<T>(path, init, true, parse);
     if (outcome === "unreachable") {
       // We could not establish that the session is dead, so we must NOT act as
       // if it were: no logout, no redirect to /login. Fail closed — the caller
@@ -448,8 +454,24 @@ async function request<T>(
       detail = res.statusText.trim() || `Request failed (HTTP ${res.status})`;
     throw new ApiError(res.status, detail);
   }
+  if (parse === "raw") return res as unknown as T;
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** A GET whose body is a file, not JSON — returns the blob and the server's
+ * `Content-Disposition` filename so the download is saved under a name that says
+ * which project it is. */
+async function getFile(
+  path: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await request<Response>(path, undefined, false, "raw");
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  return {
+    blob: await res.blob(),
+    filename: match?.[1]?.trim() || "download",
+  };
 }
 
 const get = <T>(p: string) => request<T>(p);
@@ -925,6 +947,12 @@ export const api = {
   ) =>
     get<AutomationExportPreflight>(
       `/runs/${runId}/automation/export${projectId ? `?projectId=${projectId}` : ""}`,
+    ),
+  /** Download the automation project as a ZIP (#686 — the v1 export). Needs no
+   * repository connection and no PAT, unlike {@link exportAutomationProject}. */
+  exportAutomationProjectZip: (runId: number, projectId?: number | null) =>
+    getFile(
+      `/runs/${runId}/automation/export/zip${projectId ? `?projectId=${projectId}` : ""}`,
     ),
   exportAutomationProject: (
     runId: number | string,

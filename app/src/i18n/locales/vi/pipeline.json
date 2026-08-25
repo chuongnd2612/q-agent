@@ -494,11 +494,14 @@
   },
   "export": {
     "title": "Xuất dự án tự động hoá",
+    "description": "Mang bộ kiểm thử tự động của dự án này — page object, fixture, dữ liệu kiểm thử và spec — đi và chạy ở bất cứ đâu bạn muốn.",
+    "zipAction": "Xuất ra ZIP",
+    "zipping": "Đang tạo file nén…",
+    "zipHint": "Tải bộ kịch bản được sinh ra dưới dạng file nén, sẵn sàng giải nén vào repository của bạn.",
+    "zipDownloaded": "Đã tải {{filename}}",
+    "zipFailed": "Không tạo được file nén",
     "comingSoon": "Phiên bản 2 — sắp ra mắt",
-    "v2Description": "Giao bộ kiểm thử tự động của dự án này — page object, fixture, dữ liệu kiểm thử và spec — cho đội của bạn. Hai cách để mang đi sẽ có trong Phiên bản 2:",
-    "zipTitle": "Xuất ra ZIP",
-    "zipHint": "tải bộ kịch bản được sinh ra dưới dạng một file nén, sẵn sàng giải nén vào repository của bạn.",
     "remoteTitle": "Xuất lên remote",
-    "remoteHint2": "đẩy trực tiếp lên một git remote do bạn sở hữu, trên nhánh riêng của bạn, để chạy trong CI của mình."
+    "remoteHint": "Đẩy bộ kịch bản trực tiếp lên một git remote do bạn sở hữu, trên nhánh riêng của bạn, để chạy trong CI của mình."
   }
 }

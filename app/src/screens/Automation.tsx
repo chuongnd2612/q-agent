@@ -732,10 +732,10 @@ export function Automation() {
         />
       )}
 
-      {/* Export the project — Version 2, currently a coming-soon placeholder (#680).
+      {/* Export the project: ZIP now (v1), git remote in v2 (#686).
           Only for a project-backed run: a legacy spec has no
           `projectId`, so there is no git repo to push and the panel is hidden. */}
-      <ExportProjectPanel projectId={exportableProjectId} />
+      <ExportProjectPanel runId={runId} projectId={exportableProjectId} />
 
       {thinking && <ThinkingBanner runCode={run?.code} thinkStep={thinkStep} />}
 

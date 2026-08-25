@@ -860,3 +860,125 @@ def test_export_writes_an_audit_entry_without_the_pat(client, db_session, tmp_pa
     assert SECRET_PAT not in f"{rows[0].detail}{rows[0].target}{rows[0].action}{rows[0].meta}"
     # The audited remote is the redacted form, so the audit log is safe to read.
     assert (rows[0].detail or {}).get("branch") == BRANCH
+
+
+# ---------------------------------------------------------------------------
+# Export to ZIP — the v1 export (#686)
+# ---------------------------------------------------------------------------
+#
+# The push above is v2 and needs a connection, a PAT, a branch policy and a
+# network. A ZIP needs none of them, and that is the whole point: the thing being
+# defended here is the *contents* — what a customer does and does not receive.
+
+
+def _zip_names(payload: bytes) -> set[str]:
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return set(archive.namelist())
+
+
+def test_the_zip_carries_the_whole_suite_including_specs(db_session):
+    """The specs ARE the export.
+
+    `bundle_for_agent` excludes `tests/**` because a run stages only its own specs;
+    reusing that exclusion here would ship a library with nothing to run.
+    """
+    project = _project(db_session)
+    spec = aps.project_dir(project) / "tests" / "SUR-1" / "SUR-1-TC-01.spec.ts"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text("test('login', async () => {});\n", encoding="utf-8")
+
+    names = _zip_names(export_service.export_to_zip(project))
+
+    top = export_service._zip_stem(project)
+    assert f"{top}/tests/SUR-1/SUR-1-TC-01.spec.ts" in names
+    assert f"{top}/pages/LoginPage.ts" in names
+
+
+def test_the_zip_never_carries_node_modules_git_or_server_side_plans(db_session):
+    """Three exclusions, three different reasons — so each is asserted separately.
+
+    `node_modules` is installed on the other side; `.git` would make a source drop
+    a history transplant; `.qagent` is Q-Agent's own plans and inventory, which the
+    customer has no business receiving.
+    """
+    project = _project(db_session)
+    root = aps.project_dir(project)
+    for relative in ("node_modules/pkg/index.js", ".qagent/plans/plan.json"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+
+    names = _zip_names(export_service.export_to_zip(project))
+
+    assert not any("node_modules" in name for name in names)
+    assert not any(name.split("/")[1:2] == [".qagent"] for name in names), names
+    assert not any("/.git/" in name for name in names)
+    # A negative control for the negatives above: the walk really did see files.
+    assert any(name.endswith("pages/LoginPage.ts") for name in names)
+
+
+def test_everything_is_nested_under_one_top_level_directory(db_session):
+    """Otherwise unzipping scatters a Playwright project across the user's cwd."""
+    project = _project(db_session)
+
+    names = _zip_names(export_service.export_to_zip(project))
+
+    tops = {name.split("/", 1)[0] for name in names}
+    assert tops == {export_service._zip_stem(project)}
+    # A slug is a PATH ("key/repo"), so the flattening is the point: a slash here
+    # would split the top level in two, and in the filename it is not a filename.
+    assert "/" not in export_service._zip_stem(project)
+
+
+def test_the_same_commit_exports_byte_identically(db_session):
+    """Determinism is what makes "did anything change?" answerable by diffing two
+    downloads — mtimes would otherwise make every export unique."""
+    project = _project(db_session)
+
+    assert export_service.export_to_zip(project) == export_service.export_to_zip(project)
+
+
+def test_the_filename_pins_the_commit(db_session):
+    """A suite is regenerated as work proceeds; two exports of "the same project"
+    are otherwise indistinguishable in a downloads folder."""
+    project = _project(db_session)
+
+    name = export_service.zip_filename(project)
+
+    assert name.startswith(export_service._zip_stem(project) + "-")
+    assert "/" not in name
+    assert name.endswith(".zip")
+    assert aps.head_commit(project)[:8] in name
+
+
+def test_an_empty_project_is_refused_rather_than_exported_empty(db_session, tmp_path, monkeypatch):
+    """A valid, empty archive is the worst answer: it looks like it worked."""
+    project = _project(db_session)
+    # Point the project at an empty directory rather than deleting its tree: on
+    # Windows git marks objects read-only and rmtree fails, which would make this
+    # test about the filesystem instead of about the refusal.
+    empty = tmp_path / "empty-project"
+    empty.mkdir()
+    monkeypatch.setattr(export_service.aps, "project_dir", lambda _p: empty)
+
+    with pytest.raises(export_service.ExportError) as excinfo:
+        export_service.export_to_zip(project)
+
+    assert excinfo.value.code == "empty_project"
+
+
+def test_the_zip_export_needs_no_connection_and_no_pat(db_session):
+    """v1's reason for existing: none of the plumbing the push path requires.
+
+    `_connection` is deliberately NOT called here — the push refuses without it,
+    and this must not.
+    """
+    project = _project(db_session)
+
+    payload = export_service.export_to_zip(project)
+
+    assert payload[:2] == b"PK", "not a zip"
+    assert len(payload) > 0

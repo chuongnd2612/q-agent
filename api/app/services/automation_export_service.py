@@ -33,7 +33,9 @@ export path adds no edit surface to the file the rest of the epic is changing.
 
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -51,6 +53,7 @@ __all__ = [
     "export_credentials",
     "export_preflight",
     "export_to_remote",
+    "export_to_zip",
     "redact_remote",
 ]
 
@@ -455,3 +458,93 @@ def export_to_remote(
         # cheap belt-and-braces that keeps this true if that ever changes.
         "detail": scrub(output, pat) or f"Pushed {sha[:8]} to '{branch}' on {redacted}.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Export to a ZIP the user downloads (#686, v1)
+# ---------------------------------------------------------------------------
+#
+# The remote push above is v2. This is v1, and it is deliberately the simpler
+# thing: a ZIP needs no repository connection, no PAT, no branch policy and no
+# network at all, so none of the four rules that make the push path delicate
+# apply to it. What the two share is the *contents* — the whole automation suite,
+# which is the thing the customer owns.
+
+
+def _zip_stem(project: AutomationProject) -> str:
+    """A single flat name for the archive and its top-level directory.
+
+    ``project.slug`` is a *path* (``"Surency-Platform/web"`` — key over repo), which
+    is fine on disk and wrong in both places here: a slash in the download filename
+    is not a filename at all, and inside the archive it would silently split the top
+    level in two.
+    """
+    return "qagent-automation-" + project.slug.strip("/").replace("/", "-")
+
+
+def zip_filename(project: AutomationProject) -> str:
+    """The download's filename: identifies the project and pins the commit.
+
+    The short SHA matters because the suite is regenerated as work proceeds — two
+    exports of "the same project" are otherwise indistinguishable in a downloads
+    folder, and the one you kept is not necessarily the one you meant.
+    """
+    commit = (aps.head_commit(project) or "").strip()[:8]
+    stem = _zip_stem(project)
+    return f"{stem}-{commit}.zip" if commit else f"{stem}.zip"
+
+
+def export_to_zip(project: AutomationProject) -> bytes:
+    """The project's automation suite as a ZIP archive, built in memory.
+
+    Contents follow the project's own file walk, which already excludes
+    ``node_modules`` (installed on the other side, never shipped), ``.git`` (the
+    export is a source drop, not a history transplant) and ``.qagent`` (server-side
+    plans and inventory the customer has no business receiving). Unlike
+    :func:`automation_project_service.bundle_for_agent`, ``tests/**`` **is**
+    included — the specs are the point of an export, where for the agent they are
+    staged per run instead.
+
+    Everything is nested under one top-level directory named for the project, so
+    unzipping cannot scatter files across the user's working directory.
+
+    Files are added in sorted order with a fixed timestamp, so exporting the same
+    commit twice produces byte-identical archives — which is what makes "did
+    anything actually change?" answerable by comparing two downloads.
+
+    Raises:
+        ExportError: when the project has no files on disk yet, which is a clearer
+            answer than handing back a valid, empty archive.
+    """
+    root = aps.project_dir(project)
+    files = aps._project_files(root) if root.is_dir() else []
+    if not files:
+        raise ExportError(
+            "empty_project",
+            "This automation project has no files to export yet — generate its "
+            "automation first, then export.",
+        )
+
+    top = _zip_stem(project)
+    buffer = io.BytesIO()
+    # DEFLATE, not STORE: a Playwright suite is all text and compresses ~4x, and
+    # this archive is streamed through a response.
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            relative = path.relative_to(root).as_posix()
+            # Fixed mtime — see the determinism note above. ZIP's epoch starts at
+            # 1980, so this is the earliest legal value rather than an arbitrary one.
+            info = zipfile.ZipInfo(f"{top}/{relative}", date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            try:
+                archive.writestr(info, path.read_bytes())
+            except OSError as exc:  # pragma: no cover - unreadable file mid-walk
+                logger.warning("export_to_zip: skipping unreadable {}: {}", relative, exc)
+    logger.info(
+        "exported automation project {} as a zip ({} files, {} bytes)",
+        project.id,
+        len(files),
+        buffer.tell(),
+    )
+    return buffer.getvalue()
