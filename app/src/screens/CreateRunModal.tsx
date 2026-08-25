@@ -1,15 +1,24 @@
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
-import { ALL_TICKETS_PAGE_SIZE, useCreateRun, useTickets } from "@/hooks/queries";
+import {
+  ALL_TICKETS_PAGE_SIZE,
+  useCreateRun,
+  useProjectEnvironments,
+  useTickets,
+} from "@/hooks/queries";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
 
-const FRAMEWORKS = ["Playwright", "Selenium"];
-const ENVS = ["Staging", "Production", "Local"];
+/** The only framework there is. Selenium used to be offered here and was
+ *  persisted to `Run.framework`, but every spec is stamped "Playwright" on the
+ *  way in and only Playwright ever executes — so picking it silently gave you
+ *  Playwright anyway (#671). Shown as a static pill, not a choice. */
+const FRAMEWORK = "Playwright";
 
 const segStyle = (on: boolean) =>
   "flex-1 rounded-[10px] border-none px-2 py-[9px] text-[12.5px] font-semibold cursor-pointer " +
@@ -20,7 +29,6 @@ export function CreateRunModal() {
   const open = useUI((s) => s.createRunOpen);
   const closeCreateRun = useUI((s) => s.closeCreateRun);
   const runScope = useUI((s) => s.runScope);
-  const runFramework = useUI((s) => s.runFramework);
   const runEnv = useUI((s) => s.runEnv);
   const runWorkers = useUI((s) => s.runWorkers);
   const runRetry = useUI((s) => s.runRetry);
@@ -31,11 +39,29 @@ export function CreateRunModal() {
   const selectedSprint = useUI((s) => s.selectedSprint);
 
   const isMobile = useIsMobile();
+  // ENVIRONMENT used to be a hardcoded Staging/Production/Local. The backend
+  // picks a run's base URL by case-insensitive NAME MATCH against the project's
+  // own environments, which are free text — so a project whose environments are
+  // "UAT"/"Dev" matched none of the three chips and fell back to the project
+  // base URL with no warning, sending the run at the wrong host (#671).
+  const { data: environments } = useProjectEnvironments();
+  const envOptions = environments ?? [];
   const { data: ticketsPage } = useTickets({ pageSize: ALL_TICKETS_PAGE_SIZE });
   const tickets = ticketsPage?.items;
   const user = useAuth((s) => s.user);
   const userName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "";
   const createRun = useCreateRun();
+
+  // Keep the selection inside the real set: default to the first environment,
+  // and clear a stale one rather than submitting a name nothing matches.
+  useEffect(() => {
+    if (!open || environments === undefined) return;
+    if (envOptions.length === 0) {
+      if (runEnv !== "") setRunField("runEnv", "");
+    } else if (!envOptions.includes(runEnv)) {
+      setRunField("runEnv", envOptions[0]);
+    }
+  }, [open, environments, envOptions, runEnv, setRunField]);
 
   if (!open) return null;
 
@@ -62,7 +88,8 @@ export function CreateRunModal() {
 
   const createSummary =
     (runScope === "selected" ? `${selN} selected tickets` : runScope === "sprint" ? `${sprintN} sprint tickets` : `${assignedN} assigned tickets`) +
-    ` · ${runFramework} · ${runEnv}`;
+    ` · ${FRAMEWORK}` +
+    (runEnv ? ` · ${runEnv}` : "");
 
   const handleStart = () => {
     if (!canStart) return;
@@ -70,7 +97,7 @@ export function CreateRunModal() {
       {
         scope: runScope,
         ticketIds: runScope === "selected" ? Object.keys(selected).filter((k) => selected[k]) : [],
-        framework: runFramework,
+        framework: FRAMEWORK,
         browser: runBrowser,
         env: runEnv,
         workers: runWorkers,
@@ -160,22 +187,27 @@ export function CreateRunModal() {
             <div>
               <div className="mb-2.5 text-[12px] font-semibold text-[#9494a6]">FRAMEWORK</div>
               <div className="flex gap-2">
-                {FRAMEWORKS.map((f) => (
-                  <button key={f} onClick={() => setRunField("runFramework", f)} className={segStyle(runFramework === f)}>
-                    {f}
-                  </button>
-                ))}
+                <span className="flex-1 rounded-[10px] bg-[rgba(139,92,246,.2)] px-2 py-[9px] text-center text-[12.5px] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(139,92,246,.3)]">
+                  {FRAMEWORK}
+                </span>
               </div>
             </div>
             <div>
               <div className="mb-2.5 text-[12px] font-semibold text-[#9494a6]">ENVIRONMENT</div>
-              <div className="flex gap-2">
-                {ENVS.map((e) => (
-                  <button key={e} onClick={() => setRunField("runEnv", e)} className={segStyle(runEnv === e)}>
-                    {e}
-                  </button>
-                ))}
-              </div>
+              {envOptions.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {envOptions.map((e) => (
+                    <button key={e} onClick={() => setRunField("runEnv", e)} className={segStyle(runEnv === e)}>
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[10px] border border-white/[0.08] bg-white/[0.03] px-3 py-[9px] text-[12px] leading-relaxed text-ink-dim">
+                  No environments configured — this run uses each project's base URL. Add
+                  environments in Project settings.
+                </div>
+              )}
             </div>
           </div>
 

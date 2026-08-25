@@ -154,6 +154,48 @@ def get_config_visible_to(db: Session, key: str, user: "User | None") -> Project
     ).first()
 
 
+def environment_names(db: Session, user: "User | None") -> list[str]:
+    """Every distinct environment name across the configs ``user`` can see (#671).
+
+    This is what the Create-Run modal offers as ENVIRONMENT. It has to come from
+    here rather than a fixed list, because :func:`build_context` picks the
+    per-environment base URL by **case-insensitive name match** against these
+    very rows — and on no match it falls through to the project base URL
+    silently. Offering a name that matches nothing therefore sends the run at
+    the wrong host with no warning, which is the bug this fixes.
+
+    Visibility follows :func:`get_config_visible_to` exactly: a user's own row
+    wins over the shared/legacy one for the same key, and another user's row is
+    never read. Order is first-seen, deduplicated case-insensitively so "UAT"
+    and "uat" (which the matcher cannot tell apart) collapse to one chip.
+    """
+    query = db.query(ProjectConfig)
+    if user is not None:
+        query = query.filter(
+            (ProjectConfig.owner_id == user.id) | (ProjectConfig.owner_id.is_(None))
+        )
+
+    # Per key, the owned row shadows the shared one — mirroring the resolution
+    # order in `get_config_visible_to`, so this never surfaces an environment the
+    # run itself would not resolve against.
+    chosen: dict[str, ProjectConfig] = {}
+    for row in query.all():
+        current = chosen.get(row.key)
+        if current is None or (current.owner_id is None and row.owner_id is not None):
+            chosen[row.key] = row
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in chosen.values():
+        for env in row.environments or []:
+            name = str(env.get("name", "")).strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            names.append(name)
+    return names
+
+
 def upsert_config_for_owner(
     db: Session, key: str, patch: dict[str, Any], owner_id: int | None
 ) -> ProjectConfig:
