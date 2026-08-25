@@ -10,6 +10,7 @@ import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
 import { HubConnections } from "@/components/settings/HubConnections";
 import { ProviderGroup } from "@/components/settings/ProviderGroup";
 import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
+import { FEATURES } from "@/config/features";
 import { ToggleRow } from "@/components/settings/ToggleRow";
 import { useProviders, useSettings, useUpdateSettings } from "@/hooks/queries";
 import { AI_MODEL_OPTIONS } from "@/lib/models";
@@ -291,18 +292,26 @@ export function Settings() {
                   </span>
                 </div>
               </div>
-              <ToggleRow
-                title={t("execution.retryFlaky.title")}
-                description={t("execution.retryFlaky.description")}
-                checked={draft.retryFlaky}
-                onChange={(v) => set({ retryFlaky: v })}
-              />
-              <ToggleRow
-                title={t("execution.screenshotOnFail.title")}
-                description={t("execution.screenshotOnFail.description")}
-                checked={draft.screenshotOnFail}
-                onChange={(v) => set({ screenshotOnFail: v })}
-              />
+              {/* Both persist correctly and neither is ever read back — the
+                  Playwright config template has no `retries:` key and hardcodes
+                  `screenshot: 'on'`. Hidden until it does (#672); the setting
+                  itself is untouched. */}
+              {FEATURES.retryFlaky && (
+                <ToggleRow
+                  title={t("execution.retryFlaky.title")}
+                  description={t("execution.retryFlaky.description")}
+                  checked={draft.retryFlaky}
+                  onChange={(v) => set({ retryFlaky: v })}
+                />
+              )}
+              {FEATURES.screenshotOnFail && (
+                <ToggleRow
+                  title={t("execution.screenshotOnFail.title")}
+                  description={t("execution.screenshotOnFail.description")}
+                  checked={draft.screenshotOnFail}
+                  onChange={(v) => set({ screenshotOnFail: v })}
+                />
+              )}
               <ToggleRow
                 title={t("execution.autoAnnotate.title")}
                 description={t("execution.autoAnnotate.description")}
