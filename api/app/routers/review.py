@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_dep
+from app.deps_hub import use_hub_credential
 from app.models.run import Run
 from app.models.testcase import TestCase
 from app.models.user import User
@@ -137,9 +139,17 @@ def set_case_approval(
 
 @router.post("/cases/{case_id}/regenerate", response_model=TestCaseOut)
 def regenerate_single_case(
-    case_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> TestCase:
     case = _get_case_or_404(db, case_id, user)
+    # Same hub credential the run resolved, re-resolved with this request's fresh
+    # token (#689) — Q-Agent has no credential of its own to fall back on while it is
+    # connected to the hub, and material pinned at run start is routinely expired by
+    # the time someone takes a later action on the run.
+    use_hub_credential(case.run_id, hub_token)
     try:
         return regenerate_case(db, case)
     except ClaudeError as exc:

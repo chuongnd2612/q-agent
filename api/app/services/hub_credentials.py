@@ -64,6 +64,7 @@ __all__ = [
     "SOURCE_LOCAL",
     "capture_rotated_credential",
     "capture_rotated_credential_raw",
+    "ensure_run_credential",
     "prepare_run_credential",
 ]
 
@@ -275,6 +276,36 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
         config_dir.name,
     )
     return SOURCE_HUB
+
+
+def ensure_run_credential(run_id: int, hub_token: str | None) -> str:
+    """Re-resolve the run's Claude credential for an action taken AFTER run start.
+
+    Q-Agent has no way to configure a Claude credential of its own once it is
+    connected to the hub — the hub is the only source (#607) — so a post-run action
+    must resolve from the hub exactly like the run's own start did, and not inherit
+    whatever was pinned to disk hours ago (#689).
+
+    Two things made the pinned material an unreliable basis for a later action:
+
+    * The run's **grant expires** (240 minutes by default), and once it has, the
+      background re-resolve in :func:`refresh_run_credential` cannot ask the hub at
+      all — the run is stuck on material that only gets older.
+    * An **access token lives hours**, so by the time someone comes back to publish
+      results, the pinned copy is routinely past its expiry.
+
+    A request, unlike a worker, has the one thing that fixes both: the browser's
+    freshly-minted hub token. So this is simply :func:`prepare_run_credential` again
+    — same resolution, same refusal policy, and it re-mints the grant, which also
+    re-arms any background worker the request goes on to start.
+
+    Raises:
+        HubCredentialRefusedError: when the hub authoritatively has no usable
+            credential, or the request carried no hub token while the hub is the
+            only source. The caller turns this into a 409 for the *action* — never
+            a change to the run's status, which has long since finished.
+    """
+    return prepare_run_credential(run_id, hub_token)
 
 
 # --------------------------------------------------------------- grants (#667)

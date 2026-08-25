@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_dep
+from app.deps_hub import use_hub_credential
 from app.models.comment import TicketComment
 from app.models.knowledge import ProjectKnowledge
 from app.models.report import Report
@@ -175,9 +177,19 @@ def _summarize_ticket(
 
 @router.post("/runs/{run_id}/comments/prepare", response_model=list[TicketCommentOut])
 def prepare_comments(
-    run_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> list[TicketComment]:
     run = get_owned_or_404(db, Run, run_id, user)
+    # Resolve the Claude credential from the hub, with THIS request's fresh token,
+    # exactly as the run's own start did (#689). Publishing happens whenever the
+    # person gets round to it — often hours after the run — by which point the
+    # material pinned at run start is past its expiry and the run's grant has died,
+    # so the background re-resolve cannot renew it either. That is what surfaced as
+    # `Not logged in · Please run /login` → HTTP 502 on this very endpoint.
+    use_hub_credential(run_id, hub_token)
     # Preparing comments is a deliberate, synchronous post-run action. If the run
     # was previously cancelled, its in-memory cancel event lingers (run_control
     # only clears it on retry/delete), and register_process would INSTANTLY SIGKILL

@@ -27,6 +27,8 @@ from app import db as db_module
 from app.config import settings
 from app.db import get_db
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_dep
+from app.deps_hub import use_hub_credential
 from app.logging import logger
 from app.models.agent_device import AgentDevice
 from app.models.automation_project import AutomationFile, AutomationProject
@@ -1165,6 +1167,7 @@ def generate_automation(
     force: bool = False,
     db: Session = Depends(get_db),
     user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> list[dict]:
     """Kick off automation spec generation for a run's approved, non-Manual cases.
 
@@ -1179,6 +1182,13 @@ def generate_automation(
             case is regenerated, overwriting existing specs.
     """
     run = get_owned_or_404(db, Run, run_id, user)
+    # Resolve the Claude credential from the hub with THIS request's fresh token,
+    # exactly as the run's own start did (#689). Q-Agent cannot configure a Claude
+    # credential of its own while connected to the hub, so an action must not inherit
+    # material pinned at run start: by now it is routinely past its expiry, and once
+    # the run's grant has died the background re-resolve cannot renew it either.
+    # This also re-mints the grant, which re-arms the worker started below.
+    use_hub_credential(run.id, hub_token)
 
     # Guard against double-triggering while a pass is already running.
     if run_id not in _generating:
@@ -1319,6 +1329,7 @@ def regenerate_case_spec(
     body: AutomationSpecRegenerate = Body(default_factory=AutomationSpecRegenerate),
     db: Session = Depends(get_db),
     user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> dict:
     """Synchronously regenerate the automation spec for a single test case.
 
@@ -1328,6 +1339,13 @@ def regenerate_case_spec(
     unchanged — a comment can never bypass quality gating.
     """
     case, run = _get_case_and_run_or_404(db, case_id, user)
+    # Resolve the Claude credential from the hub with THIS request's fresh token,
+    # exactly as the run's own start did (#689). Q-Agent cannot configure a Claude
+    # credential of its own while connected to the hub, so an action must not inherit
+    # material pinned at run start: by now it is routinely past its expiry, and once
+    # the run's grant has died the background re-resolve cannot renew it either.
+    # This also re-mints the grant, which re-arms the worker started below.
+    use_hub_credential(run.id, hub_token)
     comment = (body.comment or "").strip() or None
 
     # Run OFF-REQUEST: a regeneration makes multiple sequential Claude calls
@@ -1682,6 +1700,7 @@ def chat_edit_spec(
     payload: SpecChatRequest,
     db: Session = Depends(get_db),
     user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> dict:
     """Edit the case's spec via a reviewer chat instruction (Claude, off-request).
 
@@ -1692,6 +1711,13 @@ def chat_edit_spec(
     message is empty.
     """
     case, run = _get_case_and_run_or_404(db, case_id, user)
+    # Resolve the Claude credential from the hub with THIS request's fresh token,
+    # exactly as the run's own start did (#689). Q-Agent cannot configure a Claude
+    # credential of its own while connected to the hub, so an action must not inherit
+    # material pinned at run start: by now it is routinely past its expiry, and once
+    # the run's grant has died the background re-resolve cannot renew it either.
+    # This also re-mints the grant, which re-arms the worker started below.
+    use_hub_credential(run.id, hub_token)
     message = (payload.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
@@ -1717,7 +1743,10 @@ def chat_edit_spec(
 
 @router.post("/cases/{case_id}/spec/heal")
 def heal_case_spec(
-    case_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> dict:
     """Start a self-heal loop for one case: run its spec and, while it fails,
     feed the failure back to Claude to regenerate + re-run, up to a cap.
@@ -1727,6 +1756,13 @@ def heal_case_spec(
     already healing (they share the run's spec dir).
     """
     case, run = _get_case_and_run_or_404(db, case_id, user)
+    # Resolve the Claude credential from the hub with THIS request's fresh token,
+    # exactly as the run's own start did (#689). Q-Agent cannot configure a Claude
+    # credential of its own while connected to the hub, so an action must not inherit
+    # material pinned at run start: by now it is routinely past its expiry, and once
+    # the run's grant has died the background re-resolve cannot renew it either.
+    # This also re-mints the grant, which re-arms the worker started below.
+    use_hub_credential(run.id, hub_token)
     spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
     if spec is None:
         raise HTTPException(status_code=404, detail="Generate a spec for this case first")
