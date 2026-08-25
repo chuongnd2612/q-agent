@@ -898,8 +898,6 @@ export interface BackendLogOut {
 
 export interface BackendLogStats {
   logVolume: number;
-  servicesHealthy: number;
-  servicesTotal: number;
   warnings: number;
   errors: number;
 }

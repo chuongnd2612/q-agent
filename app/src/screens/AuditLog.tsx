@@ -147,6 +147,11 @@ export function AuditLog() {
           </div>
           <h1 className="m-0 text-[28px] font-black tracking-tight">{t("audit.title")}</h1>
         </div>
+        {/* Export and Clear both act on the activity events (`rows`), and there is
+            no backend operation that clears the in-memory log buffer — so the
+            toolbar belongs to the activity tab only. Backend logs carry their own
+            controls (level, service, live tail) above the terminal. */}
+        {view === "activity" && (
         <div className="flex items-center gap-2">
           <button
             onClick={exportCsv}
@@ -162,6 +167,7 @@ export function AuditLog() {
             <Trash2 size={15} /> {clearEvents.isPending ? t("audit.clearing") : t("audit.clearLog")}
           </button>
         </div>
+        )}
       </div>
 
       <div className="mb-4 flex gap-2">
@@ -420,13 +426,8 @@ export function AuditLog() {
         </>
       ) : (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-3.5 md:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3.5 md:grid-cols-3">
             <StatCard label={t("audit.stats.logVolume")} value={(logStats?.logVolume ?? 0).toLocaleString()} color="#67e8f9" />
-            <StatCard
-              label={t("audit.stats.servicesHealthy")}
-              value={`${logStats?.servicesHealthy ?? 0} / ${logStats?.servicesTotal ?? 0}`}
-              color="#6ee7b7"
-            />
             <StatCard label={t("audit.stats.warnings1h")} value={String(logStats?.warnings ?? 0)} color="#fbbf24" />
             <StatCard label={t("audit.stats.errors1h")} value={String(logStats?.errors ?? 0)} color="#fb7185" />
           </div>
@@ -491,7 +492,7 @@ export function AuditLog() {
               <span className="h-[11px] w-[11px] shrink-0 rounded-full" style={{ background: "#f43f5e" }} />
               <span className="h-[11px] w-[11px] shrink-0 rounded-full" style={{ background: "#fbbf24" }} />
               <span className="h-[11px] w-[11px] shrink-0 rounded-full" style={{ background: "#10b981" }} />
-              <span className="ml-2 truncate font-mono text-[12px] text-[#8b8b9e]">q-agent · kubectl logs -f --all-services</span>
+              <span className="ml-2 truncate font-mono text-[12px] text-[#8b8b9e]">q-agent · api · in-memory log buffer</span>
               <span className="ml-auto shrink-0 font-mono text-[11px] text-[#7a7a8c]">{t("audit.lines", { count: logRows.length })}</span>
             </div>
             <div className="max-h-[520px] overflow-y-auto font-mono text-[12px]">

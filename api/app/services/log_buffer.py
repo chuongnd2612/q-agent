@@ -156,13 +156,10 @@ def list_logs(level: str = "all", service: str = "all", q: str = "") -> list[dic
 
 def log_stats() -> dict[str, int]:
     """Aggregate counts over the current buffer."""
-    services = {line["service"] for line in _BUFFER}
     warnings = sum(1 for line in _BUFFER if line["level"] == "warn")
     errors = sum(1 for line in _BUFFER if line["level"] == "error")
     return {
         "logVolume": len(_BUFFER),
-        "servicesHealthy": len(services),
-        "servicesTotal": len(services),
         "warnings": warnings,
         "errors": errors,
     }
