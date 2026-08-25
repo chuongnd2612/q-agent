@@ -632,7 +632,7 @@ function InviteUserModal({
               </Button>
             </div>
             <p className="mb-0 mt-2.5 text-[11.5px] leading-relaxed text-faint">
-              {t("users.invite.linkHint")}
+              {t("users.invite.linkHint", { email: issued.email })}
             </p>
             <div className="mt-5 flex items-center justify-end">
               <Button type="button" variant="primary" onClick={onClose}>
