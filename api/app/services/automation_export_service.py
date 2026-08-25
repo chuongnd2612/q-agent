@@ -494,6 +494,18 @@ def zip_filename(project: AutomationProject) -> str:
     return f"{stem}-{commit}.zip" if commit else f"{stem}.zip"
 
 
+#: Output of *running* the suite, not the suite. The project's file walk keeps these
+#: because they legitimately live in the tree, but an export is a source drop: shipping
+#: a customer last night's reporter output invites them to read a stale result as
+#: theirs. Excluded here only — the agent bundle and the DB mirror are unaffected.
+_RUN_ARTIFACTS = ("results.json",)
+_RUN_ARTIFACT_DIRS = ("playwright-report/", "test-results/", "blob-report/")
+
+
+def _is_run_artifact(relative: str) -> bool:
+    return relative in _RUN_ARTIFACTS or relative.startswith(_RUN_ARTIFACT_DIRS)
+
+
 def export_to_zip(project: AutomationProject) -> bytes:
     """The project's automation suite as a ZIP archive, built in memory.
 
@@ -504,6 +516,10 @@ def export_to_zip(project: AutomationProject) -> bytes:
     :func:`automation_project_service.bundle_for_agent`, ``tests/**`` **is**
     included — the specs are the point of an export, where for the agent they are
     staged per run instead.
+
+    Run artifacts (``results.json``, ``playwright-report/``, ``test-results/``) are
+    excluded on top of that — they are the output of *running* the suite, not the
+    suite, and a stale reporter file in a customer's download reads as their result.
 
     Everything is nested under one top-level directory named for the project, so
     unzipping cannot scatter files across the user's working directory.
@@ -517,7 +533,11 @@ def export_to_zip(project: AutomationProject) -> bytes:
             answer than handing back a valid, empty archive.
     """
     root = aps.project_dir(project)
-    files = aps._project_files(root) if root.is_dir() else []
+    files = [
+        path
+        for path in (aps._project_files(root) if root.is_dir() else [])
+        if not _is_run_artifact(path.relative_to(root).as_posix())
+    ]
     if not files:
         raise ExportError(
             "empty_project",

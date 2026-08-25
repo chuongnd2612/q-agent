@@ -982,3 +982,27 @@ def test_the_zip_export_needs_no_connection_and_no_pat(db_session):
 
     assert payload[:2] == b"PK", "not a zip"
     assert len(payload) > 0
+
+
+def test_run_artifacts_are_not_part_of_a_source_export(db_session):
+    """`results.json` and the report dirs are the output of RUNNING the suite.
+
+    They live in the tree legitimately, so the project's file walk keeps them — but
+    a customer opening a download and reading last night's reporter output as their
+    own result is worse than the file simply being absent.
+    """
+    project = _project(db_session)
+    root = aps.project_dir(project)
+    (root / "results.json").write_text('{"stats": {"expected": 3}}', encoding="utf-8")
+    for relative in ("playwright-report/index.html", "test-results/run/trace.txt"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+
+    names = _zip_names(export_service.export_to_zip(project))
+
+    assert not any(name.endswith("/results.json") for name in names), names
+    assert not any("playwright-report" in name for name in names)
+    assert not any("test-results" in name for name in names)
+    # Negative control: a `.json` at the root is not excluded as a class.
+    assert any(name.endswith("/package.json") for name in names)
