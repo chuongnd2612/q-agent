@@ -26,7 +26,7 @@ from app.models.run import Run
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import CommentEdit, PublishRequest, TicketCommentOut
-from app.services import claude_cli, run_context, run_control
+from app.services import claude_cli, comment_evidence, run_context, run_control
 from app.services.claude_cli import ClaudeError
 from app.services.ownership import get_owned_or_404
 from app.services.publish_service import publish_one
@@ -202,6 +202,11 @@ def prepare_comments(
     ai_failure_analysis = report.data.get("aiFailureAnalysis", "")
     # Resolve once per run — same project KB grounds every ticket's comment.
     project_context = _project_context_block(db, run)
+    # Evidence for every executed case, passes included (#696). Gathered once and
+    # sliced per ticket below; nothing is uploaded here — a draft is cheap and
+    # repeatable, and pushing files into a work item on every regeneration would
+    # litter the ticket. The upload happens on publish.
+    evidence_by_ticket = comment_evidence.collect_for_run(db, run_id, run.owner_id)
 
     tickets = {
         t.external_id: t
@@ -225,10 +230,18 @@ def prepare_comments(
         target_status = (
             _TARGET_STATUS_ALL_PASS if ticket_status == "Passed" else _TARGET_STATUS_ANY_FAIL
         )
+        cases_evidence = evidence_by_ticket.get(ticket_external_id, [])
         try:
             body = _summarize_ticket(
                 ticket_external_id, summary, ai_failure_analysis, run_id, project_context
             )
+            # The prose is the model's; the evidence list is a FACT and is appended by
+            # code. A model that invented a trace file into this list would be worse
+            # than no list, because the list is what a reader trusts enough to go
+            # looking for the file.
+            manifest = comment_evidence.manifest_block(cases_evidence)
+            if manifest:
+                body = body + "\n\n" + manifest
         except ClaudeError as exc:
             raise HTTPException(status_code=502, detail=f"Claude CLI failed: {exc}") from exc
 
@@ -238,11 +251,15 @@ def prepare_comments(
                 TicketComment.ticket_external_id == ticket_external_id,
             )
         ).scalars().first()
+        # Refs, not bytes: a draft may sit for days, and a comment row is not the
+        # place to keep megabytes of video. Resolved back to files on publish.
+        refs = comment_evidence.attachment_refs(cases_evidence)
         if existing is not None:
             existing.body = body
             existing.target_status = target_status
             existing.status = "draft"
             existing.error_message = ""
+            existing.attachments = refs
             comment = existing
         else:
             comment = TicketComment(
@@ -252,6 +269,7 @@ def prepare_comments(
                 body=body,
                 status="draft",
                 target_status=target_status,
+                attachments=refs,
             )
         db.add(comment)
         comments.append(comment)

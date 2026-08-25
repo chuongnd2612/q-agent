@@ -287,8 +287,22 @@ function PublishCard({
           <div className="px-[18px] pb-2 text-[12px] text-danger-soft">{comment.errorMessage}</div>
         )}
         <div className="flex flex-wrap gap-2 p-[0_18px_14px]">
-          <AttachmentChip label="evidence.zip" />
-          <AttachmentChip label="trace.zip" />
+          {/* The real files this comment will attach on publish (#696). There used to
+              be two hardcoded `evidence.zip` / `trace.zip` chips here with nothing
+              behind either — a fake attachment is worse than none, because a reviewer
+              goes looking for it in the work item. */}
+          {comment.attachments.map((file) => (
+            <AttachmentChip
+              key={`${file.caseCode}-${file.filename}`}
+              label={`${file.caseCode} · ${file.filename}`}
+              hint={humanSize(file.sizeBytes)}
+            />
+          ))}
+          {comment.status === "draft" && comment.attachments.length > 0 && (
+            <span className="rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-faint">
+              {t("publish.attachOnPublish", { count: comment.attachments.length })}
+            </span>
+          )}
           {comment.targetStatus && (
             <span className="rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-ink-soft">
               → {comment.targetStatus}
@@ -300,11 +314,21 @@ function PublishCard({
   );
 }
 
-function AttachmentChip({ label }: { label: string }) {
+function AttachmentChip({ label, hint }: { label: string; hint?: string }) {
   return (
     <span className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-ink-soft">
       <FileText size={13} color="#a78bfa" strokeWidth={2} />
       {label}
+      {hint && <span className="text-faint">{hint}</span>}
     </span>
   );
+}
+
+/** Sizes a reviewer can read — the chip's whole job is "is this the big video or the
+ * small screenshot?". */
+function humanSize(bytes: number): string {
+  if (bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

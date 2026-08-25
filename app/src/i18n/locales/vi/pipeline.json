@@ -426,7 +426,8 @@
     },
     "preparing": "Đang chuẩn bị…",
     "prepareComments": "Chuẩn bị bình luận",
-    "summarizing": "Đang tóm tắt kết quả bằng AI…"
+    "summarizing": "Đang tóm tắt kết quả bằng AI…",
+    "attachOnPublish": "Sẽ được tải lên work item khi publish"
   },
   "createLink": {
     "header": {

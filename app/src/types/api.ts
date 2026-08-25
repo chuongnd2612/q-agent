@@ -1034,6 +1034,15 @@ export interface ReportOut {
 }
 
 export type PublishStatus = "draft" | "publishing" | "published" | "failed";
+/** One evidence file a comment will attach when published (#696). A *plan*, not a
+ * result — nothing is uploaded until publish. */
+export interface CommentAttachment {
+  caseCode: string;
+  kind: string;
+  filename: string;
+  sizeBytes: number;
+}
+
 export interface TicketCommentOut {
   id: number;
   runId: number;
@@ -1044,6 +1053,7 @@ export interface TicketCommentOut {
   targetStatus: string;
   externalCommentId: string;
   errorMessage: string;
+  attachments: CommentAttachment[];
 }
 
 export interface SettingsOut {

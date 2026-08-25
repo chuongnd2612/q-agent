@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -534,6 +535,10 @@ class AzureDevOpsAdapter(ProviderAdapter):
         return {"repo": "", "num": url.rsplit("/", 1)[-1], "title": "", "status": "", "url": ""}
 
     # -- Write ------------------------------------------------------------
+    def supports_attachments(self) -> bool:
+        """Azure DevOps can take real file attachments (#696)."""
+        return True
+
     def publish_comment(
         self,
         ticket_external_id: str,
@@ -541,14 +546,91 @@ class AzureDevOpsAdapter(ProviderAdapter):
         *,
         attachments: list[str] | None = None,
     ) -> str:
+        """Post a comment, with each path in ``attachments`` uploaded to the work item.
+
+        Uploading and *linking* are two calls, and both are needed (#696): the upload
+        parks the bytes and returns a URL, and the relation is what makes the file show
+        up under the work item's Attachments — and what makes the URL readable by
+        anyone who can see the ticket. An uploaded-but-unlinked attachment is a URL
+        nobody can find.
+
+        Attachment failures degrade rather than abort. A comment that reaches the
+        ticket without one screenshot is worth far more than no comment at all, and
+        the body says which files failed so nobody goes looking for evidence that
+        never arrived.
+        """
+        uploaded: list[tuple[str, str]] = []
+        failed: list[str] = []
+        for path in attachments or []:
+            file = Path(path)
+            try:
+                url = self._upload_attachment(file)
+                self._link_attachment(ticket_external_id, url, file.name)
+                uploaded.append((file.name, url))
+            except Exception as exc:  # noqa: BLE001 - see the docstring
+                logger.warning("ADO: could not attach {}: {}", file.name, exc)
+                failed.append(file.name)
+
+        text = body
+        if uploaded:
+            links = "".join(f'<li><a href="{url}">{name}</a></li>' for name, url in uploaded)
+            text = f"{body}<br/><b>Attached evidence</b><ul>{links}</ul>"
+        if failed:
+            text = f"{text}<br/><i>Could not attach: {', '.join(failed)}</i>"
+
         with self._client() as client:
             resp = client.post(
                 f"/_apis/wit/workItems/{ticket_external_id}/comments",
                 params={"api-version": "7.1-preview.3"},
-                json={"text": body},
+                json={"text": text},
             )
             resp.raise_for_status()
             return str(resp.json().get("id", ""))
+
+    def _upload_attachment(self, file: Path) -> str:
+        """Upload one file and return its attachment URL.
+
+        Project-scoped: an org-level attachment cannot be related to a work item in a
+        project the caller did not name.
+        """
+        data = file.read_bytes()
+        project = self.project
+        prefix = f"/{project}" if project else ""
+        with self._client() as client:
+            resp = client.post(
+                f"{prefix}/_apis/wit/attachments",
+                params={"fileName": file.name, "api-version": API_VERSION},
+                content=data,
+                # Overrides the client's JSON default — the body is bytes, and ADO
+                # answers 400 to a binary payload announced as JSON.
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            resp.raise_for_status()
+            url = str(resp.json().get("url") or "")
+        if not url:
+            raise ProviderError(f"Azure DevOps returned no attachment URL for {file.name}")
+        return url
+
+    def _link_attachment(self, ticket_external_id: str, url: str, name: str) -> None:
+        """Relate an uploaded attachment to the work item."""
+        with self._client() as client:
+            resp = client.patch(
+                f"/_apis/wit/workitems/{ticket_external_id}",
+                params={"api-version": API_VERSION},
+                headers={"Content-Type": "application/json-patch+json"},
+                json=[
+                    {
+                        "op": "add",
+                        "path": "/relations/-",
+                        "value": {
+                            "rel": "AttachedFile",
+                            "url": url,
+                            "attributes": {"comment": f"Q-Agent evidence: {name}"},
+                        },
+                    }
+                ],
+            )
+            resp.raise_for_status()
 
     def update_status(self, ticket_external_id: str, target_status: str) -> None:
         with self._client() as client:

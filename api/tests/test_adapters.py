@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 import pytest
@@ -539,3 +540,117 @@ def test_github_list_repos_falls_back_to_single_repo():
     )
     repos = adapter.list_repos()
     assert [r["name"] for r in repos] == ["GiftcardMarketplace"]
+
+
+# --------------------------------------------- ADO comment attachments (#696)
+#
+# Uploading and *linking* are two calls, and both are needed: the upload parks the
+# bytes and returns a URL, and the relation is what puts the file under the work
+# item's Attachments — and what makes that URL readable by anyone who can see the
+# ticket. An uploaded-but-unlinked attachment is a URL nobody can find, which is a
+# failure that looks like success from the caller's side.
+
+_ORG = "https://dev.azure.com/myorg"
+_ATTACH = f"{_ORG}/MyProj/_apis/wit/attachments"
+_COMMENTS = f"{_ORG}/_apis/wit/workItems/1377/comments"
+_WORKITEM = f"{_ORG}/_apis/wit/workitems/1377"
+
+
+def _ado() -> AzureDevOpsAdapter:
+    return AzureDevOpsAdapter(
+        config={"orgUrl": _ORG, "project": "MyProj"},
+        secrets={"pat": "secret-pat"},
+    )
+
+
+@respx.mock
+def test_ado_uploads_links_and_references_each_attachment(tmp_path):
+    shot = tmp_path / "TC-01-screenshot.png"
+    shot.write_bytes(b"PNG-BYTES")
+
+    upload = respx.post(_ATTACH).mock(
+        return_value=httpx.Response(201, json={"id": "abc", "url": f"{_ATTACH}/abc"})
+    )
+    link = respx.patch(_WORKITEM).mock(return_value=httpx.Response(200, json={"id": 1377}))
+    comment = respx.post(_COMMENTS).mock(return_value=httpx.Response(200, json={"id": 55}))
+
+    external_id = _ado().publish_comment("1377", "1/1 passed", attachments=[str(shot)])
+
+    assert external_id == "55"
+    # The bytes went up, under the case-prefixed name the manifest promised.
+    assert upload.called
+    assert upload.calls.last.request.content == b"PNG-BYTES"
+    assert upload.calls.last.request.url.params["fileName"] == "TC-01-screenshot.png"
+    # ...and were RELATED to the work item, or nobody could find them.
+    assert link.called
+    relation = json.loads(link.calls.last.request.content)[0]
+    assert relation["value"]["rel"] == "AttachedFile"
+    assert relation["value"]["url"] == f"{_ATTACH}/abc"
+    # ...and the comment points at them.
+    body = json.loads(comment.calls.last.request.content)["text"]
+    assert "1/1 passed" in body, "the prepared body was replaced rather than extended"
+    assert f'href="{_ATTACH}/abc"' in body
+
+
+@respx.mock
+def test_ado_uploads_binary_as_octet_stream(tmp_path):
+    """The client's default is `application/json`; ADO answers 400 to binary
+    announced as JSON, so the header has to be overridden per call."""
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"PNG")
+    upload = respx.post(_ATTACH).mock(
+        return_value=httpx.Response(201, json={"url": f"{_ATTACH}/abc"})
+    )
+    respx.patch(_WORKITEM).mock(return_value=httpx.Response(200, json={}))
+    respx.post(_COMMENTS).mock(return_value=httpx.Response(200, json={"id": 1}))
+
+    _ado().publish_comment("1377", "body", attachments=[str(shot)])
+
+    assert upload.calls.last.request.headers["content-type"] == "application/octet-stream"
+
+
+@respx.mock
+def test_ado_still_posts_the_comment_when_an_attachment_fails(tmp_path):
+    """A comment that reaches the ticket without one screenshot is worth far more
+    than no comment at all — but the body has to say which file is missing, so nobody
+    goes looking for evidence that never arrived."""
+    good, bad = tmp_path / "good.png", tmp_path / "bad.png"
+    good.write_bytes(b"OK")
+    bad.write_bytes(b"NO")
+
+    def upload_response(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("fileName") == "bad.png":
+            return httpx.Response(500, text="nope")
+        return httpx.Response(201, json={"url": f"{_ATTACH}/ok"})
+
+    respx.post(_ATTACH).mock(side_effect=upload_response)
+    respx.patch(_WORKITEM).mock(return_value=httpx.Response(200, json={}))
+    comment = respx.post(_COMMENTS).mock(return_value=httpx.Response(200, json={"id": 9}))
+
+    external_id = _ado().publish_comment("1377", "body", attachments=[str(good), str(bad)])
+
+    assert external_id == "9", "one bad attachment lost the whole comment"
+    body = json.loads(comment.calls.last.request.content)["text"]
+    assert "good.png" in body
+    assert "Could not attach: bad.png" in body
+
+
+@respx.mock
+def test_ado_with_no_attachments_posts_exactly_what_it_was_given(tmp_path):
+    """No attachments, no decoration — the common path must stay untouched."""
+    respx.post(_COMMENTS).mock(return_value=httpx.Response(200, json={"id": 3}))
+    upload = respx.post(_ATTACH).mock(return_value=httpx.Response(201, json={}))
+
+    _ado().publish_comment("1377", "just the body")
+
+    assert not upload.called
+    body = json.loads(respx.calls.last.request.content)["text"]
+    assert body == "just the body"
+
+
+def test_ado_declares_the_attachment_capability():
+    """`publish_service` branches on this; a provider that cannot attach must not be
+    handed files, and must say so in the comment instead."""
+    assert _ado().supports_attachments() is True
+    assert GitHubAdapter(config={}, secrets={}).supports_attachments() is False
+    assert JiraAdapter(config={}, secrets={}).supports_attachments() is False
