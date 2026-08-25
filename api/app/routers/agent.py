@@ -1127,6 +1127,18 @@ def agent_authoring_finalize(
                 logger.info("Captured a Claude token the agent refreshed (owner={})", user.id)
         except Exception as exc:  # noqa: BLE001 - rotation is additive; never break finalize
             logger.warning("Could not persist agent-refreshed Claude credential: {}", exc)
+        # And to the hub, which in hub-data mode is where the credential actually
+        # lives (#682): the call above resolves a LOCAL row, of which there is none,
+        # so on its own it is a silent no-op and the rotation is lost — invalidating
+        # the refresh token the hub still holds.
+        try:
+            from app.services import hub_credentials
+
+            hub_credentials.capture_rotated_credential_raw(
+                session["run_id"], body.refreshed_credentials
+            )
+        except Exception as exc:  # noqa: BLE001 - rotation is additive; never break finalize
+            logger.warning("Could not post the agent-refreshed token to the hub: {}", exc)
     # Record the agent's agentic Claude spend against the run (it runs on the
     # paired device, so the server never saw it) — rolls into the run cost
     # breakdown + AI stats and the authoring budget pre-check. Best-effort.

@@ -237,6 +237,11 @@ def post_json(path: str, hub_token: str, body: Any) -> Any:
     return _request("POST", path, hub_token, json_body=body)
 
 
+def put_json(path: str, hub_token: str, body: Any) -> Any:
+    """PUT ``body`` to ``path`` on the hub. See :func:`_request`."""
+    return _request("PUT", path, hub_token, json_body=body)
+
+
 # ---------------------------------------------------------------- typed reads
 def list_tickets(hub_token: str, page: int = 1, page_size: int = 200) -> dict[str, Any]:
     """One page of the hub's ticket store. Shape ``{"items": [...], "total": n}``.
@@ -341,6 +346,26 @@ def resolve_claude_credential(hub_token: str) -> dict[str, Any]:
     The returned material is a secret: never log it, never return it to the SPA.
     """
     return get_json("/credentials/claude/resolve", hub_token)
+
+
+def persist_refreshed_credential(hub_token: str, raw_credentials: str) -> bool:
+    """Post a token the Claude CLI ROTATED back to the hub (#682). True if it took.
+
+    This is the other half of :func:`resolve_claude_credential`, and leaving it
+    uncalled is what killed the hub's credential. A Claude OAuth access token lives
+    hours and the CLI refreshes it *in place* — rewriting ``.credentials.json`` with
+    a new access token **and a new refresh token, invalidating the old one**. Every
+    rotation that does not come back here therefore does not just go missing: it
+    makes the hub's stored copy permanently unusable, and the CLI's verdict on that
+    copy is ``"Not logged in · Please run /login"``.
+
+    The hub applies the guards, not us: it writes only a non-empty access token with
+    a strictly newer ``expiresAt`` than the row it holds, so a logged-out or failed
+    refresh cannot clobber a good credential. ``raw_credentials`` is the file's text
+    and is a secret — never logged, not even at debug.
+    """
+    payload = put_json("/credentials/claude/refreshed", hub_token, {"credentials": raw_credentials})
+    return bool((payload or {}).get("updated")) if isinstance(payload, dict) else False
 
 
 # ------------------------------------------------------- clause-query surface

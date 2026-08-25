@@ -7,8 +7,17 @@ agents may not refresh it. A background worker therefore has no way to obtain
 one mid-run. So the resolution happens once, inside the request that started the
 run, while the browser-minted token is fresh; the material is written to a
 per-run config dir (:func:`app.services.claude_credentials.materialize_raw`) and
-every later CLI call in that run reads the *file*. There is no hub call on a
-background thread — see :func:`app.services.claude_cli._resolve_claude_env`.
+every later CLI call in that run reads the *file*.
+
+That is still the shape of it, but "only there" stopped being literally true
+twice. #667 added a run-scoped credential *grant*, minted from the same fresh
+token, which lets a background thread re-resolve — so a change of account in
+EmeHub reaches a run already under way. #682 added the other direction: the CLI
+rotates the access token in place, invalidating the refresh token the hub still
+holds, so the rotation must be posted back or the hub's copy dies and the next
+re-resolve writes that dead copy over live material (see
+:func:`capture_rotated_credential` and the guard in
+:func:`refresh_run_credential`).
 
 Fallback policy (deliberate, and asymmetric)
 --------------------------------------------
@@ -53,6 +62,8 @@ __all__ = [
     "HubCredentialRefusedError",
     "SOURCE_HUB",
     "SOURCE_LOCAL",
+    "capture_rotated_credential",
+    "capture_rotated_credential_raw",
     "prepare_run_credential",
 ]
 
@@ -115,6 +126,22 @@ def _extract_material(payload: dict[str, Any]) -> str | None:
     if not isinstance(oauth, dict) or not str(oauth.get("accessToken") or "").strip():
         return None
     return json.dumps(parsed)
+
+
+def _expires_at_ms(material: str | None) -> int | None:
+    """The ``expiresAt`` epoch-ms in ``material``, or None if it has none.
+
+    Raw epoch-ms, deliberately: comparing ints sidesteps every tz-aware/naive
+    datetime pitfall, and this is only ever used to answer "is this token fresher
+    than that one?".
+    """
+    if not material:
+        return None
+    try:
+        value = (json.loads(material).get("claudeAiOauth") or {}).get("expiresAt")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    return int(value) if isinstance(value, (int, float)) else None
 
 
 def _status_is_usable(status: str) -> bool:
@@ -260,6 +287,12 @@ def prepare_run_credential(run_id: int, hub_token: str | None) -> str:
 #: up on the next action either way.
 CREDENTIAL_MAX_AGE = timedelta(seconds=60)
 
+#: Last ``expiresAt`` posted back per run, so a pass with many CLI calls posts once
+#: per rotation rather than once per call. In-process only and intentionally so:
+#: losing it on restart costs one redundant PUT, which the hub's strictly-newer
+#: guard makes a no-op.
+_LAST_CAPTURED: dict[int, int] = {}
+
 
 def _grant_path(run_id: int) -> Path:
     """Where a run's credential grant lives — beside the config dirs, not IN one.
@@ -324,6 +357,7 @@ def _load_grant(run_id: int) -> str | None:
 
 def discard_grant(run_id: int) -> None:
     """Forget a run's grant (best-effort)."""
+    _LAST_CAPTURED.pop(run_id, None)
     try:
         _grant_path(run_id).unlink(missing_ok=True)
     except OSError:  # pragma: no cover
@@ -374,6 +408,30 @@ def refresh_run_credential(run_id: int) -> bool:
         return False
 
     before = creds_file.read_text(encoding="utf-8") if creds_file.exists() else ""
+    # NEVER overwrite a fresher token with a staler one (#682). The CLI rotates the
+    # access token *in place* in this very file, and each rotation invalidates the
+    # previous refresh token. If the rotation has not reached the hub yet, the hub's
+    # copy is not merely older — it is dead, and writing it here kills a run that had
+    # perfectly good material on disk ("Not logged in · Please run /login", surfaced
+    # as a bare 502). Capturing the rotation is the real fix, below and in
+    # `capture_rotated_credential`; this is the guard that makes a missed capture
+    # survivable rather than fatal.
+    disk_ms, hub_ms = _expires_at_ms(before), _expires_at_ms(material)
+    if disk_ms is not None and hub_ms is not None and hub_ms < disk_ms:
+        logger.info(
+            "run {} kept its pinned credential — the hub's copy is older than the "
+            "rotated token on disk; posting the rotation back instead",
+            run_id,
+        )
+        # The hub is behind *us*, so the useful move is the opposite direction.
+        capture_rotated_credential_raw(run_id, before)
+        # Restart the rate-limit window even though nothing was written. The window
+        # is the file's mtime, and `claude_cli` resolves the environment for EVERY
+        # call — so returning here without touching it would put a hub round-trip on
+        # every single Claude invocation for the rest of the run.
+        _touch(creds_file)
+        return False
+
     claude_credentials.materialize_raw(material, claude_credentials.hub_run_key(run_id))
     changed = before.strip() != material.strip()
     if changed:
@@ -381,4 +439,80 @@ def refresh_run_credential(run_id: int) -> bool:
         # from the logs, and now the answer can change mid-run.
         logger.info("run {} picked up a DIFFERENT Claude credential from the hub", run_id)
     return changed
+
+
+
+def _touch(path: Path) -> None:
+    """Reset ``path``'s mtime to now, best-effort. See the rate-limit note above."""
+    try:
+        path.touch()
+    except OSError:  # pragma: no cover - permissions/locking; not fatal
+        pass
+
+
+def _post_rotation(grant: str, material: str) -> bool:
+    """PUT ``material`` to the hub with ``grant``. Never raises. True if it took."""
+    try:
+        return hub_client.persist_refreshed_credential(grant, material)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail the work
+        logger.warning("could not post a rotated Claude token back to the hub: {}", exc)
+        return False
+
+
+def capture_rotated_credential(run_id: int) -> bool:
+    """Send a token the CLI just rotated in the run's config dir back to the hub.
+
+    Called after every Claude CLI invocation that ran on hub-resolved material.
+    Without it the hub's stored copy is guaranteed to die: the CLI rewrites
+    ``.credentials.json`` with a new access token **and a new refresh token**, which
+    invalidates the one the hub still holds, so the hub's copy becomes unusable the
+    first time a token is refreshed anywhere (#682). The local `claude_credentials`
+    write-back cannot stand in for this — in hub-data mode there is no local row, so
+    it is a silent no-op.
+
+    Cheap in the common case: it only posts when the file's ``expiresAt`` has moved
+    since the last capture for this run, so a pass making many CLI calls posts once
+    per rotation, not once per call. Every failure is swallowed — a credential is a
+    *dependency* of the work, not the work itself.
+    """
+    if not hub_client.enabled():
+        return False
+    config_dir = claude_credentials.hub_run_config_dir(run_id)
+    if config_dir is None:
+        return False  # this run never resolved from the hub
+    try:
+        material = (config_dir / ".credentials.json").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return capture_rotated_credential_raw(run_id, material)
+
+
+def capture_rotated_credential_raw(run_id: int, material: str) -> bool:
+    """:func:`capture_rotated_credential` for material handed to us, not read off disk.
+
+    The Local Agent path (``routers.agent``) posts the rotated file back from the
+    paired device, whose config dir is transient — so the text arrives in the request
+    rather than on our filesystem.
+
+    Only posts for a run that is itself on hub-resolved material: that is what makes
+    the token the hub's own account rather than some unrelated local credential.
+    """
+    if not hub_client.enabled():
+        return False
+    if claude_credentials.hub_run_config_dir(run_id) is None:
+        return False  # this run never resolved from the hub
+    current_ms = _expires_at_ms(material)
+    if current_ms is None:
+        return False  # logged-out or malformed — never post it back
+    if _LAST_CAPTURED.get(run_id) == current_ms:
+        return False  # already sent this exact rotation
+    grant = _load_grant(run_id)
+    if grant is None:
+        return False
+    if _post_rotation(grant, material):
+        logger.info("run {} posted a rotated Claude token back to the hub", run_id)
+    # Remember it either way: a hub that refused this material will refuse it again,
+    # and retrying per CLI call would add a hub round-trip to every single one.
+    _LAST_CAPTURED[run_id] = current_ms
+    return True
 
