@@ -522,9 +522,15 @@ def list_users(_: User = Depends(require_admin), db: Session = Depends(get_db)) 
 def invite_user(
     body: AdminInviteUserRequest, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ) -> AdminInviteUserResponse:
-    """Admin-only: create a user with no password and issue a reset token so
-    they can set one via the existing ``/auth/reset`` flow (dev-stub email,
-    same as ``/auth/request-reset``)."""
+    """Admin-only: create a user with no password and issue a set-password token.
+
+    The token is returned to the caller **unconditionally**, in prod included
+    (#673). There is no mailer in this application, so it is the only path an
+    invited user has to a password: the admin copies the resulting
+    ``/forgot?token=…`` link and passes it to them out of band. Withholding it
+    in prod — the previous behaviour — left the invited account permanently
+    unusable, since ``password_hash`` is empty until the token is redeemed.
+    """
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -548,7 +554,7 @@ def invite_user(
     audit_service.record(
         category="auth", actor_type="user", action="Invited user", target=email, meta=f"role={body.role}"
     )
-    return AdminInviteUserResponse(user=UserOut.model_validate(user), reset_token=None if _is_prod() else token)
+    return AdminInviteUserResponse(user=UserOut.model_validate(user), reset_token=token)
 
 
 @router.post("/auth/users", response_model=UserOut, status_code=201)

@@ -145,16 +145,10 @@ export function Login() {
             </div>
 
             <div>
-              <div className="flex items-center justify-between">
-                <AuthLabel htmlFor="login-password">{t("fields.password")}</AuthLabel>
-                <button
-                  type="button"
-                  onClick={() => navigate("/forgot")}
-                  className="mb-2 border-none bg-transparent p-0 text-xs font-semibold text-violet"
-                >
-                  {t("login.forgot")}
-                </button>
-              </div>
+              {/* No "Forgot?" link: there is no mailer, so the request form could
+                  only ever promise an email that never arrives (#673). A locked-out
+                  user needs an admin to hand them a set-password link. */}
+              <AuthLabel htmlFor="login-password">{t("fields.password")}</AuthLabel>
               <PasswordInput
                 id="login-password"
                 autoComplete="current-password"

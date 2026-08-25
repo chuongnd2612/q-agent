@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Ban,
   Check,
+  Copy,
   KeyRound,
   Lock,
   Mail,
@@ -272,10 +273,9 @@ export function UserManagement() {
       {inviteOpen && (
         <InviteUserModal
           onClose={() => setInviteOpen(false)}
-          onInvited={() => {
-            setInviteOpen(false);
-            refresh();
-          }}
+          // Refresh only — the modal stays open on success to show the
+          // set-password link, which is the invitee's only way in (#673).
+          onInvited={refresh}
         />
       )}
 
@@ -524,10 +524,13 @@ function UserActionsMenu({
 
 /** Invite-user modal — email + role only, matching the design
  * (`Q-Agent.dc.html` lines 1217–1230). Portalled to `document.body` with
- * fixed positioning per the project overlay rule. Calls `inviteUser` (#94);
- * the invited user has no password until they redeem the reset token via the
- * `/auth/reset` flow (the dev-stub token is surfaced in a toast since email
- * delivery isn't wired). */
+ * fixed positioning per the project overlay rule. Calls `inviteUser` (#94).
+ *
+ * The invited account is created with an empty `password_hash`, so it is
+ * unusable until the set-password token is redeemed at `/forgot?token=…` —
+ * and nothing emails that link, because there is no mailer (#673). So on
+ * success the modal does not close: it shows the link for the admin to copy
+ * and send. Closing without copying it strands the account. */
 function InviteUserModal({
   onClose,
   onInvited,
@@ -538,20 +541,34 @@ function InviteUserModal({
   const { t } = useTranslation("settings");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<UserRole>("member");
+  // Set once the invite lands: the created address plus the absolute
+  // set-password URL. Its presence switches the modal to the success view.
+  const [issued, setIssued] = useState<{ email: string; link: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const inviteMut = useMutation({
     mutationFn: () => api.auth.inviteUser({ email: email.trim(), role }),
     onSuccess: ({ user: u, resetToken }) => {
       toast.success(t("users.invite.invited", { email: u.email }));
-      if (resetToken) {
-        toast.message(t("users.invite.devToken"), {
-          description: `/forgot?token=${resetToken}`,
-        });
-      }
+      setIssued({
+        email: u.email,
+        link: `${window.location.origin}/forgot?token=${encodeURIComponent(resetToken)}`,
+      });
       onInvited();
     },
     onError: (e) => toast.error(errMsg(e, t("users.invite.sendFailed"))),
   });
+
+  const copyLink = async () => {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error(t("users.invite.copyFailed"));
+    }
+  };
 
   const canSubmit = /.+@.+\..+/.test(email.trim()) && !inviteMut.isPending;
 
@@ -574,12 +591,18 @@ function InviteUserModal({
       >
         <div className="mb-[18px] flex items-center gap-3">
           <div className="accent-gradient flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px]">
-            <UserPlus size={19} color="#fff" strokeWidth={2.2} />
+            {issued ? (
+              <KeyRound size={19} color="#fff" strokeWidth={2.2} />
+            ) : (
+              <UserPlus size={19} color="#fff" strokeWidth={2.2} />
+            )}
           </div>
           <div className="flex-1">
-            <h2 className="m-0 text-[18px] font-black tracking-[-0.02em]">{t("users.invite.title")}</h2>
+            <h2 className="m-0 text-[18px] font-black tracking-[-0.02em]">
+              {issued ? t("users.invite.linkTitle") : t("users.invite.title")}
+            </h2>
             <p className="m-0 mt-0.5 text-[12.5px] text-muted">
-              {t("users.invite.subtitle")}
+              {issued ? t("users.invite.linkSubtitle", { email: issued.email }) : t("users.invite.subtitle")}
             </p>
           </div>
           <button
@@ -592,6 +615,32 @@ function InviteUserModal({
           </button>
         </div>
 
+        {issued ? (
+          <div>
+            <AuthLabel htmlFor="iu-link">{t("users.invite.linkLabel")}</AuthLabel>
+            <div className="flex items-center gap-2">
+              <input
+                id="iu-link"
+                readOnly
+                value={issued.link}
+                onFocus={(e) => e.currentTarget.select()}
+                className="h-[42px] min-w-0 flex-1 rounded-xl border border-white/[0.12] bg-black/25 px-3 font-mono text-[12px] text-ink outline-none"
+              />
+              <Button type="button" variant="glass" onClick={copyLink}>
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+                {copied ? t("users.invite.copied") : t("users.invite.copy")}
+              </Button>
+            </div>
+            <p className="mb-0 mt-2.5 text-[11.5px] leading-relaxed text-faint">
+              {t("users.invite.linkHint")}
+            </p>
+            <div className="mt-5 flex items-center justify-end">
+              <Button type="button" variant="primary" onClick={onClose}>
+                {t("users.invite.done")}
+              </Button>
+            </div>
+          </div>
+        ) : (
         <form onSubmit={submit}>
           <div className="mb-4">
             <AuthLabel htmlFor="iu-email">{t("users.invite.emailLabel")}</AuthLabel>
@@ -640,6 +689,7 @@ function InviteUserModal({
             </Button>
           </div>
         </form>
+        )}
       </div>
     </div>,
     document.body,

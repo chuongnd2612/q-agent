@@ -320,15 +320,22 @@
     "removeMessage": "{{name}} will lose access to the workspace immediately. This cannot be undone.",
     "invite": {
       "title": "Invite a user",
-      "subtitle": "They'll get an email to join the Surency workspace.",
+      "subtitle": "Creates the account and a set-password link for you to pass on.",
       "emailLabel": "Work email",
       "emailPlaceholder": "teammate@surency.com",
       "roleLabel": "Role",
       "roleHint": "Admins can manage users and shared Claude credentials.",
-      "send": "Send invitation",
+      "send": "Create invite",
       "invited": "Invited {{email}}",
-      "devToken": "Dev-only set-password link",
-      "sendFailed": "Failed to send invitation"
+      "linkTitle": "Set-password link",
+      "linkSubtitle": "Send this to {{email}}",
+      "linkLabel": "Link",
+      "linkHint": "No email is sent. This link is the only way {{email}} can set a password, and it is shown once — copy it before closing.",
+      "copy": "Copy link",
+      "copied": "Copied",
+      "copyFailed": "Couldn't copy the link",
+      "done": "Done",
+      "sendFailed": "Couldn't create the invite"
     },
     "create": {
       "title": "Create a user",

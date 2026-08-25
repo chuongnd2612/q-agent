@@ -317,15 +317,22 @@
     "removeMessage": "{{name}} sẽ mất quyền truy cập vào không gian làm việc ngay lập tức. Không thể hoàn tác việc này.",
     "invite": {
       "title": "Mời một người dùng",
-      "subtitle": "Họ sẽ nhận được email để tham gia không gian làm việc Surency.",
+      "subtitle": "Tạo tài khoản và một liên kết đặt mật khẩu để bạn gửi cho họ.",
       "emailLabel": "Email công việc",
       "emailPlaceholder": "teammate@surency.com",
       "roleLabel": "Vai trò",
       "roleHint": "Quản trị viên có thể quản lý người dùng và thông tin đăng nhập Claude dùng chung.",
-      "send": "Gửi lời mời",
+      "send": "Tạo lời mời",
       "invited": "Đã mời {{email}}",
-      "devToken": "Liên kết đặt mật khẩu (chỉ dành cho dev)",
-      "sendFailed": "Không thể gửi lời mời"
+      "linkTitle": "Liên kết đặt mật khẩu",
+      "linkSubtitle": "Gửi liên kết này cho {{email}}",
+      "linkLabel": "Liên kết",
+      "linkHint": "Không có email nào được gửi. Đây là cách duy nhất để {{email}} đặt mật khẩu, và chỉ hiển thị một lần — hãy sao chép trước khi đóng.",
+      "copy": "Sao chép liên kết",
+      "copied": "Đã sao chép",
+      "copyFailed": "Không thể sao chép liên kết",
+      "done": "Xong",
+      "sendFailed": "Không thể tạo lời mời"
     },
     "create": {
       "title": "Tạo một người dùng",
