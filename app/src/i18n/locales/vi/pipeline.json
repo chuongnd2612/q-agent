@@ -434,6 +434,10 @@
       "createLocally": "Tạo cục bộ",
       "createAndLinkNow": "Tạo & liên kết ngay"
     },
+    "starting": {
+      "title": "Đang bắt đầu…",
+      "subtitle": "Đang gửi các test case đã duyệt để tạo."
+    },
     "toast": {
       "createLinkFailed": "Tạo & liên kết thất bại"
     },

@@ -924,9 +924,17 @@ export const useLinkStatus = (runId: number | string | null) =>
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1200 : false),
   });
 
+/** Key the create/link mutation so a DIFFERENT screen can see it in flight (#694).
+ *
+ * Review fires this and navigates to Sync in the same tick, so Sync renders before
+ * the request comes back — with `linkStatus` still `"idle"`, i.e. showing the same
+ * big Create button again, which reads as a lost click rather than as progress. */
+export const CREATE_LINK_MUTATION_KEY = ["create-link"] as const;
+
 export const useCreateAndLink = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: CREATE_LINK_MUTATION_KEY,
     mutationFn: (body: {
       link?: boolean;
       ticketIds?: string[];
