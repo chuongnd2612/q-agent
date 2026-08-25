@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +8,7 @@ import {
   ALL_TICKETS_PAGE_SIZE,
   useCreateRun,
   useProjectEnvironments,
+  useSettings,
   useTickets,
 } from "@/hooks/queries";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -46,11 +47,31 @@ export function CreateRunModal() {
   // base URL with no warning, sending the run at the wrong host (#671).
   const { data: environments } = useProjectEnvironments();
   const envOptions = environments ?? [];
+  // Settings' "Parallel workers" is the DEFAULT for a new run: the value is
+  // persisted but no backend reader exists, so on its own it did nothing while
+  // sitting next to a slider here that looked identical and did work (#672).
+  const { data: settings } = useSettings();
+  const parallelDefault = settings?.parallel;
   const { data: ticketsPage } = useTickets({ pageSize: ALL_TICKETS_PAGE_SIZE });
   const tickets = ticketsPage?.items;
   const user = useAuth((s) => s.user);
   const userName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "";
   const createRun = useCreateRun();
+
+  // Seed the workers slider once per open. A ref rather than an `open`-only
+  // dependency because the settings query may resolve after the modal is
+  // already up, and re-seeding on every settings refetch would overwrite a
+  // choice the user had just made for this run.
+  const seededWorkers = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      seededWorkers.current = false;
+      return;
+    }
+    if (seededWorkers.current || parallelDefault === undefined) return;
+    seededWorkers.current = true;
+    setRunField("runWorkers", parallelDefault);
+  }, [open, parallelDefault, setRunField]);
 
   // Keep the selection inside the real set: default to the first environment,
   // and clear a stale one rather than submitting a name nothing matches.
