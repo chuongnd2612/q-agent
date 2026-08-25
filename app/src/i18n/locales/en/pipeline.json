@@ -494,11 +494,14 @@
   },
   "export": {
     "title": "Export automation project",
+    "description": "Take this project's automation suite — page objects, fixtures, test data and specs — and run it wherever you like.",
+    "zipAction": "Export to ZIP",
+    "zipping": "Building the archive…",
+    "zipHint": "Downloads the generated suite as an archive, ready to unpack into a repository of your own.",
+    "zipDownloaded": "Downloaded {{filename}}",
+    "zipFailed": "Could not build the archive",
     "comingSoon": "Version 2 — coming soon",
-    "v2Description": "Hand this project's automation suite — page objects, fixtures, test data and specs — to your own team. Two ways to take it are coming in Version 2:",
-    "zipTitle": "Export to ZIP",
-    "zipHint": "download the generated suite as an archive, ready to unpack into a repository of your own.",
     "remoteTitle": "Export to remote",
-    "remoteHint2": "push it straight to a git remote you own, on a branch of your own, so you can run it in your CI."
+    "remoteHint": "Push the suite straight to a git remote you own, on a branch of your own, so you can run it in your CI."
   }
 }

@@ -1,38 +1,65 @@
-import { Clock3, FileArchive, GitBranch } from "lucide-react";
+import { Clock3, Download, GitBranch } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/Button";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
+import { Spinner } from "@/components/ui/misc";
+import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 
 /**
- * "Export automation project" — the run's git-backed automation suite, handed to the
- * customer so they can run it in their own CI (#549).
+ * "Export automation project" — hand the run's automation suite to the customer.
  *
- * **This is a coming-soon placeholder (#680).** The feature is Version 2, and its
- * scope is *two* exports — a ZIP download and a push to a git remote. Only the remote
- * half was ever built, and on its own it opened by confronting the user with plumbing
- * they had not set up (a repository connection with a stored PAT), so the panel mostly
- * showed a configuration error where a feature was advertised.
+ * Two exports, two states, and the split is the whole design (#686):
  *
- * Two properties of this placeholder are deliberate:
+ * * **Export to ZIP — v1, and it works.** A download, and nothing else: no
+ *   repository connection, no PAT, no branch policy, no network. That is *why* it
+ *   is v1. The remote push had all four as prerequisites, so the panel used to open
+ *   straight into a configuration error for a feature the user had not asked to
+ *   configure.
+ * * **Export to remote — v2, and it says so.** Kept visible, because it is the
+ *   plan and users should know it is coming, but not offered as a button that
+ *   fails. #680 briefly made the *whole* panel coming-soon, which removed a
+ *   capability instead of staging one.
  *
- * * **No preflight request.** The panel's expand has no side effect at all. There is
- *   nothing to be ready for yet, so asking the server about readiness could only
- *   produce a warning about a prerequisite for a feature that is not offered.
- * * **The form is removed, not disabled.** A greyed-out remote/branch form with a dead
- *   button reads as "almost working" and invites the user to hunt for what they got
- *   wrong. A named, dated-forward "coming in v2" state is the honest shape.
- *
- * The backend (`automation_export_service`) is untouched and dormant; v2 builds the ZIP
- * path and re-enables the remote path on top of it.
+ * No preflight request on expand: the ZIP needs nothing to be ready for, and the
+ * remote is not on offer, so a readiness check could only produce a warning about a
+ * prerequisite for neither. Collapsed by default (#536) — an export is an
+ * occasional, deliberate act. Nothing here goes into Zustand.
  */
 export function ExportProjectPanel({
+  runId,
   projectId,
 }: {
-  /** The automation project this would export; `null` for a legacy run (panel hidden). */
+  runId: number;
+  /** The automation project to export; `null` for a legacy run (panel hidden). */
   projectId: number | null;
 }) {
   const { t } = useTranslation("pipeline");
+  const [busy, setBusy] = useState(false);
 
   if (projectId == null) return null;
+
+  const downloadZip = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { blob, filename } = await api.exportAutomationProjectZip(runId, projectId);
+      // The viewer's own browser saves it; the object URL is revoked immediately
+      // after the click so the blob is not held for the life of the page.
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success(t("export.zipDownloaded", { filename }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t("export.zipFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div
@@ -44,35 +71,49 @@ export function ExportProjectPanel({
       style={{ background: "rgba(8,8,13,.92)" }}
     >
       <CollapsibleSection title={t("export.title")}>
-        <div
-          className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-[rgba(139,92,246,.32)] px-2.5 py-1 text-[11px] font-semibold text-violet"
-          style={{ background: "rgba(139,92,246,.12)" }}
-          data-testid="export-coming-soon"
-        >
-          <Clock3 size={12} strokeWidth={2.4} />
-          {t("export.comingSoon")}
-        </div>
-
         <p className="m-0 mb-3.5 text-xs leading-relaxed text-muted">
-          {t("export.v2Description")}
+          {t("export.description")}
         </p>
 
-        <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
-          <li className="flex items-start gap-2.5">
-            <FileArchive size={15} className="mt-0.5 shrink-0 text-ink-soft" strokeWidth={2} />
-            <span className="text-[12px] leading-relaxed">
-              <span className="font-semibold text-ink-soft">{t("export.zipTitle")}</span>
-              <span className="text-muted"> — {t("export.zipHint")}</span>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Button
+              variant="primary"
+              onClick={downloadZip}
+              disabled={busy}
+              data-testid="export-zip"
+            >
+              {busy ? <Spinner size={14} /> : <Download size={15} strokeWidth={2.2} />}
+              {busy ? t("export.zipping") : t("export.zipAction")}
+            </Button>
+            <span className="text-[11.5px] leading-relaxed text-faint">
+              {t("export.zipHint")}
             </span>
-          </li>
-          <li className="flex items-start gap-2.5">
+          </div>
+
+          <div className="h-px bg-white/[0.07]" />
+
+          <div className="flex items-start gap-2.5" data-testid="export-remote-coming-soon">
             <GitBranch size={15} className="mt-0.5 shrink-0 text-ink-soft" strokeWidth={2} />
-            <span className="text-[12px] leading-relaxed">
-              <span className="font-semibold text-ink-soft">{t("export.remoteTitle")}</span>
-              <span className="text-muted"> — {t("export.remoteHint2")}</span>
-            </span>
-          </li>
-        </ul>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[12.5px] font-semibold text-ink-soft">
+                  {t("export.remoteTitle")}
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(139,92,246,.32)] px-2 py-0.5 text-[10.5px] font-semibold text-violet"
+                  style={{ background: "rgba(139,92,246,.12)" }}
+                >
+                  <Clock3 size={11} strokeWidth={2.4} />
+                  {t("export.comingSoon")}
+                </span>
+              </div>
+              <p className="m-0 mt-1 text-[11.5px] leading-relaxed text-muted">
+                {t("export.remoteHint")}
+              </p>
+            </div>
+          </div>
+        </div>
       </CollapsibleSection>
     </div>
   );
