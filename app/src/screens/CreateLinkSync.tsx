@@ -8,8 +8,10 @@ import { providerGlyph } from "@/components/ui/badges";
 import { Spinner } from "@/components/ui/misc";
 import { providerLabel } from "@/data/projects";
 import { useNavigate, useParams } from "react-router-dom";
+import { useIsMutating } from "@tanstack/react-query";
 import {
   ALL_TICKETS_PAGE_SIZE,
+  CREATE_LINK_MUTATION_KEY,
   useCreateAndLink,
   useGenerateAutomation,
   useLinkStatus,
@@ -43,7 +45,13 @@ export function CreateLinkSync() {
     localStorage.setItem("qagent.localCreateLink", on ? "1" : "0");
   };
 
-  const state = status?.status ?? "idle";
+  // Review fires the mutation and navigates here in the same tick, so this screen
+  // renders while the request is still in flight and `linkStatus` still says "idle"
+  // — which showed the idle panel, i.e. the same big Create button, and read as a
+  // lost click (#694). The mutation is keyed so it can be seen from here, where it
+  // was started elsewhere.
+  const starting = useIsMutating({ mutationKey: CREATE_LINK_MUTATION_KEY }) > 0;
+  const state = starting ? "running" : (status?.status ?? "idle");
   const results = status?.results ?? [];
   const byTicket = new Map<string, LinkTicketResult>(results.map((r) => [r.ticketExternalId, r]));
 
@@ -136,8 +144,12 @@ export function CreateLinkSync() {
         >
           <RefreshCw size={20} className="animate-[spin_.8s_linear_infinite] text-violet" />
           <div>
-            <div className="text-[15px] font-bold">{t("createLink.running.title")}</div>
-            <div className="text-[12px] text-ink-dim">{t("createLink.running.subtitle")}</div>
+            <div className="text-[15px] font-bold">
+              {starting ? t("createLink.starting.title") : t("createLink.running.title")}
+            </div>
+            <div className="text-[12px] text-ink-dim">
+              {starting ? t("createLink.starting.subtitle") : t("createLink.running.subtitle")}
+            </div>
           </div>
         </div>
       )}

@@ -66,22 +66,70 @@
       "fallback": "Lượt chạy"
     },
     "global": {
-      "dashboard": { "t": "Bảng điều khiển", "s": "Trung tâm điều hành" },
-      "project": { "t": "Dự án", "s": "Chi tiết dự án" },
-      "projects": { "t": "Dự án", "s": "Không gian làm việc" },
-      "ticket": { "t": "Công việc", "s": "Chi tiết công việc" },
-      "tickets": { "t": "Công việc", "s": "Danh sách chờ" },
-      "runs": { "t": "Lượt chạy", "s": "Lượt chạy QA" },
-      "reports": { "t": "Báo cáo", "s": "Phân tích" },
-      "audit": { "t": "Nhật ký kiểm toán", "s": "Hoạt động" },
-      "users": { "t": "Nhóm", "s": "Quản trị" },
-      "claudeCreds": { "t": "Thông tin đăng nhập Claude", "s": "Quản trị" },
-      "sharedWorkspace": { "t": "Không gian dùng chung", "s": "Quản trị" },
-      "settings": { "t": "Cài đặt", "s": "Tùy chọn" },
-      "gettingStarted": { "t": "Bắt đầu", "s": "Hướng dẫn" },
-      "localAgent": { "t": "Tác nhân cục bộ", "s": "Trình chạy" },
-      "profile": { "t": "Hồ sơ", "s": "Tài khoản" },
-      "fallback": { "t": "Q-Agent", "s": "" }
+      "dashboard": {
+        "t": "Bảng điều khiển",
+        "s": "Trung tâm điều hành"
+      },
+      "project": {
+        "t": "Dự án",
+        "s": "Chi tiết dự án"
+      },
+      "projects": {
+        "t": "Dự án",
+        "s": "Không gian làm việc"
+      },
+      "ticket": {
+        "t": "Công việc",
+        "s": "Chi tiết công việc"
+      },
+      "tickets": {
+        "t": "Công việc",
+        "s": "Danh sách chờ"
+      },
+      "runs": {
+        "t": "Lượt chạy",
+        "s": "Lượt chạy QA"
+      },
+      "reports": {
+        "t": "Báo cáo",
+        "s": "Phân tích"
+      },
+      "audit": {
+        "t": "Nhật ký kiểm toán",
+        "s": "Hoạt động"
+      },
+      "users": {
+        "t": "Nhóm",
+        "s": "Quản trị"
+      },
+      "claudeCreds": {
+        "t": "Thông tin đăng nhập Claude",
+        "s": "Quản trị"
+      },
+      "sharedWorkspace": {
+        "t": "Không gian dùng chung",
+        "s": "Quản trị"
+      },
+      "settings": {
+        "t": "Cài đặt",
+        "s": "Tùy chọn"
+      },
+      "gettingStarted": {
+        "t": "Bắt đầu",
+        "s": "Hướng dẫn"
+      },
+      "localAgent": {
+        "t": "Tác nhân cục bộ",
+        "s": "Trình chạy"
+      },
+      "profile": {
+        "t": "Hồ sơ",
+        "s": "Tài khoản"
+      },
+      "fallback": {
+        "t": "Q-Agent",
+        "s": ""
+      }
     }
   },
   "language": {
@@ -94,5 +142,6 @@
     "newRun": "Lượt chạy mới",
     "exitRun": "Thoát lượt chạy",
     "logout": "Đăng xuất"
-  }
+  },
+  "backToHub": "Về EmeHub"
 }

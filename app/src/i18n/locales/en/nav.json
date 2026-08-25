@@ -66,22 +66,70 @@
       "fallback": "Run"
     },
     "global": {
-      "dashboard": { "t": "Dashboard", "s": "Mission control" },
-      "project": { "t": "Project", "s": "Project detail" },
-      "projects": { "t": "Projects", "s": "Workspaces" },
-      "ticket": { "t": "Ticket", "s": "Ticket detail" },
-      "tickets": { "t": "Tickets", "s": "Backlog" },
-      "runs": { "t": "Runs", "s": "QA runs" },
-      "reports": { "t": "Reports", "s": "Analytics" },
-      "audit": { "t": "Audit Log", "s": "Activity" },
-      "users": { "t": "Team", "s": "Admin" },
-      "claudeCreds": { "t": "Claude Credentials", "s": "Admin" },
-      "sharedWorkspace": { "t": "Shared Workspace", "s": "Admin" },
-      "settings": { "t": "Settings", "s": "Preferences" },
-      "gettingStarted": { "t": "Getting Started", "s": "Onboarding" },
-      "localAgent": { "t": "Local Agent", "s": "Runner" },
-      "profile": { "t": "Profile", "s": "Account" },
-      "fallback": { "t": "Q-Agent", "s": "" }
+      "dashboard": {
+        "t": "Dashboard",
+        "s": "Mission control"
+      },
+      "project": {
+        "t": "Project",
+        "s": "Project detail"
+      },
+      "projects": {
+        "t": "Projects",
+        "s": "Workspaces"
+      },
+      "ticket": {
+        "t": "Ticket",
+        "s": "Ticket detail"
+      },
+      "tickets": {
+        "t": "Tickets",
+        "s": "Backlog"
+      },
+      "runs": {
+        "t": "Runs",
+        "s": "QA runs"
+      },
+      "reports": {
+        "t": "Reports",
+        "s": "Analytics"
+      },
+      "audit": {
+        "t": "Audit Log",
+        "s": "Activity"
+      },
+      "users": {
+        "t": "Team",
+        "s": "Admin"
+      },
+      "claudeCreds": {
+        "t": "Claude Credentials",
+        "s": "Admin"
+      },
+      "sharedWorkspace": {
+        "t": "Shared Workspace",
+        "s": "Admin"
+      },
+      "settings": {
+        "t": "Settings",
+        "s": "Preferences"
+      },
+      "gettingStarted": {
+        "t": "Getting Started",
+        "s": "Onboarding"
+      },
+      "localAgent": {
+        "t": "Local Agent",
+        "s": "Runner"
+      },
+      "profile": {
+        "t": "Profile",
+        "s": "Account"
+      },
+      "fallback": {
+        "t": "Q-Agent",
+        "s": ""
+      }
     }
   },
   "language": {
@@ -94,5 +142,6 @@
     "newRun": "New run",
     "exitRun": "Exit run",
     "logout": "Log out"
-  }
+  },
+  "backToHub": "Back to EmeHub"
 }

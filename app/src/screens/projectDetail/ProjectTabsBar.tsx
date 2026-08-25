@@ -1,11 +1,14 @@
 import { useTranslation } from "react-i18next";
 import { type ProjectTab } from "@/store/ui";
 
+// Only the tabs that are genuinely views OF this project (#693). `tickets` and
+// `runs` used to sit here and navigated straight out to the GLOBAL /tickets and
+// /runs screens — so they read as "this project's tickets", then dropped the user
+// into an unfiltered list with no way back to the tab they clicked. Both already
+// have their own sidebar entries, which is where a global list belongs.
 export const TABS: { id: ProjectTab; labelKey: string }[] = [
   { id: "overview", labelKey: "tabs.overview" },
   { id: "knowledge", labelKey: "tabs.knowledge" },
-  { id: "tickets", labelKey: "tabs.tickets" },
-  { id: "runs", labelKey: "tabs.runs" },
   { id: "settings", labelKey: "tabs.settings" },
 ];
 

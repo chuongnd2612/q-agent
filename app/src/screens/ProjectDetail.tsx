@@ -4,7 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { type ProjectTab } from "@/store/ui";
 import { useProjectOverviewData } from "./projectDetail/useProjectOverviewData";
 import { ProjectHeader } from "./projectDetail/ProjectHeader";
-import { ProjectTabsBar } from "./projectDetail/ProjectTabsBar";
+import { ProjectTabsBar, TABS } from "./projectDetail/ProjectTabsBar";
 import { Overview } from "./projectDetail/Overview";
 import { KnowledgeTab } from "./projectDetail/KnowledgeTab";
 import { ProjectSettingsTab } from "./projectDetail/ProjectSettingsTab";
@@ -23,7 +23,13 @@ export function ProjectDetail() {
   // identifier — the API resolves either — and the URL is rewritten below.
   const key = decodeURIComponent(projectGuid ?? "");
   const [searchParams, setSearchParams] = useSearchParams();
-  const projectTab = (searchParams.get("tab") as ProjectTab) ?? "overview";
+  // `tickets`/`runs` are no longer tabs (#693). A pre-#693 bookmark can still carry
+  // `?tab=runs`, which would otherwise fall through to the Knowledge tab while the
+  // URL claims otherwise — so an unknown tab reads as `overview`.
+  const requestedTab = searchParams.get("tab") as ProjectTab | null;
+  const projectTab: ProjectTab = TABS.some((tab) => tab.id === requestedTab)
+    ? (requestedTab as ProjectTab)
+    : "overview";
   const setProjectTab = (t: ProjectTab) => setSearchParams({ tab: t });
 
   const {
@@ -54,11 +60,7 @@ export function ProjectDetail() {
     }
   }, [canonicalGuid, key, navigate, searchParams]);
 
-  const onTab = (id: ProjectTab) => {
-    if (id === "tickets") navigate("/tickets");
-    else if (id === "runs") navigate("/runs");
-    else setProjectTab(id);
-  };
+  const onTab = (id: ProjectTab) => setProjectTab(id);
 
   return (
     <div className="px-1 pb-10 pt-0.5">

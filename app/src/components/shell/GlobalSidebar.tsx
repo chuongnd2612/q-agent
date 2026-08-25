@@ -1,4 +1,4 @@
-import { LogOut, Sparkles, User, UserRound } from "lucide-react";
+import { ArrowUpLeft, LogOut, Sparkles, User, UserRound } from "lucide-react";
 import { motion, useMotionTemplate, useTransform } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -16,7 +16,7 @@ import {
   activeNavPath,
   type NavItem,
 } from "@/components/shell/navConfig";
-import { useHubDataEnabled } from "@/hooks/queries";
+import { useHubDataEnabled, useHubWebUrl } from "@/hooks/queries";
 
 /** The global (non-run) sidebar: brand header, two global nav groups, account
  * footer. Structurally the pre-split sidebar, minus the run-scoped items. */
@@ -24,6 +24,7 @@ export function GlobalSidebar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { t } = useTranslation("nav");
+  const hubWebUrl = useHubWebUrl();
 
   // Much stronger tilt for the hero brand logo than the default card tilt.
   const logoTilt = useTilt({ maxX: 20, maxY: 26, scale: 1.1, perspective: 760 });
@@ -215,6 +216,22 @@ export function GlobalSidebar() {
           </div>
         </div>
       </div>
+
+      {/* The way back out (#692). A user who arrived from EmeHub's launcher had no
+          route home: the browser's back button stops reaching the hub after a few
+          in-app navigations, and every other link here is a Q-Agent route. Rendered
+          only when a hub origin is actually configured, so standalone Q-Agent looks
+          exactly as it did. A real anchor, not a `navigate` — this leaves the SPA. */}
+      {hubWebUrl && (
+        <a
+          href={hubWebUrl}
+          className="mb-2 flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2 text-[12.5px] font-semibold text-[#a0a0b2] no-underline transition-colors hover:bg-white/[0.07] hover:text-white"
+          data-testid="back-to-hub"
+        >
+          <ArrowUpLeft size={15} strokeWidth={2.2} className="shrink-0 text-[#8b5cf6]" />
+          <span className="truncate">{t("backToHub")}</span>
+        </a>
+      )}
 
       <div className="px-2.5 pb-2 pt-1 text-[10px] font-semibold tracking-[0.11em] text-[#5c5c6e]">
         {t("sections.workspace")}

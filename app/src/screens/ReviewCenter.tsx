@@ -68,10 +68,16 @@ export function ReviewCenter() {
     selectedIds.forEach((caseId) => setApproval.mutate({ caseId, approval: "approved" }));
     clearReviewSel();
   };
+  // Fire, then navigate: the request runs in the background and the Sync screen
+  // shows its own starting/running state (#694). `createAndLink.isPending` below is
+  // what stops a second click landing on a mutation that is already running — the
+  // three buttons had no pending state at all, only "Approve all" did.
   const startCreateLink = (link: boolean, dryRun = false) => {
+    if (createAndLink.isPending) return;
     createAndLink.mutate({ link, dryRun });
     navigate("/runs/" + runId + "/sync");
   };
+  const starting = createAndLink.isPending;
 
   const tickets = useMemo(() => groupByTicket(cases ?? []), [cases]);
 
@@ -105,17 +111,22 @@ export function ReviewCenter() {
           <Button
             variant="glass"
             onClick={() => startCreateLink(false, true)}
+            disabled={starting}
             title={t("review.createLocallyHint")}
           >
+            {starting && <Spinner size={13} />}
             {t("review.createLocally")}
           </Button>
           <Button
             onClick={() => startCreateLink(false)}
+            disabled={starting}
             className="border-[rgba(139,92,246,.32)] bg-[rgba(139,92,246,.16)] text-[#c4b5fd] hover:bg-[rgba(139,92,246,.24)]"
           >
+            {starting && <Spinner size={13} />}
             {t("review.createCases")}
           </Button>
-          <Button variant="primary" onClick={() => startCreateLink(true)}>
+          <Button variant="primary" onClick={() => startCreateLink(true)} disabled={starting}>
+            {starting && <Spinner size={13} />}
             {t("review.createAndLink")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12h14M13 6l6 6-6 6" />

@@ -434,6 +434,10 @@
       "createLocally": "Create locally",
       "createAndLinkNow": "Create & link now"
     },
+    "starting": {
+      "title": "Starting…",
+      "subtitle": "Sending the approved cases to be created."
+    },
     "toast": {
       "createLinkFailed": "Create & link failed"
     },
