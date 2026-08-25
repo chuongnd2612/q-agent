@@ -566,8 +566,6 @@ export const api = {
     changePassword: (body: { currentPassword: string; newPassword: string }) =>
       post<void>("/auth/change-password", body),
 
-    requestReset: (body: { email: string }) =>
-      post<void>("/auth/request-reset", body),
     reset: (body: { token: string; password: string }) =>
       post<void>("/auth/reset", body),
 

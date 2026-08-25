@@ -1126,11 +1126,12 @@ export interface AuthSession {
   current: boolean;
 }
 
-/** Response to `POST /auth/users/invite` (#94) — the invited user plus a
- * dev-stub reset token (email delivery isn't wired; `null` in prod). */
+/** Response to `POST /auth/users/invite` (#94) — the invited user plus the
+ * set-password token. Always present (#673): nothing is emailed, so the admin
+ * hands the resulting `/forgot?token=…` link to the invitee themselves. */
 export interface InviteUserResponse {
   user: User;
-  resetToken: string | null;
+  resetToken: string;
 }
 
 /** A minted access token plus its principal (login success / refresh). */

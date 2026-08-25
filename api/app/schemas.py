@@ -1351,14 +1351,15 @@ class AdminInviteUserRequest(ApiModel):
 
 
 class AdminInviteUserResponse(ApiModel):
-    """The newly-invited user plus the reset token needed to set a password.
+    """The newly-invited user plus the set-password token they need.
 
-    Mirrors ``RequestResetResponse``: email delivery is a dev stub, so the
-    token is only echoed here when not in prod (``cookie_secure`` off).
+    Always populated (#673). No email is ever sent — there is no mailer — so
+    this token is the invited user's only route to a password, and the admin
+    is expected to pass the ``/forgot?token=…`` link on by hand.
     """
 
     user: UserOut
-    reset_token: str | None = None
+    reset_token: str
 
 
 class OkResponse(ApiModel):
