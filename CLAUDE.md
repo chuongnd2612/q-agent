@@ -48,6 +48,7 @@ Four more traps, learned in #543 and #549:
 
 ## Build & verify (api/)
 
+- **Delivery speed comes first: a failing test does not block a ship.** Run the tests that cover the change and get those green; do not hold a merge waiting on the full ~9-minute suite. Any failure that is *not* about the change at hand gets filed as its own issue and fixed later — say so in the PR, name the test, and move on. This overrides the "baseline the suite before you start" habit below: baseline only when the change is broad enough that you cannot tell which tests cover it.
 - The gate is `uv run pytest -q` from `api/`. **In a fresh worktree (no `.venv`) use `uv run --extra dev pytest -q`** — `pytest` lives in the `dev` **optional-dependency extra** (`[project.optional-dependencies]`), not the default dependency set, so a plain `uv run pytest` fails with `Failed to spawn: pytest / program not found`.
 - **The suite is GREEN: 0 failures on `master`** (#469, closed by #579 — 1048 passed, 4 skipped, ~9min). Still **baseline it before you start and compare by name**, not by count: a green baseline means any failure you see is either yours or a fresh regression, and it should be treated as such immediately, never re-normalised into "the suite is a bit red".
 - **Treat "known red" as a bug, not a baseline.** The count went 22 → 18 → 1 → 0, and each drop was a real coverage hole that the "permanently red, just baseline it" framing had been hiding:
