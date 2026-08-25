@@ -380,7 +380,15 @@
       "status": "TRẠNG THÁI",
       "time": "THỜI GIAN"
     },
-    "noNetwork": "Không có yêu cầu mạng nào được ghi cho {{caseCode}}."
+    "noNetwork": "Không có yêu cầu mạng nào được ghi cho {{caseCode}}.",
+    "annotate": {
+      "textPrompt": "Nội dung nhãn",
+      "pending": "{{count}} chưa lưu",
+      "undo": "Hoàn tác",
+      "redo": "Làm lại",
+      "clear": "Xoá hết",
+      "hint": "Chọn một công cụ ở bên trái, rồi kéo trên ảnh để đánh dấu."
+    }
   },
   "publish": {
     "header": {

@@ -380,7 +380,15 @@
       "status": "STATUS",
       "time": "TIME"
     },
-    "noNetwork": "No network requests captured for {{caseCode}}."
+    "noNetwork": "No network requests captured for {{caseCode}}.",
+    "annotate": {
+      "textPrompt": "Label text",
+      "pending": "{{count}} unsaved",
+      "undo": "Undo",
+      "redo": "Redo",
+      "clear": "Clear",
+      "hint": "Pick a tool on the left, then drag on the screenshot to mark it up."
+    }
   },
   "publish": {
     "header": {

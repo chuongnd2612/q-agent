@@ -70,29 +70,43 @@ def _parse_json(raw: str) -> dict[str, Any] | None:
     return None
 
 
-def _pct_to_px(shape: dict[str, Any], w: int, h: int) -> dict[str, Any]:
-    """Scale one percent-coordinate shape dict to pixel coords for the renderer."""
-    def px(value: Any, dim: int) -> float:
+def _pct_to_fraction(shape: dict[str, Any]) -> dict[str, Any]:
+    """Rescale one model-authored shape from percent (0-100) to fraction (0-1).
+
+    The prompt asks for percent because that is what a vision model reasons in
+    reliably; the renderer takes fractions of the image (#695). This is the single
+    boundary between the two, which is what keeps a third coordinate space from
+    appearing — the image size is deliberately no longer a parameter, because a
+    fraction does not depend on it.
+
+    Unparseable values become 0 rather than raising: a model that returns "10%" as a
+    string should cost one misplaced shape, not the whole annotation.
+    """
+    def fraction(value: Any) -> float:
         try:
-            return max(0.0, min(100.0, float(value))) / 100.0 * dim
+            return max(0.0, min(100.0, float(value))) / 100.0
         except (TypeError, ValueError):
             return 0.0
 
     return {
         "tool": str(shape.get("tool", "")).lower(),
-        "x": px(shape.get("x", 0), w),
-        "y": px(shape.get("y", 0), h),
-        "w": px(shape.get("w", 0), w),
-        "h": px(shape.get("h", 0), h),
-        "x2": px(shape.get("x2", 0), w),
-        "y2": px(shape.get("y2", 0), h),
+        "x": fraction(shape.get("x", 0)),
+        "y": fraction(shape.get("y", 0)),
+        "w": fraction(shape.get("w", 0)),
+        "h": fraction(shape.get("h", 0)),
+        "x2": fraction(shape.get("x2", 0)),
+        "y2": fraction(shape.get("y2", 0)),
         "text": str(shape.get("text", ""))[:120],
         "color": str(shape.get("color", "#f43f5e") or "#f43f5e"),
     }
 
 
-def _analyze(src: Path, error: str, w: int, h: int) -> dict[str, Any] | None:
-    """Ask Claude (vision) for a diagnosis + annotation shapes. None on failure."""
+def _analyze(src: Path, error: str) -> dict[str, Any] | None:
+    """Ask Claude (vision) for a diagnosis + annotation shapes. None on failure.
+
+    Shapes come back as fractions of the image (#695) — the size is not a parameter
+    because a fraction does not depend on it.
+    """
     prompt = _PROMPT.format(name=src.name, error=(error or "(no error message)")[:1500])
     try:
         raw = claude_cli.run_prompt(
@@ -106,7 +120,7 @@ def _analyze(src: Path, error: str, w: int, h: int) -> dict[str, Any] | None:
         return None
     diagnosis = str(data.get("diagnosis", "")).strip()[:400]
     shapes = [
-        _pct_to_px(s, w, h)
+        _pct_to_fraction(s)
         for s in (data.get("shapes") or [])
         if isinstance(s, dict) and str(s.get("tool", "")).lower() in _ALLOWED_TOOLS
     ]
@@ -114,13 +128,20 @@ def _analyze(src: Path, error: str, w: int, h: int) -> dict[str, Any] | None:
 
 
 def _caption_shapes(diagnosis: str, w: int, h: int) -> list[dict[str, Any]]:
-    """Fallback annotation when nothing localisable: a red caption bar up top."""
-    bar_h = max(24.0, h * 0.06)
+    """Fallback annotation when nothing localisable: a red caption bar up top.
+
+    Fractions of the image, like every other shape (#695). This used to emit pixels
+    (``w`` and a pixel bar height) into a renderer that also read pixels — which is
+    why it was the ONE annotation path that looked right, and why the disagreement
+    everywhere else went unnoticed for so long.
+    """
+    del w, h  # proportional now (#695); kept in the signature for the caller's call site
     return [
-        {"tool": "highlight", "x": 0, "y": 0, "w": w, "h": bar_h, "color": "#f43f5e"},
-        {"tool": "text", "x": 10, "y": 6, "w": 0, "h": 0, "x2": 0, "y2": 0,
+        {"tool": "highlight", "x": 0, "y": 0, "w": 1.0, "h": 0.06, "color": "#f43f5e"},
+        {"tool": "text", "x": 0.012, "y": 0.012, "w": 0, "h": 0, "x2": 0, "y2": 0,
          "text": diagnosis[:110], "color": "#ffffff"},
     ]
+
 
 
 def _owner_id_for_result(db, result: ExecutionResult | None) -> int | None:
@@ -164,7 +185,7 @@ def annotate_screenshot(db, evidence: Evidence, error_message: str, *, force: bo
         logger.warning("evidence analysis: cannot open {}: {}", src, exc)
         return False
 
-    analysis = _analyze(src, error_message, w, h)
+    analysis = _analyze(src, error_message)
     diagnosis = (analysis or {}).get("diagnosis") or (error_message or "Test failed")[:200]
     shapes_data = (analysis or {}).get("shapes") or []
     if not shapes_data:

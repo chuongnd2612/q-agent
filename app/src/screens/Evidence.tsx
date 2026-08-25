@@ -23,8 +23,9 @@ import { cn } from "@/lib/cn";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useAnnotate, useAutoAnnotate, useEvidence, useSettings } from "@/hooks/queries";
 import { useEvidenceUploading } from "@/hooks/useRunEvents";
+import { AnnotationCanvas } from "./evidence/AnnotationCanvas";
 import { useUI, type AnnotationTool, type EvidenceTab } from "@/store/ui";
-import type { ExecutionResultOut } from "@/types/api";
+import type { AnnotationShape, ExecutionResultOut } from "@/types/api";
 
 const TABS: { id: EvidenceTab }[] = [
   { id: "screenshot" },
@@ -352,6 +353,7 @@ export function Evidence() {
                     videoEnabled={videoEnabled}
                     tool={tool}
                     setTool={setTool}
+                    annotating={annotate.isPending}
                     onAnnotate={(evidenceId, shapes) =>
                       annotate.mutate(
                         { evidenceId, shapes },
@@ -402,6 +404,7 @@ function EvidencePanel({
   tool,
   setTool,
   onAnnotate,
+  annotating,
   onAutoAnnotate,
   autoAnnotating,
 }: {
@@ -415,7 +418,9 @@ function EvidencePanel({
   videoEnabled: boolean;
   tool: AnnotationTool;
   setTool: (t: AnnotationTool) => void;
-  onAnnotate: (evidenceId: number, shapes: { tool: string; x: number; y: number }[]) => void;
+  onAnnotate: (evidenceId: number, shapes: AnnotationShape[]) => void;
+  /** A save is in flight — the canvas disables its Save and spins. */
+  annotating: boolean;
   onAutoAnnotate: (evidenceId: number) => void;
   autoAnnotating: boolean;
 }) {
@@ -554,20 +559,28 @@ function EvidencePanel({
           </div>
           <div className="flex-1 overflow-hidden rounded-[14px] border border-white/10">
             <BrowserChrome label={`${caseLabel}${showAnnotated ? tr("evidence.screenshot.annotatedSuffix") : ""}`} />
-            <img src={imgSrc} alt={screenshot.filename} className="block w-full" />
+            {/* Draw on the ORIGINAL, always. Annotating the already-annotated copy
+                would stack marks on marks and make the second save unremovable — the
+                server renders from the source each time (#695). */}
+            {showAnnotated ? (
+              // Viewing the rendered result: read-only on purpose. Drawing on the
+              // annotated copy would stack marks on marks, and the server renders
+              // from the source each time — so the second save could never remove
+              // the first (#695). Switch to "Original" to edit.
+              <img src={imgSrc} alt={screenshot.filename} className="block w-full" />
+            ) : (
+              <AnnotationCanvas
+                // Remount when a save lands, so the draft that was just burned into
+                // the image does not linger as pending shapes on top of itself.
+                key={meta.annotatedPath ?? "original"}
+                src={imgSrc}
+                alt={screenshot.filename}
+                tool={tool}
+                saving={annotating}
+                onSave={(shapes) => onAnnotate(screenshot.id, shapes)}
+              />
+            )}
           </div>
-        </div>
-        <div className="mt-3.5 flex items-center gap-2.5 text-[12.5px] text-ink-dim">
-          <span className="font-semibold text-[#c4b5fd]">{tr("evidence.toolLabel")}</span>{" "}
-          {tr(`evidence.tools.${tool}`)}
-          <Button
-            variant="glass"
-            size="sm"
-            className="ml-auto"
-            onClick={() => onAnnotate(screenshot.id, [{ tool, x: 0.5, y: 0.5 }])}
-          >
-            {tr("evidence.saveAnnotation")}
-          </Button>
         </div>
       </div>
     );
