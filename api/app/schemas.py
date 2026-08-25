@@ -1114,6 +1114,20 @@ class ReportOut(ApiModel):
 
 
 # ---------------------------------------------------------------- Comments / publish
+class CommentAttachmentOut(ApiModel):
+    """One evidence file this comment will attach when it is published (#696).
+
+    A *plan*, not a result: nothing is uploaded until publish, so this is what the
+    reviewer is approving. It replaces the two hardcoded `evidence.zip` / `trace.zip`
+    chips the UI used to draw with no files behind them.
+    """
+
+    case_code: str = ""
+    kind: str = ""
+    filename: str = ""
+    size_bytes: int = 0
+
+
 class TicketCommentOut(ApiModel):
     id: int
     run_id: int
@@ -1124,6 +1138,7 @@ class TicketCommentOut(ApiModel):
     target_status: str = ""
     external_comment_id: str = ""
     error_message: str = ""
+    attachments: list[CommentAttachmentOut] = Field(default_factory=list)
 
 
 class CommentEdit(ApiModel):

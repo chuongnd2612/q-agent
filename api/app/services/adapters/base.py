@@ -102,6 +102,18 @@ class ProviderAdapter(ABC):
         return []
 
     # -- Write ------------------------------------------------------------
+    def supports_attachments(self) -> bool:
+        """Whether this provider can take real file attachments (#696).
+
+        Default **False**, and that is the honest default: every adapter's
+        ``publish_comment`` has always *accepted* an ``attachments`` argument and
+        silently dropped it, so callers had no way to tell whether evidence had
+        actually been attached — and the UI advertised attachments that never existed.
+        An adapter that grows the capability overrides this; a caller that cannot
+        attach says so in the comment instead of implying it did.
+        """
+        return False
+
     @abstractmethod
     def publish_comment(
         self,
@@ -110,7 +122,11 @@ class ProviderAdapter(ABC):
         *,
         attachments: list[str] | None = None,
     ) -> str:
-        """Post a comment to the work item. Returns the external comment id."""
+        """Post a comment to the work item. Returns the external comment id.
+
+        ``attachments`` are absolute paths to upload alongside the comment, and are
+        honoured only when :meth:`supports_attachments` is True.
+        """
 
     def update_status(self, ticket_external_id: str, target_status: str) -> None:
         """Transition the work item's status (optional; override if supported)."""

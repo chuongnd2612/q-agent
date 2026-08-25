@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import crypto
 from app.models.comment import TicketComment
 from app.models.ticket import Ticket
-from app.services import audit_service, connection_service
+from app.services import audit_service, comment_evidence, connection_service
 from app.services.adapters import ProviderError, get_adapter
 from app.ws import hub
 
@@ -50,6 +50,55 @@ def _build_adapter(db: Session, comment: TicketComment):
     return get_adapter(connection.kind, connection.config or {}, decrypted_secrets)
 
 
+def _evidence_paths(db: Session, comment: TicketComment) -> tuple[list[str], list[str]]:
+    """Resolve a draft's evidence refs to files on disk. Returns (present, missing).
+
+    The refs were stored at prepare time and the upload happens now (#696) — a draft
+    is cheap and repeatable, so uploading on every regeneration would litter the work
+    item with attachments nobody asked for. The cost of deferring is that a file can
+    disappear between the two (a purged run, a cleaned workspace), which is why
+    missing ones are *named* rather than skipped: a comment that quietly attaches four
+    of five screenshots is the failure a reviewer is least likely to notice.
+    """
+    from pathlib import Path
+
+    from app.models.run import Run
+
+    run = db.get(Run, comment.run_id)
+    owner_id = run.owner_id if run is not None else None
+    present: list[str] = []
+    missing: list[str] = []
+    for ref in comment.attachments or []:
+        if not isinstance(ref, dict) or not ref.get("path"):
+            continue
+        absolute = comment_evidence.absolute_path(ref, owner_id)
+        if Path(absolute).is_file():
+            present.append(absolute)
+        else:
+            missing.append(str(ref.get("filename") or ref["path"]))
+    return present, missing
+
+
+def _body_for_provider(comment: TicketComment, adapter, missing: list[str]) -> str:
+    """The body to post, told the truth about what will and will not be attached.
+
+    The draft already lists every case's evidence inline (that is what the reviewer
+    approved). What this adds is the part only the provider knows: whether the files
+    themselves are coming. An adapter that cannot attach says so, rather than leaving
+    a reader hunting a work item for files that were never going to arrive — which is
+    exactly what the old fake `evidence.zip` chip invited.
+    """
+    body = comment.body
+    if missing:
+        body = f"{body}\n\n_Evidence no longer on file: {', '.join(sorted(missing))}._"
+    if (comment.attachments or []) and not adapter.supports_attachments():
+        body = (
+            f"{body}\n\n_The evidence above is held in Q-Agent; this provider does not "
+            "support comment attachments._"
+        )
+    return body
+
+
 def publish_one(db: Session, comment: TicketComment) -> TicketComment:
     """Publish a single draft/failed comment to its provider and persist the outcome.
 
@@ -66,8 +115,15 @@ def publish_one(db: Session, comment: TicketComment) -> TicketComment:
 
     try:
         adapter = _build_adapter(db, comment)
+        # Phase two of #696: the draft listed the evidence, this uploads it. Paths, not
+        # the stored refs — `attachments` used to be handed straight to the adapter,
+        # which is a list of dicts no adapter could have done anything with even if one
+        # had tried to.
+        present, missing = _evidence_paths(db, comment)
         external_id = adapter.publish_comment(
-            comment.ticket_external_id, comment.body, attachments=comment.attachments or None
+            comment.ticket_external_id,
+            _body_for_provider(comment, adapter, missing),
+            attachments=present if adapter.supports_attachments() else None,
         )
         if comment.target_status:
             adapter.update_status(comment.ticket_external_id, comment.target_status)

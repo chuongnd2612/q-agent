@@ -426,7 +426,8 @@
     },
     "preparing": "Preparing…",
     "prepareComments": "Prepare comments",
-    "summarizing": "Summarizing results with AI…"
+    "summarizing": "Summarizing results with AI…",
+    "attachOnPublish": "Uploaded to the work item on publish"
   },
   "createLink": {
     "header": {
