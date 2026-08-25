@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.deps_auth import current_user
+from app.deps_hub import hub_token as hub_token_dep
+from app.deps_hub import use_hub_credential
 from app.models.execution import Evidence, Execution, ExecutionResult
 from app.models.run import Run
 from app.models.ticket import Ticket
@@ -156,7 +158,10 @@ def get_result_evidence(
 
 @router.post("/evidence/{evidence_id}/auto-annotate", response_model=EvidenceOut)
 def auto_annotate_evidence(
-    evidence_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+    evidence_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
 ) -> dict:
     """Analyze a failure screenshot with Claude vision and burn annotations on it.
 
@@ -172,6 +177,12 @@ def auto_annotate_evidence(
     result = db.get(ExecutionResult, evidence.result_id)
     run = _check_result_owner(db, result, user) if result is not None else None
     error_message = result.error_message if result else ""
+    # Same hub credential the run resolved, re-resolved with this request's fresh
+    # token (#689) — Q-Agent has no credential of its own to fall back on while it is
+    # connected to the hub, and material pinned at run start is routinely expired by
+    # the time someone takes a later action on the run.
+    if run is not None:
+        use_hub_credential(run.id, hub_token)
     if not evidence_analysis.annotate_screenshot(db, evidence, error_message or "", force=True):
         raise HTTPException(status_code=502, detail="Auto-annotation failed (see server logs)")
     db.refresh(evidence)

@@ -895,7 +895,8 @@ export const useCaseMutations = (runId: number | string) => {
       ),
     }),
     regenerateCase: useMutation({
-      mutationFn: (caseId: number) => api.regenerateCase(caseId),
+      mutationFn: async (caseId: number) =>
+        api.regenerateCase(caseId, await hubTokenForRead()),
       onSuccess: invalidate,
     }),
     approveAll: useMutation({
@@ -957,8 +958,8 @@ export const useAutomationStatus = (runId: number | string | null) =>
 export const useGenerateAutomation = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (force?: boolean) =>
-      api.generateAutomation(runId, force ?? false),
+    mutationFn: async (force?: boolean) =>
+      api.generateAutomation(runId, force ?? false, await hubTokenForRead()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.specs(runId) });
       qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
@@ -973,8 +974,8 @@ export const useGenerateAutomation = (runId: number | string) => {
  * to invalidate here. `runId` is accepted for call-site symmetry. */
 export const useRegenerateSpec = (_runId: number | string) =>
   useMutation({
-    mutationFn: ({ caseId, comment }: { caseId: number; comment?: string }) =>
-      api.regenerateSpec(caseId, comment),
+    mutationFn: async ({ caseId, comment }: { caseId: number; comment?: string }) =>
+      api.regenerateSpec(caseId, comment, await hubTokenForRead()),
   });
 
 /** Send a chat instruction to edit the selected spec. Fire-and-forget like
@@ -1066,7 +1067,8 @@ export const useUpdateSpec = (runId: number | string) => {
 // loop; the spec query is invalidated on the terminal WS event, not here.
 export const useHealSpec = (_runId: number | string) =>
   useMutation({
-    mutationFn: (caseId: number) => api.healSpec(caseId),
+    mutationFn: async (caseId: number) =>
+      api.healSpec(caseId, await hubTokenForRead()),
   });
 
 // Poll heal status so the "Healing…" state survives navigating away and back.
@@ -1246,7 +1248,8 @@ export const useAnnotate = (runId: number | string) => {
 export const useAutoAnnotate = (runId: number | string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (evidenceId: number) => api.autoAnnotateEvidence(evidenceId),
+    mutationFn: async (evidenceId: number) =>
+      api.autoAnnotateEvidence(evidenceId, await hubTokenForRead()),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: queryKeys.evidence(runId) }),
   });
@@ -1340,7 +1343,7 @@ export const useCommentMutations = (runId: number | string) => {
     qc.invalidateQueries({ queryKey: queryKeys.comments(runId) });
   return {
     prepare: useMutation({
-      mutationFn: () => api.prepareComments(runId),
+      mutationFn: async () => api.prepareComments(runId, await hubTokenForRead()),
       onSuccess: invalidate,
     }),
     edit: useMutation({

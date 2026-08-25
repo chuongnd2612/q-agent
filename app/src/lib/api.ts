@@ -846,8 +846,16 @@ export const api = {
     caseId: number,
     approval: "approved" | "rejected" | "pending",
   ) => post<TestCaseOut>(`/cases/${caseId}/approval`, { approval }),
-  regenerateCase: (caseId: number) =>
-    post<TestCaseOut>(`/cases/${caseId}/regenerate`),
+  // `hubToken` lets the backend resolve the Claude credential from EmeHub with a
+  // FRESH token, exactly as run start does (#689). Q-Agent has no credential of its
+  // own to fall back on while connected to the hub, and the material pinned at run
+  // start is routinely expired by the time a later action is taken on the run.
+  regenerateCase: (caseId: number, hubToken: string | null = null) =>
+    postWithHubToken<TestCaseOut>(
+      `/cases/${caseId}/regenerate`,
+      undefined,
+      hubToken,
+    ),
   approveAll: (runId: number | string) =>
     post<TestCaseOut[]>(`/runs/${runId}/approve-all`),
   approveTicket: (runId: number | string, tid: string) =>
@@ -858,9 +866,15 @@ export const api = {
     get<LinkStatusOut>(`/runs/${runId}/linked`),
 
   // automation
-  generateAutomation: (runId: number | string, force = false) =>
-    post<AutomationSpecOut[]>(
+  generateAutomation: (
+    runId: number | string,
+    force = false,
+    hubToken: string | null = null,
+  ) =>
+    postWithHubToken<AutomationSpecOut[]>(
       `/runs/${runId}/automation/generate${force ? "?force=true" : ""}`,
+      undefined,
+      hubToken,
     ),
   automationStatus: (runId: number | string) =>
     get<AutomationStatus>(`/runs/${runId}/automation/status`),
@@ -870,10 +884,15 @@ export const api = {
   // Fire-and-forget: regeneration runs off-request on the server (it makes
   // multiple Claude calls and would otherwise exceed the proxy timeout). The
   // result is streamed over the run WS as `spec.regenerated`.
-  regenerateSpec: (caseId: number, comment?: string) =>
-    post<{ started: boolean; caseId: number }>(
+  regenerateSpec: (
+    caseId: number,
+    comment?: string,
+    hubToken: string | null = null,
+  ) =>
+    postWithHubToken<{ started: boolean; caseId: number }>(
       `/cases/${caseId}/spec/regenerate`,
       comment ? { comment } : undefined,
+      hubToken,
     ),
   // Fire-and-forget like `regenerateSpec`: Claude edits the selected spec off
   // -request on the server; the reply + edited spec arrive over the run WS as
@@ -915,9 +934,11 @@ export const api = {
     post<{ cancelled: boolean; was?: string }>(`/cases/${caseId}/authoring/cancel`, {}),
   updateSpec: (caseId: number, code: string) =>
     patch<AutomationSpecOut>(`/cases/${caseId}/spec`, { code }),
-  healSpec: (caseId: number) =>
-    post<{ started: boolean; maxAttempts: number }>(
+  healSpec: (caseId: number, hubToken: string | null = null) =>
+    postWithHubToken<{ started: boolean; maxAttempts: number }>(
       `/cases/${caseId}/spec/heal`,
+      undefined,
+      hubToken,
     ),
   healStatus: (caseId: number) =>
     get<{ healing: boolean; attempt: number; maxAttempts: number }>(
@@ -991,8 +1012,12 @@ export const api = {
     get<EvidenceGrouped>(`/runs/${runId}/evidence`),
   annotate: (evidenceId: number, shapes: AnnotationShape[]) =>
     post<EvidenceOut>(`/evidence/${evidenceId}/annotate`, { shapes }),
-  autoAnnotateEvidence: (evidenceId: number) =>
-    post<EvidenceOut>(`/evidence/${evidenceId}/auto-annotate`),
+  autoAnnotateEvidence: (evidenceId: number, hubToken: string | null = null) =>
+    postWithHubToken<EvidenceOut>(
+      `/evidence/${evidenceId}/auto-annotate`,
+      undefined,
+      hubToken,
+    ),
 
   // reports
   buildReport: (runId: number | string) =>
@@ -1002,8 +1027,12 @@ export const api = {
   listReports: () => get<ReportOut[]>("/reports"),
 
   // comments / publish
-  prepareComments: (runId: number | string) =>
-    post<TicketCommentOut[]>(`/runs/${runId}/comments/prepare`),
+  prepareComments: (runId: number | string, hubToken: string | null = null) =>
+    postWithHubToken<TicketCommentOut[]>(
+      `/runs/${runId}/comments/prepare`,
+      undefined,
+      hubToken,
+    ),
   listComments: (runId: number | string) =>
     get<TicketCommentOut[]>(`/runs/${runId}/comments`),
   editComment: (

@@ -21,7 +21,7 @@ raising — the decision of what to do without a hub token belongs to the caller
 
 from __future__ import annotations
 
-from fastapi import Header
+from fastapi import Header, HTTPException
 
 HUB_TOKEN_HEADER = "X-Hub-Token"
 
@@ -38,3 +38,29 @@ def hub_token(
         return None
     token = x_hub_token.strip()
     return token or None
+
+
+def use_hub_credential(run_id: int, hub_token: str | None) -> None:
+    """Resolve the run's Claude credential from the hub before an action uses it.
+
+    Call this at the top of any **request-triggered** endpoint that goes on to do
+    Claude work for an existing run — publishing comments, regenerating a spec,
+    healing, auto-annotating. Q-Agent cannot configure a Claude credential of its own
+    once it is connected to the hub (the hub is the only source, #607), so an action
+    must resolve from the hub exactly like the run's start did rather than inheriting
+    material pinned to disk hours earlier, which is routinely expired and which the
+    background re-resolve can no longer refresh once the run's grant has died (#689).
+
+    Refusals become **409 on the action**, deliberately: the run itself finished long
+    ago, so failing it (as run start does) would rewrite history to describe a
+    credential problem in a later, unrelated click.
+
+    A no-op when the hub integration is off — behaviour is then byte-identical to
+    before this existed.
+    """
+    from app.services import hub_credentials
+
+    try:
+        hub_credentials.ensure_run_credential(run_id, hub_token)
+    except hub_credentials.HubCredentialRefusedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
