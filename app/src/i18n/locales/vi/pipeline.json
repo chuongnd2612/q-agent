@@ -494,19 +494,11 @@
   },
   "export": {
     "title": "Xuất dự án tự động hoá",
-    "description": "Đẩy bộ kiểm thử tự động của dự án này — page object, fixture, dữ liệu kiểm thử và spec — lên một git remote do bạn sở hữu, để bạn chạy trong CI của mình. Không có gì được đẩy lên cho đến khi bạn xuất, và Q-Agent chỉ đẩy lên một nhánh riêng, không bao giờ đẩy vào nhánh mặc định của remote.",
-    "loading": "Đang kiểm tra điều kiện xuất…",
-    "remoteLabel": "Git remote",
-    "remoteHint": "URL clone HTTPS của repository bạn kiểm soát. Việc đẩy dùng kết nối repository của dự án.",
-    "branchLabel": "Nhánh",
-    "branchHint": "Một nhánh riêng của bạn, để các commit được sinh ra đi qua vòng review của bạn. Các tên nhánh chính bị từ chối.",
-    "action": "Xuất lên remote",
-    "pushing": "Đang đẩy…",
-    "head": "HEAD {{commit}}",
-    "pushed": "Đã đẩy lên {{branch}}",
-    "alreadyUpToDate": "{{branch}} đã ở trạng thái mới nhất",
-    "failed": "Xuất thất bại",
-    "openPr": "Mở pull request",
-    "openPrYourself": "Hãy mở pull request từ nhánh này trên git host của bạn để review và merge."
+    "comingSoon": "Phiên bản 2 — sắp ra mắt",
+    "v2Description": "Giao bộ kiểm thử tự động của dự án này — page object, fixture, dữ liệu kiểm thử và spec — cho đội của bạn. Hai cách để mang đi sẽ có trong Phiên bản 2:",
+    "zipTitle": "Xuất ra ZIP",
+    "zipHint": "tải bộ kịch bản được sinh ra dưới dạng một file nén, sẵn sàng giải nén vào repository của bạn.",
+    "remoteTitle": "Xuất lên remote",
+    "remoteHint2": "đẩy trực tiếp lên một git remote do bạn sở hữu, trên nhánh riêng của bạn, để chạy trong CI của mình."
   }
 }

@@ -1,98 +1,38 @@
-import { AlertTriangle, CheckCircle2, GitBranch, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Clock3, FileArchive, GitBranch } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/Button";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
-import { Spinner } from "@/components/ui/misc";
-import {
-  useAutomationExportPreflight,
-  useExportAutomationProject,
-} from "@/hooks/queries";
-import { toast } from "@/lib/toast";
-import type { AutomationExportResult } from "@/types/api";
-
-const INPUT_CLASS =
-  "w-full rounded-[11px] border border-white/[0.09] bg-white/[0.04] px-[13px] py-2.5 font-mono text-[12.5px] text-ink outline-none focus:border-[rgba(139,92,246,.5)]";
 
 /**
- * "Export automation project" — push the run's git-backed automation project to a
- * remote the **customer** owns, so they can run the suite in their own CI (#549).
+ * "Export automation project" — the run's git-backed automation suite, handed to the
+ * customer so they can run it in their own CI (#549).
  *
- * Three properties are deliberate, and each is a rule from the slice rather than a
- * styling choice:
+ * **This is a coming-soon placeholder (#680).** The feature is Version 2, and its
+ * scope is *two* exports — a ZIP download and a push to a git remote. Only the remote
+ * half was ever built, and on its own it opened by confronting the user with plumbing
+ * they had not set up (a repository connection with a stored PAT), so the panel mostly
+ * showed a configuration error where a feature was advertised.
  *
- * * **Nothing pushes automatically.** The panel's only side effect on mount is the
- *   read-only preflight (which pushes nothing); a push happens on click and nowhere
- *   else. There is no push-on-generate and no retry-on-focus.
- * * **The target and branch are the user's.** Both are editable text, prefilled with
- *   a suggestion from the server. The suggested branch carries the
- *   `qagent/automation/…` prefix, so the happy path can never be the remote's
- *   default branch — the server refuses that, and mainline names, outright.
- * * **A refusal is the normal outcome, not an exception.** A diverged remote branch
- *   is reported in place with the server's own explanation (Q-Agent will not
- *   force-push and will not merge AI-authored code into hand edits), because the fix
- *   is the user's decision.
+ * Two properties of this placeholder are deliberate:
  *
- * Collapsed by default via `CollapsibleSection` (#536) — an export is an occasional,
- * deliberate act, so it should not occupy the screen while generating specs. Nothing
- * here goes into Zustand: the two inputs and the last result are local component
- * state, and no navigation state is introduced.
+ * * **No preflight request.** The panel's expand has no side effect at all. There is
+ *   nothing to be ready for yet, so asking the server about readiness could only
+ *   produce a warning about a prerequisite for a feature that is not offered.
+ * * **The form is removed, not disabled.** A greyed-out remote/branch form with a dead
+ *   button reads as "almost working" and invites the user to hunt for what they got
+ *   wrong. A named, dated-forward "coming in v2" state is the honest shape.
+ *
+ * The backend (`automation_export_service`) is untouched and dormant; v2 builds the ZIP
+ * path and re-enables the remote path on top of it.
  */
 export function ExportProjectPanel({
-  runId,
   projectId,
 }: {
-  runId: number;
-  /** The automation project to export; `null` for a legacy run (panel hidden). */
+  /** The automation project this would export; `null` for a legacy run (panel hidden). */
   projectId: number | null;
 }) {
   const { t } = useTranslation("pipeline");
-  const [open, setOpen] = useState(false);
-  const { data: preflight, isLoading } = useAutomationExportPreflight(runId, projectId, open);
-  const exportProject = useExportAutomationProject(runId);
-
-  const [remoteUrl, setRemoteUrl] = useState("");
-  const [branch, setBranch] = useState("");
-  const [result, setResult] = useState<AutomationExportResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // Prefill from the server's suggestion, once, and never over a value the user has
-  // started editing. A redacted suggestion (`https://***@…`) is not offered as a
-  // remote — it would be pushed verbatim and fail — so only clean URLs prefill.
-  useEffect(() => {
-    if (!preflight) return;
-    setBranch((b) => b || preflight.branch);
-    setRemoteUrl((u) => u || (preflight.remoteUrl.includes("***") ? "" : preflight.remoteUrl));
-  }, [preflight]);
 
   if (projectId == null) return null;
-
-  const busy = exportProject.isPending;
-  const canExport = !busy && remoteUrl.trim().length > 0 && branch.trim().length > 0;
-
-  const submit = () => {
-    if (!canExport) return;
-    setResult(null);
-    setError(null);
-    exportProject.mutate(
-      { remoteUrl: remoteUrl.trim(), branch: branch.trim(), projectId },
-      {
-        onSuccess: (data) => {
-          setResult(data);
-          toast.success(
-            data.pushed
-              ? t("export.pushed", { branch: data.branch })
-              : t("export.alreadyUpToDate", { branch: data.branch }),
-          );
-        },
-        onError: (e) => {
-          const message = e instanceof Error ? e.message : t("export.failed");
-          setError(message);
-          toast.error(message);
-        },
-      },
-    );
-  };
 
   return (
     <div
@@ -103,120 +43,36 @@ export function ExportProjectPanel({
       // and the same value — as ProjectFilePanel.
       style={{ background: "rgba(8,8,13,.92)" }}
     >
-      <CollapsibleSection title={t("export.title")} onOpenChange={setOpen}>
-        <p className="m-0 mb-3 text-xs leading-relaxed text-muted">{t("export.description")}</p>
-
-        {isLoading && (
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <Spinner size={13} /> {t("export.loading")}
-          </div>
-        )}
-
-        {preflight && !preflight.hasCredentials && (
-          <div
-            className="mb-3 flex items-start gap-2 rounded-[11px] border border-[rgba(245,158,11,.28)] px-3 py-2.5 text-[12px] leading-relaxed text-warning-soft"
-            style={{ background: "rgba(245,158,11,.1)" }}
-            role="alert"
-            data-testid="export-credentials-error"
-          >
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{preflight.credentialsError}</span>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-3">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11.5px] font-semibold text-ink-soft">
-              {t("export.remoteLabel")}
-            </span>
-            <input
-              className={INPUT_CLASS}
-              value={remoteUrl}
-              onChange={(e) => setRemoteUrl(e.target.value)}
-              placeholder="https://github.com/acme/automation.git"
-              spellCheck={false}
-              data-testid="export-remote-input"
-            />
-            <span className="text-[11px] text-faint">{t("export.remoteHint")}</span>
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11.5px] font-semibold text-ink-soft">
-              {t("export.branchLabel")}
-            </span>
-            <input
-              className={INPUT_CLASS}
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="qagent/automation/suite"
-              spellCheck={false}
-              data-testid="export-branch-input"
-            />
-            <span className="text-[11px] text-faint">{t("export.branchHint")}</span>
-          </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              onClick={submit}
-              disabled={!canExport}
-              data-testid="export-submit"
-            >
-              {busy ? <Spinner size={14} /> : <Upload size={15} strokeWidth={2.2} />}
-              {busy ? t("export.pushing") : t("export.action")}
-            </Button>
-            {preflight?.commit && (
-              <span className="font-mono text-[11px] text-faint">
-                {t("export.head", { commit: preflight.commit.slice(0, 8) })}
-              </span>
-            )}
-          </div>
+      <CollapsibleSection title={t("export.title")}>
+        <div
+          className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-[rgba(139,92,246,.32)] px-2.5 py-1 text-[11px] font-semibold text-violet"
+          style={{ background: "rgba(139,92,246,.12)" }}
+          data-testid="export-coming-soon"
+        >
+          <Clock3 size={12} strokeWidth={2.4} />
+          {t("export.comingSoon")}
         </div>
 
-        {error && (
-          <div
-            className="mt-3 flex items-start gap-2 rounded-[11px] border border-[rgba(244,63,94,.28)] px-3 py-2.5 text-[12px] leading-relaxed text-[#fb7185]"
-            style={{ background: "rgba(244,63,94,.1)" }}
-            role="alert"
-            data-testid="export-error"
-          >
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
+        <p className="m-0 mb-3.5 text-xs leading-relaxed text-muted">
+          {t("export.v2Description")}
+        </p>
 
-        {result && (
-          <div
-            className="mt-3 rounded-[11px] border border-[rgba(16,185,129,.28)] px-3 py-2.5 text-[12px] leading-relaxed"
-            style={{ background: "rgba(16,185,129,.09)" }}
-            data-testid="export-result"
-          >
-            <div className="flex items-center gap-2 font-semibold text-[#6ee7b7]">
-              <CheckCircle2 size={14} />
-              {result.pushed
-                ? t("export.pushed", { branch: result.branch })
-                : t("export.alreadyUpToDate", { branch: result.branch })}
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-soft">
-              <span className="flex items-center gap-1.5 font-mono text-[11.5px]">
-                <GitBranch size={12} /> {result.branch}
-              </span>
-              <span className="font-mono text-[11.5px] text-muted">{result.remote}</span>
-              <span className="font-mono text-[11.5px] text-faint">
-                {result.commit.slice(0, 8)}
-              </span>
-            </div>
-            {/* No adapter can open a pull request yet (#549), so the branch is
-                reported and the user opens the PR on their own host. */}
-            <div className="mt-1.5 text-[11.5px] text-muted">
-              {result.prUrl ? (
-                <a href={result.prUrl} target="_blank" rel="noreferrer" className="text-violet">
-                  {t("export.openPr")}
-                </a>
-              ) : (
-                t("export.openPrYourself")
-              )}
-            </div>
-          </div>
-        )}
+        <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
+          <li className="flex items-start gap-2.5">
+            <FileArchive size={15} className="mt-0.5 shrink-0 text-ink-soft" strokeWidth={2} />
+            <span className="text-[12px] leading-relaxed">
+              <span className="font-semibold text-ink-soft">{t("export.zipTitle")}</span>
+              <span className="text-muted"> — {t("export.zipHint")}</span>
+            </span>
+          </li>
+          <li className="flex items-start gap-2.5">
+            <GitBranch size={15} className="mt-0.5 shrink-0 text-ink-soft" strokeWidth={2} />
+            <span className="text-[12px] leading-relaxed">
+              <span className="font-semibold text-ink-soft">{t("export.remoteTitle")}</span>
+              <span className="text-muted"> — {t("export.remoteHint2")}</span>
+            </span>
+          </li>
+        </ul>
       </CollapsibleSection>
     </div>
   );
