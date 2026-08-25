@@ -638,6 +638,10 @@ export const api = {
   listProjects: (hubToken: string | null = null) =>
     getWithHubToken<ProjectOut[]>("/projects", hubToken),
   refreshProjects: () => post<ProjectOut[]>("/projects/refresh"),
+  // Environment names the run can actually target. Sourced from the project
+  // configs rather than a fixed list, because the backend resolves a run's
+  // base URL by name-matching against them and falls back silently on a miss.
+  listProjectEnvironments: () => get<string[]>("/projects/environments"),
 
   // shared namespace (ADR 0009): admin-curated catalog members clone from.
   listSharedProjects: () => get<SharedProjectOut[]>("/shared/projects"),

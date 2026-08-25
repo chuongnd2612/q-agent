@@ -13,6 +13,7 @@ export const queryKeys = {
   connectionRepos: (id: number) => ["connections", id, "repos"] as const,
   settings: ["settings"] as const,
   projects: ["projects"] as const,
+  projectEnvironments: ["projects", "environments"] as const,
   sharedProjects: ["shared", "projects"] as const,
   sharedProjectConfig: (key: string) => ["shared", "projects", key, "config"] as const,
   sharedProjectAuth: (key: string) => ["shared", "projects", key, "auth"] as const,

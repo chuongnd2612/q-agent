@@ -245,6 +245,12 @@ export const useProjects = () =>
     queryFn: async () => api.listProjects(await hubTokenForRead()),
   });
 
+export const useProjectEnvironments = () =>
+  useQuery({
+    queryKey: queryKeys.projectEnvironments,
+    queryFn: api.listProjectEnvironments,
+  });
+
 export const useRefreshProjects = () => {
   const qc = useQueryClient();
   return useMutation({

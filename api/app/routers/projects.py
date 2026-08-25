@@ -145,6 +145,25 @@ def refresh_projects(
     return [ProjectOut.model_validate(p) for p in owned(db.query(Project), Project, user).all()]
 
 
+@router.get("/environments", response_model=list[str])
+def list_environments(
+    db: Session = Depends(get_db), user: User | None = Depends(current_user)
+) -> list[str]:
+    """Environment names the caller may pick for a run (#671).
+
+    Declared **above** the ``/{key}/...`` routes so the literal path is not
+    swallowed by the path parameter, same as ``/knowledge`` below.
+
+    Deliberately reads only the local config rows and does **not** mirror from
+    the hub: ``build_context`` resolves a run's per-environment base URL against
+    those same local rows, so this returns exactly the set that will actually
+    match. Mirroring here would also cost one hub round trip per project, which
+    :func:`hub_workspace.ensure_project_config` documents as the thing to avoid
+    on a bulk path.
+    """
+    return project_config_service.environment_names(db, user)
+
+
 # ------------------------------------------------------------- Project Knowledge
 @router.get("/knowledge", response_model=list[ProjectKnowledgeOut])
 def list_knowledge(

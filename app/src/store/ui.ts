@@ -91,7 +91,6 @@ interface UIState {
   // create-run modal
   createRunOpen: boolean;
   runScope: "single" | "selected" | "assigned" | "sprint";
-  runFramework: string;
   runBrowser: string;
   runEnv: string;
   runWorkers: number;
@@ -121,7 +120,6 @@ interface UIState {
 
 interface RunFormFields {
   runScope: UIState["runScope"];
-  runFramework: string;
   runBrowser: string;
   runEnv: string;
   runWorkers: number;
@@ -186,9 +184,8 @@ export const useUI = create<UIState>((set) => ({
 
   createRunOpen: false,
   runScope: "selected",
-  runFramework: "Playwright",
   runBrowser: "chromium",
-  runEnv: "Staging",
+  runEnv: "",
   runWorkers: 4,
   runRetry: 2,
   openCreateRun: () => set({ createRunOpen: true }),
