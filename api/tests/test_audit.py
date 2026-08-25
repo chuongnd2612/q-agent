@@ -139,9 +139,17 @@ def test_audit_log_stats_shape(client):
     logger.warning("audit-test warning for stats")
 
     stats = client.get("/audit/logs/stats").json()
-    assert set(stats.keys()) == {"logVolume", "servicesHealthy", "servicesTotal", "warnings", "errors"}
+    assert {"logVolume", "warnings", "errors"} <= set(stats.keys())
     assert all(isinstance(v, int) for v in stats.values())
     assert stats["logVolume"] >= 1
+    # `servicesHealthy` / `servicesTotal` were REMOVED in #674 — they were invented
+    # numbers, not measurements. Asserted absent rather than simply dropped from the
+    # set above, so reinstating a fabricated metric fails here instead of shipping
+    # (#683). This is also why the check is a subset and not `==`: the exact-shape
+    # assertion is what left the suite red for weeks on a correct change.
+    assert "servicesHealthy" not in stats
+    assert "servicesTotal" not in stats
+    assert stats["warnings"] >= 1, "the warning logged above is what logVolume counts"
 
 
 def test_record_stamps_and_filters_by_run_code(client, db_session):
