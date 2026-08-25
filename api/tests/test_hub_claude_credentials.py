@@ -530,3 +530,222 @@ def test_the_grant_is_never_logged(hub_on, log_sink):
 
     assert not any("grant-fake-667" in line for line in log_sink)
     assert not any(FAKE_ACCESS_TOKEN in line for line in log_sink)
+
+
+# ------------------------------------- posting a ROTATED token back (#682)
+#
+# The half of the contract that was missing, and the reason a run died with
+# "Not logged in · Please run /login" surfaced as a bare HTTP 502.
+#
+# A Claude OAuth access token lives hours, and the CLI refreshes it *in place*:
+# it rewrites `.credentials.json` with a new access token AND a new refresh
+# token, which invalidates the previous refresh token. So a rotation that never
+# reaches the hub does not merely go missing — it makes the hub's stored copy
+# permanently unusable. Then #667's 60-second re-resolve fetched that dead copy
+# and wrote it over the live material on disk, and the next Claude call failed.
+#
+# Two independent defences are asserted below, and both matter: the rotation is
+# posted back (so the hub's copy stays alive), AND a staler hub copy can never
+# overwrite a fresher token on disk (so a missed post is survivable, not fatal).
+REFRESHED = f"{HUB}/credentials/claude/refreshed"
+
+#: The expiry in `_hub_payload`. A "rotated" token is deliberately later.
+HUB_EXPIRES_MS = 1754400000000
+ROTATED_ACCESS_TOKEN = "sk-ant-oat01-ROTATED-canary-682"
+
+
+@pytest.fixture(autouse=True)
+def _forget_captures():
+    """The per-run "already posted this rotation" memo is module state."""
+    hub_credentials._LAST_CAPTURED.clear()
+    yield
+    hub_credentials._LAST_CAPTURED.clear()
+
+
+def _rotate_on_disk(run_id: int, *, expires_ms: int = HUB_EXPIRES_MS + 3_600_000) -> str:
+    """Stand in for the CLI refreshing the token in the run's config dir."""
+    material = json.dumps(
+        {
+            "claudeAiOauth": {
+                "accessToken": ROTATED_ACCESS_TOKEN,
+                "refreshToken": "rt-fake-682-rotated",
+                "expiresAt": expires_ms,
+                "scopes": ["user:inference"],
+                "subscriptionType": "max",
+            }
+        }
+    )
+    path = claude_credentials.hub_run_config_dir(run_id) / ".credentials.json"
+    path.write_text(material, encoding="utf-8")
+    return material
+
+
+def _prepared(run_id: int = 1) -> None:
+    respx.post(GRANT).mock(return_value=httpx.Response(201, json=_grant_response()))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    assert hub_credentials.prepare_run_credential(run_id, "hub-token") == hub_credentials.SOURCE_HUB
+
+
+@respx.mock
+def test_a_rotated_token_is_posted_back_to_the_hub(hub_on):
+    """#682: without this the hub's copy dies the first time a token rotates."""
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+    _prepared()
+    rotated = _rotate_on_disk(1)
+
+    assert hub_credentials.capture_rotated_credential(1) is True
+
+    assert put.called, "the rotation never reached the hub"
+    sent = json.loads(put.calls.last.request.content)
+    assert sent["credentials"] == rotated
+    # It goes with the run's GRANT, which is the only credential a background
+    # thread legally holds - an agent token would be 15 minutes dead by now.
+    assert put.calls.last.request.headers["authorization"] == "Bearer grant-fake-667"
+
+
+@respx.mock
+def test_a_stale_hub_copy_never_clobbers_a_rotated_token(hub_on):
+    """#682, the actual regression: this is what produced the 502.
+
+    The hub still holds the pre-rotation copy - whose refresh token the rotation
+    just invalidated - so writing it to disk hands the CLI a dead credential. The
+    run had perfectly good material; the "keep it fresh" path is what broke it.
+    """
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+    _prepared()
+    _rotate_on_disk(1)  # newer than anything the hub knows about
+    _age_out(1)
+
+    assert hub_credentials.refresh_run_credential(1) is False
+    assert ROTATED_ACCESS_TOKEN in _materialized(1), "a staler hub copy overwrote a live token"
+    assert FAKE_ACCESS_TOKEN not in _materialized(1)
+    # And the direction is corrected rather than merely blocked: the hub is the one
+    # that is behind, so the rotation is pushed to it.
+    assert put.called
+
+
+@respx.mock
+def test_declining_the_write_still_restarts_the_rate_limit(hub_on):
+    """Declining is not free: the window is the file's mtime.
+
+    `claude_cli` resolves the environment for EVERY Claude call, so a decline that
+    left the mtime alone would put a hub round-trip on every single invocation for
+    the rest of the run — the cost #667's window exists to avoid.
+    """
+    respx.put(REFRESHED).mock(return_value=httpx.Response(200, json={"ok": True, "updated": True}))
+    _prepared()
+    _rotate_on_disk(1)
+    _age_out(1)
+
+    assert hub_credentials.refresh_run_credential(1) is False
+    calls_before = respx.calls.call_count
+    assert hub_credentials.refresh_run_credential(1) is False
+    assert respx.calls.call_count == calls_before, "the hub was asked again immediately"
+
+
+@respx.mock
+def test_a_newer_hub_credential_still_wins(hub_on):
+    """#682 must not break #667: a genuinely newer hub token still lands.
+
+    The guard is "not older", not "never" - otherwise changing the Claude account
+    in EmeHub could no longer reach a run under way, which is the whole point of
+    the refresh.
+    """
+    _prepared()
+    _rotate_on_disk(1, expires_ms=HUB_EXPIRES_MS - 3_600_000)  # disk is the STALE one
+
+    newer = _hub_payload()
+    newer["credentials"] = newer["credentials"].replace(FAKE_ACCESS_TOKEN, "sk-ant-oat01-NEWER")
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=newer))
+    _age_out(1)
+
+    assert hub_credentials.refresh_run_credential(1) is True
+    assert "sk-ant-oat01-NEWER" in _materialized(1)
+
+
+@respx.mock
+def test_a_logged_out_file_is_never_posted_back(hub_on):
+    """A failed refresh leaves a token with no expiry - posting it would be the
+    one write that could kill the hub's credential from our side."""
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+    _prepared()
+    path = claude_credentials.hub_run_config_dir(1) / ".credentials.json"
+    path.write_text(json.dumps({"claudeAiOauth": {"accessToken": ""}}), encoding="utf-8")
+
+    assert hub_credentials.capture_rotated_credential(1) is False
+    assert not put.called
+
+
+@respx.mock
+def test_the_same_rotation_is_posted_only_once(hub_on):
+    """`claude_cli` captures after EVERY call; a generation pass makes many."""
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+    _prepared()
+    _rotate_on_disk(1)
+
+    assert hub_credentials.capture_rotated_credential(1) is True
+    assert hub_credentials.capture_rotated_credential(1) is False
+    assert hub_credentials.capture_rotated_credential(1) is False
+    assert put.call_count == 1
+
+    # A second, genuinely new rotation does go.
+    _rotate_on_disk(1, expires_ms=HUB_EXPIRES_MS + 7_200_000)
+    assert hub_credentials.capture_rotated_credential(1) is True
+    assert put.call_count == 2
+
+
+@respx.mock
+def test_a_run_with_no_grant_posts_nothing(hub_on):
+    """No grant means no legal way to write, and no half-authenticated attempt."""
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+    respx.post(GRANT).mock(return_value=httpx.Response(500, text="nope"))
+    respx.get(RESOLVE).mock(return_value=httpx.Response(200, json=_hub_payload()))
+    hub_credentials.prepare_run_credential(1, "hub-token")
+    _rotate_on_disk(1)
+
+    assert hub_credentials.capture_rotated_credential(1) is False
+    assert not put.called
+
+
+@respx.mock
+def test_a_run_that_never_used_the_hub_posts_nothing(hub_on):
+    """Local material is not the hub's to store, and there is nothing to keep alive."""
+    put = respx.put(REFRESHED).mock(
+        return_value=httpx.Response(200, json={"ok": True, "updated": True})
+    )
+
+    assert hub_credentials.capture_rotated_credential(4242) is False
+    assert not put.called
+
+
+@respx.mock
+def test_a_hub_that_refuses_the_rotation_does_not_break_the_run(hub_on):
+    """The credential is a dependency of the work, not the work itself."""
+    respx.put(REFRESHED).mock(return_value=httpx.Response(500, text="nope"))
+    _prepared()
+    _rotate_on_disk(1)
+
+    assert hub_credentials.capture_rotated_credential(1) is True  # handled, not raised
+    assert ROTATED_ACCESS_TOKEN in _materialized(1), "the live token must stay on disk"
+
+
+@respx.mock
+def test_the_rotated_material_is_never_logged(hub_on, log_sink):
+    """Same rule as every other credential path - the token is a secret."""
+    respx.put(REFRESHED).mock(return_value=httpx.Response(200, json={"ok": True, "updated": True}))
+    _prepared()
+    _rotate_on_disk(1)
+    hub_credentials.capture_rotated_credential(1)
+
+    assert not any(ROTATED_ACCESS_TOKEN in line for line in log_sink)
+    assert not any("rt-fake-682-rotated" in line for line in log_sink)

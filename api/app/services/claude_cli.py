@@ -469,6 +469,18 @@ def run_prompt(
     # it back into the store so the credential doesn't silently expire between
     # calls. Guarded + best-effort — never let this bookkeeping break the run.
     _persist_refreshed_credential(owner_id)
+    # Same rotation, other destination (#682). In hub-data mode there is no local
+    # row for the call above to write to, so it is a silent no-op — and a rotation
+    # that never reaches the hub invalidates the refresh token the hub still holds,
+    # killing its copy. `capture_rotated_credential` self-guards (hub off, no
+    # hub-resolved dir, no grant, or nothing new to send ⇒ it does nothing).
+    if run_id is not None:
+        try:
+            from app.services import hub_credentials
+
+            hub_credentials.capture_rotated_credential(run_id)
+        except Exception as exc:  # noqa: BLE001 - bookkeeping, never the work
+            logger.warning("Could not capture a rotated Claude token for the hub: {}", exc)
 
     if proc.returncode != 0:
         # `claude -p --output-format json` writes its failure reason (auth /
@@ -491,7 +503,8 @@ def run_prompt(
         # Match all so a real 401 flags the credential (previously only the
         # "/login" phrasing did, so API 401s slipped through) and lands in the run
         # activity log (#394).
-        if any(m in (out + err).lower() for m in _AUTH_ERROR_MARKERS):
+        is_auth_failure = any(m in (out + err).lower() for m in _AUTH_ERROR_MARKERS)
+        if is_auth_failure:
             _mark_credential_invalid(owner_id)
             from app.services import audit_service
 
@@ -501,6 +514,23 @@ def run_prompt(
                 meta="Invalid or expired credentials — update them in Settings, then re-run.",
             )
         detail = (err or out or "no output on stderr/stdout")[:800]
+        if is_auth_failure:
+            # Say what to do instead of handing the CLI's JSON envelope to the SPA,
+            # which rendered as a bare "Request failed (HTTP 502)" — the shape #682
+            # was reported as. Where the credential came from decides the advice:
+            # hub-resolved material is fixed in EmeHub, not in Q-Agent's Settings,
+            # and sending someone to the wrong screen is worse than saying nothing.
+            from app.services import claude_credentials as _creds
+
+            from_hub = run_id is not None and _creds.hub_run_config_dir(run_id) is not None
+            raise ClaudeError(
+                "Claude rejected the credential for this run (not logged in). "
+                + (
+                    "Reconnect the Claude account in EmeHub, then try again."
+                    if from_hub
+                    else "Update your Claude credentials in Settings, then try again."
+                )
+            )
         raise ClaudeError(f"Claude CLI exited {proc.returncode}: {detail}")
 
     activity.finish(call_id, ok=True)
