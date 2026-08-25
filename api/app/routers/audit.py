@@ -5,7 +5,7 @@ Endpoints:
   DELETE /audit/events                       -> {deleted: int}        (clear all)
   GET    /audit/stats                        -> {eventsToday, aiActions, userActions, failures}
   GET    /audit/logs?level=&service=&q=      -> list[BackendLogOut]  (in-memory buffer, newest first)
-  GET    /audit/logs/stats                   -> {logVolume, servicesHealthy, servicesTotal, warnings, errors}
+  GET    /audit/logs/stats                   -> {logVolume, warnings, errors}
 
 Returns plain camelCase dicts (the wire format the app expects).
 """

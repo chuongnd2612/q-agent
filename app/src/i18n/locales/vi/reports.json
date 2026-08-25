@@ -3,10 +3,7 @@
     "header": {
       "subtitle": "7 ngày qua · trên tất cả lượt chạy",
       "title": "Báo cáo",
-      "export": "Xuất"
-    },
-    "toast": {
-      "exported": "Đã xuất báo cáo"
+      "export": "Xuất CSV"
     },
     "summary": {
       "passRate": "tỷ lệ đạt",
@@ -62,7 +59,6 @@
       "userActions": "Hành động người dùng",
       "failuresWarnings": "Lỗi / cảnh báo",
       "logVolume": "Lượng nhật ký · 24h",
-      "servicesHealthy": "Dịch vụ khỏe mạnh",
       "warnings1h": "Cảnh báo · 1h",
       "errors1h": "Lỗi · 1h"
     },

@@ -2,12 +2,36 @@ import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Download } from "lucide-react";
-import { toast } from "@/lib/toast";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/misc";
 import { runColor, runEffectiveStatus, timeAgo } from "@/components/dashboard/runStatus";
 import { useReports, useRuns } from "@/hooks/queries";
+import type { ReportOut } from "@/types/api";
+
+/** Columns exported by the Export CSV button, in order. Every one is a real
+ *  field of `GET /reports` — the export is the reports themselves, not a summary. */
+const CSV_COLUMNS = [
+  "id",
+  "runId",
+  "executionId",
+  "overallResult",
+  "passRate",
+  "passed",
+  "failed",
+  "durationS",
+  "env",
+  "createdAt",
+] as const;
+
+/** Reports -> CSV text. Same shape as the Audit Log export (`AuditLog.tsx`). */
+function toCsv(reports: ReportOut[]): string {
+  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = reports.map((r) =>
+    CSV_COLUMNS.map((k) => esc((r as unknown as Record<string, unknown>)[k])).join(","),
+  );
+  return [CSV_COLUMNS.join(","), ...rows].join("\n");
+}
 
 interface FlakyRow {
   id: string;
@@ -59,6 +83,18 @@ export function Reports() {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 4);
 
+  // Real download: the reports already in hand, serialized to CSV client-side.
+  const exportCsv = () => {
+    if (byNewest.length === 0) return;
+    const blob = new Blob([toCsv(byNewest)], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "reports.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const ringOffset = 377 - (377 * Math.max(0, Math.min(100, passRate ?? 0))) / 100;
 
   return (
@@ -68,7 +104,7 @@ export function Reports() {
           <div className="mb-[5px] text-[13px] font-medium text-muted">{t("reports.header.subtitle")}</div>
           <h1 className="m-0 text-[28px] font-black tracking-tight">{t("reports.header.title")}</h1>
         </div>
-        <Button className="w-full md:w-auto" onClick={() => toast(t("reports.toast.exported"))}>
+        <Button className="w-full md:w-auto" onClick={exportCsv} disabled={byNewest.length === 0}>
           <Download size={15} /> {t("reports.header.export")}
         </Button>
       </div>

@@ -3,10 +3,7 @@
     "header": {
       "subtitle": "Last 7 days · across all runs",
       "title": "Reports",
-      "export": "Export"
-    },
-    "toast": {
-      "exported": "Report exported"
+      "export": "Export CSV"
     },
     "summary": {
       "passRate": "pass rate",
@@ -62,7 +59,6 @@
       "userActions": "User actions",
       "failuresWarnings": "Failed / warnings",
       "logVolume": "Log volume · 24h",
-      "servicesHealthy": "Services healthy",
       "warnings1h": "Warnings · 1h",
       "errors1h": "Errors · 1h"
     },
