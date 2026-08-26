@@ -380,11 +380,11 @@ export function Settings() {
                 onChange={(v) => v && set({ claudeModel: v })}
                 placeholder={t("aiModel.model.placeholder")}
                 allowClear={false}
-                options={[
-                  { value: "claude-opus-4-8", label: t("aiModel.model.opus") },
-                  { value: "claude-sonnet-5", label: t("aiModel.model.sonnet") },
-                  { value: "claude-haiku-4-5-20251001", label: t("aiModel.model.haiku") },
-                ]}
+                // The served catalog, like every other model dropdown (#717). #715
+                // replaced three copies of this list and missed this one, which still
+                // offered a date-suffixed Haiku id and no Opus 5 — so the workspace's
+                // DEFAULT model could be set to an id the CLI does not recognise.
+                options={aiModels}
               />
               <span className="text-[12px] text-muted">
                 {t("aiModel.model.hint")}

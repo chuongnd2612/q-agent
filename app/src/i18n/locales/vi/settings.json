@@ -101,9 +101,6 @@
     "model": {
       "label": "Mô hình Claude",
       "placeholder": "Chọn một mô hình",
-      "opus": "Opus 4.8 — chất lượng cao nhất",
-      "sonnet": "Sonnet 5 — cân bằng (mặc định)",
-      "haiku": "Haiku 4.5 — nhanh nhất",
       "hint": "Mô hình dùng cho mọi tác vụ AI (phân tích, tạo, tự sửa lỗi)."
     },
     "budget": {
