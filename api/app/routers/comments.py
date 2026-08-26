@@ -27,11 +27,12 @@ from app.models.report import Report
 from app.models.run import Run
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.schemas import CommentEdit, PublishRequest, TicketCommentOut
+from app.schemas import CommentEdit, CommentPreviewOut, PublishRequest, TicketCommentOut
 from app.services import (
     audit_service,
     claude_cli,
     comment_evidence,
+    comment_markup,
     comment_template,
     run_context,
     run_control,
@@ -42,6 +43,7 @@ from app.services.publish_service import publish_one
 from app.services.report_service import build_report
 from app.services.run_status import set_run_status
 from app.services.skills import TICKET_COMMENT_GENERATOR
+from app.services.workspace_scope import served_evidence_path
 
 router = APIRouter(tags=["comments"])
 
@@ -513,6 +515,38 @@ def edit_comment(
     db.commit()
     db.refresh(comment)
     return comment
+
+
+@router.get("/comments/{comment_id}/preview", response_model=CommentPreviewOut)
+def preview_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """The comment as the PROVIDER will render it (#707).
+
+    The Publish screen used to show the raw draft, so a reviewer approved something
+    that was not what the work item would display: `![TC-01](shot.png)` appeared as
+    literal Markdown, and the screenshot the template deliberately places under its
+    finding was invisible in the one screen where someone decides the comment is right.
+
+    Rendered by :func:`comment_markup.to_html` — **the same function the adapter posts
+    through**, not a second implementation of it. A TypeScript twin would drift, and a
+    preview that drifts is worse than none: it is confidently wrong.
+
+    Image sources point at Q-Agent's own ``/artifacts`` (the provider's URLs do not
+    exist until publish), so the screenshots actually appear. Those need the caller's
+    access token, which the SPA appends — see ``api.artifactUrl``.
+    """
+    comment = _get_comment_or_404(db, comment_id, user)
+    run = db.get(Run, comment.run_id)
+    owner_id = run.owner_id if run is not None else None
+    sources = {
+        str(ref.get("filename") or ""): served_evidence_path(owner_id, str(ref.get("path") or ""))
+        for ref in (comment.attachments or [])
+        if isinstance(ref, dict) and ref.get("path")
+    }
+    return {"html": comment_markup.to_html(comment.body, image_src=sources)}
 
 
 @router.post("/comments/{comment_id}/regenerate", response_model=TicketCommentOut)

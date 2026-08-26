@@ -1033,6 +1033,10 @@ export const api = {
       undefined,
       hubToken,
     ),
+  /** The comment rendered the way its provider will show it (#707) — served by the
+   * SAME function that posts it, so the preview cannot drift from the published thing. */
+  commentPreview: (commentId: number) =>
+    get<{ html: string }>(`/comments/${commentId}/preview`),
   /** Rebuild ONE ticket's draft from the current report and evidence (#700). Carries
    * the hub token like every other Claude-driven run action (#689). */
   regenerateComment: (commentId: number, hubToken: string | null = null) =>

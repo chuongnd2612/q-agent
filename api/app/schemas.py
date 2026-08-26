@@ -1141,6 +1141,16 @@ class TicketCommentOut(ApiModel):
     attachments: list[CommentAttachmentOut] = Field(default_factory=list)
 
 
+class CommentPreviewOut(ApiModel):
+    """The comment rendered the way its provider will show it (#707).
+
+    HTML, deliberately: it is the same string the adapter posts, so the preview cannot
+    drift from what is published — and a preview that drifts is worse than none.
+    """
+
+    html: str = ""
+
+
 class CommentEdit(ApiModel):
     body: str | None = None
     target_status: str | None = None

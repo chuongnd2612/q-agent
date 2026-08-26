@@ -28,6 +28,7 @@ from app.models.user import User
 from app.services import settings_store
 from app.services.ownership import get_owned_or_404
 from app.services.playwright_runner import run_execution
+from app.services import execution_pruning
 from app.services.run_status import set_run_status
 from app.services.workspace_scope import served_evidence_path
 
@@ -106,6 +107,11 @@ def start_execution(
     )
     db.add(execution)
     db.flush()
+    # A re-run supersedes the previous execution the moment this one exists (#706).
+    # Pruning here rather than at the end closes the window where a comment prepared
+    # mid-run would mix two attempts — and the old execution was already invisible
+    # everywhere in the product, which is how five of them accumulated unnoticed.
+    execution_pruning.prune_superseded(db, run_id, execution.id, run.owner_id)
 
     for case in cases:
         db.add(
@@ -201,6 +207,10 @@ def run_single_spec(
     )
     db.add(execution)
     db.flush()
+    # Deliberately NOT pruned (#706). This is a single-case re-run: it supersedes one
+    # case, not the suite, and retiring the previous execution here would delete every
+    # OTHER case's evidence — leaving a run whose comment can only ever report the one
+    # case someone happened to re-run last.
     db.add(
         ExecutionResult(
             execution_id=execution.id,
