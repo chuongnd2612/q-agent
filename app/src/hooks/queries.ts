@@ -1345,6 +1345,18 @@ export const useComments = (runId: number | string | null) =>
     enabled: runId != null,
   });
 
+/** Provider-rendered HTML for one comment (#707).
+ *
+ * Keyed on the BODY as well as the id: a regenerate or an edit changes the body, and a
+ * preview still showing the previous render is the one failure this feature cannot
+ * afford — its whole job is to be what gets published. */
+export const useCommentPreview = (commentId: number, body: string) =>
+  useQuery({
+    queryKey: ["comment-preview", commentId, body] as const,
+    queryFn: () => api.commentPreview(commentId),
+    staleTime: Infinity,
+  });
+
 export const useCommentMutations = (runId: number | string) => {
   const qc = useQueryClient();
   const invalidate = () =>

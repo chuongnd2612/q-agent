@@ -434,7 +434,11 @@
     "regenerate": "Tạo lại",
     "regenerating": "Đang tạo lại…",
     "regenerateHint": "Dựng lại comment này từ kết quả và bằng chứng mới nhất",
-    "regeneratePublishedHint": "Đã publish lên work item — hãy sửa trực tiếp. Tạo lại sẽ đăng thêm một comment mới chứ không thay thế comment cũ."
+    "regeneratePublishedHint": "Đã publish lên work item — hãy sửa trực tiếp. Tạo lại sẽ đăng thêm một comment mới chứ không thay thế comment cũ.",
+    "preview": {
+      "loading": "Đang dựng bản xem trước…",
+      "failed": "Không dựng được bản xem trước — hiển thị bản thảo gốc."
+    }
   },
   "createLink": {
     "header": {

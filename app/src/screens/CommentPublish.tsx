@@ -11,6 +11,7 @@ import { Pill, providerGlyph } from "@/components/ui/badges";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useParams } from "react-router-dom";
 import { useComments, useCommentMutations, useRun } from "@/hooks/queries";
+import { CommentPreview } from "./publish/CommentPreview";
 import type { PublishStatus, TicketCommentOut } from "@/types/api";
 
 const PUBLISH_STATUS: Record<PublishStatus, [string, PublishStatus, string]> = {
@@ -285,6 +286,10 @@ function PublishCard({
         {editing ? (
           <div className="flex flex-col gap-2.5 p-3 md:p-[14px_18px]">
             {previewing ? (
+              /* Unsaved text has no server render — the provider preview is of the
+                 SAVED body — so this stays MarkdownLite, and the toggle says so.
+                 Pretending otherwise would show a reviewer a preview of something
+                 other than what they just typed. */
               <div className="min-h-[160px] rounded-[11px] border border-white/[0.08] bg-white/[0.02] p-3">
                 {draft.trim() ? (
                   <MarkdownLite text={draft} />
@@ -316,9 +321,11 @@ function PublishCard({
             </div>
           </div>
         ) : (
-          <div className="p-3 md:p-[14px_18px]">
-            <MarkdownLite text={comment.body} />
-          </div>
+          /* The provider's own rendering, not ours (#707). The card used to show the
+             raw draft, so `![TC-01](shot.png)` appeared as literal Markdown and the
+             screenshot the template places under its finding was invisible in the very
+             screen where someone decides the comment is right. */
+          <CommentPreview commentId={comment.id} body={comment.body} />
         )}
 
         {comment.errorMessage && (

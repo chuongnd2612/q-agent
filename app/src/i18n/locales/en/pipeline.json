@@ -434,7 +434,11 @@
     "regenerate": "Regenerate",
     "regenerating": "Regenerating…",
     "regenerateHint": "Rebuild this comment from the latest results and evidence",
-    "regeneratePublishedHint": "Already published to the work item — edit it instead. Regenerating would post a second comment rather than replace the first."
+    "regeneratePublishedHint": "Already published to the work item — edit it instead. Regenerating would post a second comment rather than replace the first.",
+    "preview": {
+      "loading": "Rendering preview…",
+      "failed": "Could not render the provider preview — showing the raw draft."
+    }
   },
   "createLink": {
     "header": {

@@ -672,3 +672,209 @@ def test_regenerate_refuses_when_the_report_no_longer_covers_the_ticket(
 
     assert resp.status_code == 400
     assert "nothing to regenerate from" in resp.json()["detail"]
+
+
+# -------------------------------- evidence comes from the LATEST execution (#706)
+#
+# RUN-207 has one test case and its comment listed TC-01 six times, with different
+# statuses, plus a wall of internal DOM captures — all attached to the work item.
+# Two causes, both asserted here.
+
+
+def _seed_second_execution(db_session, run_id: int = 1):
+    """A re-run: a second Execution over the same case, with its own evidence."""
+    from app.models.execution import Evidence, Execution, ExecutionResult
+    from app.models.testcase import TestCase
+    from app.services.workspace_scope import scoped_evidence_dir
+
+    execution = Execution(run_id=run_id, status="done", env="Staging")
+    db_session.add(execution)
+    db_session.flush()
+    case = db_session.query(TestCase).filter(TestCase.code == "TC-01").first()
+    result = ExecutionResult(
+        execution_id=execution.id,
+        test_case_id=case.id,
+        ticket_external_id="SUR-1",
+        case_code="TC-01",
+        title="TC-01 title",
+        status="pass",
+        duration_ms=900,
+    )
+    db_session.add(result)
+    db_session.flush()
+    rel = "RUN-1/SUR-1/TC-01/rerun.bin"
+    path = scoped_evidence_dir(None) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"y" * 128)
+    db_session.add(
+        Evidence(result_id=result.id, kind="screenshot", path=rel, filename="rerun.bin", size_bytes=128)
+    )
+    db_session.commit()
+    return execution
+
+
+def test_a_rerun_case_appears_once_from_the_latest_execution(client, db_session, monkeypatch):
+    """The bug: one case, six entries, one of them a stale FAIL."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    _seed_second_execution(db_session)
+
+    resp = client.post("/runs/1/comments/prepare")
+
+    attachments = next(c for c in resp.json() if c["ticketExternalId"] == "SUR-1")["attachments"]
+    codes = [a["caseCode"] for a in attachments]
+    assert codes.count("TC-01") == 1, codes
+    # ...and it is the RE-RUN's file, not the first attempt's.
+    assert any("rerun.bin" in a["filename"] for a in attachments), attachments
+    # The first execution's TC-02 belonged to a superseded attempt and is gone with it.
+    assert "TC-02" not in codes
+
+
+def test_internal_dom_captures_never_reach_a_work_item(client, db_session, monkeypatch):
+    """`dom` / `dom-distilled` are Q-Agent's own captures for healing and selector work.
+
+    They are meaningless to whoever reads the ticket, and they arrived as a wall of
+    `qagent-dom-raw-*.html` files because #696 excluded console/network BY NAME and
+    never saw these coming — hence an allowlist now.
+    """
+    from app.models.execution import Evidence, ExecutionResult
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    result = db_session.query(ExecutionResult).filter(ExecutionResult.case_code == "TC-01").first()
+    for kind, name in (("dom", "qagent-dom-raw-abc.html"), ("dom-distilled", "qagent-dom-distilled-abc.json")):
+        db_session.add(
+            Evidence(result_id=result.id, kind=kind, path=f"RUN-1/{name}", filename=name, size_bytes=10)
+        )
+    db_session.commit()
+
+    resp = client.post("/runs/1/comments/prepare")
+
+    comment = next(c for c in resp.json() if c["ticketExternalId"] == "SUR-1")
+    assert not any("dom" in a["kind"] for a in comment["attachments"]), comment["attachments"]
+    assert "qagent-dom-raw" not in comment["body"]
+    assert "qagent-dom-distilled" not in comment["body"]
+    # The negative control: the screenshot beside them still came through.
+    assert any(a["kind"] == "screenshot" for a in comment["attachments"])
+
+
+# ------------------------------------------- a re-run retires what it supersedes
+
+
+def test_a_suite_rerun_deletes_the_previous_executions_evidence(db_session, tmp_path):
+    """Superseded executions were invisible everywhere in the product and kept their
+    artifacts on disk forever — which is how five of them accumulated unnoticed."""
+    from pathlib import Path
+
+    from app.models.execution import Evidence, Execution
+    from app.services import execution_pruning
+    from app.services.workspace_scope import scoped_evidence_dir
+
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    old_paths = [
+        scoped_evidence_dir(None) / path
+        for (path,) in db_session.query(Evidence.path).all()
+    ]
+    assert old_paths and all(p.is_file() for p in old_paths)
+    keeper = Execution(run_id=1, status="running", env="Staging")
+    db_session.add(keeper)
+    db_session.flush()
+
+    pruned = execution_pruning.prune_superseded(db_session, 1, keeper.id, None)
+
+    assert pruned == 1
+    assert db_session.query(Execution).filter(Execution.run_id == 1).count() == 1
+    assert db_session.query(Evidence).count() == 0, "evidence rows outlived their execution"
+    assert not any(Path(p).exists() for p in old_paths), "files outlived their rows"
+
+
+def test_pruning_leaves_the_execution_it_was_told_to_keep(db_session):
+    """The obvious way to get this wrong, and it would delete the run in progress."""
+    from app.models.execution import Evidence, Execution
+    from app.services import execution_pruning
+
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    keeper = db_session.query(Execution).filter(Execution.run_id == 1).first()
+
+    execution_pruning.prune_superseded(db_session, 1, keeper.id, None)
+
+    assert db_session.query(Execution).filter(Execution.id == keeper.id).count() == 1
+    assert db_session.query(Evidence).count() > 0
+
+
+def test_pruning_never_touches_another_run(db_session):
+    """Scoped by run_id — the failure here would be silent and total."""
+    from app.models.execution import Execution
+    from app.models.run import Run
+    from app.services import execution_pruning
+
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    db_session.add(Run(id=2, code="RUN-2", name="Other", status="executing"))
+    db_session.flush()
+    other = Execution(run_id=2, status="done", env="Staging")
+    db_session.add(other)
+    db_session.commit()
+    keeper = Execution(run_id=1, status="running", env="Staging")
+    db_session.add(keeper)
+    db_session.flush()
+
+    execution_pruning.prune_superseded(db_session, 1, keeper.id, None)
+
+    assert db_session.query(Execution).filter(Execution.id == other.id).count() == 1
+
+
+# ------------------------------------------ the provider preview endpoint (#707)
+
+
+def test_the_preview_is_the_html_that_gets_published(client, db_session, monkeypatch):
+    """The preview's whole job is to be what the work item shows.
+
+    Served by `comment_markup.to_html` — the same function the adapter posts through —
+    rather than a second implementation, because a preview that drifts is worse than
+    none: it is confidently wrong.
+    """
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+
+    resp = client.get(f"/comments/{comment_id}/preview")
+
+    assert resp.status_code == 200
+    html = resp.json()["html"]
+    assert "<ol>" in html, "the numbered result list did not survive"
+    assert "**" not in html, "markdown leaked into the preview"
+
+
+def test_the_preview_points_images_at_qagent_not_the_provider(
+    client, db_session, monkeypatch
+):
+    """The provider's URLs do not exist until publish, so a preview that used them
+    would show broken images for every unpublished draft — i.e. always."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    _seed_evidence(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+
+    html = client.get(f"/comments/{comment_id}/preview").json()["html"]
+
+    assert "<img" in html, "the inline screenshot is missing from the preview"
+    assert "evidence/" in html, "the image does not point at Q-Agent's artifacts"
+
+
+def test_the_preview_is_ownership_checked(client, db_session, monkeypatch):
+    """It returns comment content, so it needs the same 404 as every other read."""
+    resp = client.get("/comments/424242/preview")
+
+    assert resp.status_code == 404

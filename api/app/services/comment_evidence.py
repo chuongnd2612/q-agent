@@ -35,8 +35,14 @@ from app.services.workspace_scope import scoped_evidence_dir
 
 __all__ = ["collect_for_run", "manifest_block", "attachment_refs"]
 
-#: Order artifacts are listed in, most-useful-first for a human reading a ticket.
-_KIND_ORDER = ("screenshot", "video", "trace", "console", "network")
+#: What a customer's work item may receive, most-useful-first (#706). An ALLOWLIST, not
+#: a deny-list: `dom` and `dom-distilled` are Q-Agent's own captures for healing and
+#: selector work, and they reached a real ticket as a wall of
+#: `qagent-dom-raw-*.html` / `qagent-dom-distilled-*.json` because #696 excluded
+#: `console`/`network` by name and never saw these two coming. The next capture kind
+#: someone adds must have to be let in deliberately rather than land in a customer's
+#: ticket by default.
+_COMMENT_KINDS = ("screenshot", "video", "trace")
 
 #: What each kind is called in a comment. Provider-neutral plain words: the audience
 #: is whoever picks the ticket up, not a Q-Agent user.
@@ -44,8 +50,6 @@ _KIND_LABEL = {
     "screenshot": "Screenshot",
     "video": "Video",
     "trace": "Playwright trace",
-    "console": "Console log",
-    "network": "Network log",
 }
 
 
@@ -75,10 +79,25 @@ def collect_for_run(db: Session, run_id: int, owner_id: int | None) -> dict[str,
     know about evidence scoping.
     """
     root = scoped_evidence_dir(owner_id)
+    # The LATEST execution, not every one the run ever had (#706). A re-run makes a new
+    # Execution, so joining on `run_id` alone reported the same case once per attempt —
+    # RUN-207 listed its single test case six times, including a FAIL from an attempt
+    # superseded hours earlier. Every other consumer already reads only the latest
+    # (`evidence._latest_execution`, `execution.get_latest_execution`,
+    # `report_service._latest_execution`); this was the one that did not, which is why
+    # the comment showed history nothing else in the product shows.
+    latest = (
+        db.query(Execution.id)
+        .filter(Execution.run_id == run_id)
+        .order_by(Execution.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    if latest is None:
+        return {}
     results = (
         db.query(ExecutionResult)
-        .join(Execution, ExecutionResult.execution_id == Execution.id)
-        .filter(Execution.run_id == run_id)
+        .filter(ExecutionResult.execution_id == latest)
         .order_by(ExecutionResult.id)
         .all()
     )
@@ -86,8 +105,8 @@ def collect_for_run(db: Session, run_id: int, owner_id: int | None) -> dict[str,
     for result in results:
         files: list[dict[str, Any]] = []
         for ev in sorted(
-            result.evidence or [],
-            key=lambda e: (_KIND_ORDER.index(e.kind) if e.kind in _KIND_ORDER else len(_KIND_ORDER)),
+            (e for e in (result.evidence or []) if e.kind in _COMMENT_KINDS),
+            key=lambda e: _COMMENT_KINDS.index(e.kind),
         ):
             files.append(
                 {
@@ -147,15 +166,13 @@ def attachment_refs(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     :mod:`app.services.publish_service`. Refs, not bytes: a draft may sit for days,
     and a comment row is not the place to keep megabytes of video.
 
-    Screenshots resolve to their **annotated** copy when there is one. Console and
-    network logs are excluded — they are JSON blobs the DB already holds, and
-    attaching them to a work item is noise rather than evidence.
+    Screenshots resolve to their **annotated** copy when there is one. The kinds that
+    can appear at all were already filtered by :func:`collect_for_run`'s allowlist
+    (#706), so nothing internal reaches a work item.
     """
     refs: list[dict[str, Any]] = []
     for case in cases:
         for file in case["files"]:
-            if file["kind"] in ("console", "network"):
-                continue
             path = file["annotatedPath"] or file["path"]
             refs.append(
                 {
