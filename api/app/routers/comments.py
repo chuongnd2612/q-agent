@@ -41,7 +41,7 @@ from app.services.claude_cli import ClaudeError
 from app.services.ownership import get_owned_or_404
 from app.services.publish_service import publish_one
 from app.services.report_service import build_report
-from app.services.run_status import set_run_status
+from app.services.run_status import complete_run, set_run_status
 from app.services.skills import TICKET_COMMENT_GENERATOR
 from app.services.workspace_scope import served_evidence_path
 
@@ -59,8 +59,19 @@ def _maybe_finish_run(db: Session, run_id: int) -> None:
     comments = db.execute(
         select(TicketComment).where(TicketComment.run_id == run_id)
     ).scalars().all()
-    if comments and all(c.status in ("published", "failed") for c in comments):
-        set_run_status(db, run, "done")
+    if not comments:
+        return
+    if not all(c.status in ("published", "failed") for c in comments):
+        return
+    # At least one comment has to have actually REACHED the provider (#720). This used
+    # to accept "all terminal", which meant a run whose every publish failed was marked
+    # `done` — reporting a finished pipeline for work that never left Q-Agent.
+    if not any(c.status == "published" for c in comments):
+        return
+    # `complete_run`, not `set_run_status`: the run may be `failed` from an earlier stage
+    # that the user has since driven to completion by hand, and the terminal guard would
+    # otherwise freeze it at "failed · stage 5 of 6" for good.
+    complete_run(db, run)
 
 # Status mapping applied to the provider work item once a comment is published.
 # All cases passing -> "Passed"; any failure -> "QA Failed".

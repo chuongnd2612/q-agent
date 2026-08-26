@@ -13,7 +13,10 @@ export function CursorLight() {
     light.style.cssText =
       "position:fixed;top:0;left:0;width:520px;height:520px;margin:-260px 0 0 -260px;" +
       "border-radius:50%;pointer-events:none;z-index:1;opacity:0;transition:opacity .6s ease;" +
-      "background:radial-gradient(circle,rgba(139,92,246,.16),rgba(99,102,241,.06) 42%,transparent 70%);" +
+      // Dimmer than the design prototype (.16 -> .10): the veil in `AppBackground`
+      // damps this too, but the glow was the brightest thing on screen and drew the
+      // eye away from whatever the pointer was actually over (#722).
+      "background:radial-gradient(circle,rgba(139,92,246,.10),rgba(99,102,241,.04) 42%,transparent 70%);" +
       "will-change:transform;mix-blend-mode:screen";
     document.body.appendChild(light);
 

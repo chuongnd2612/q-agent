@@ -978,3 +978,109 @@ def test_the_setting_can_tighten_a_request_but_a_request_cannot_loosen_the_setti
     client.post("/runs/1/testcases/create-link", json={"link": True, "dryRun": False})
 
     assert captured["dry_run"] is True, "the request overrode the workspace's dry run"
+
+
+# ------------------------------------------- finishing the run for real (#720)
+#
+# RUN-207 was published successfully and still read "failed · stage 5 of 6". Two
+# separate defects, and they pull in opposite directions:
+#
+#   * `set_run_status`' terminal guard — right for a worker thread finishing a stage
+#     after a cancel — also froze a run that a PERSON later drove to completion by
+#     hand. The only escape was a full re-run.
+#   * `_maybe_finish_run` accepted "all comments terminal", so a run whose every
+#     publish FAILED was marked `done`: a finished pipeline reported for work that
+#     never left Q-Agent.
+
+
+def test_publishing_the_last_comment_finishes_the_run(client, db_session, monkeypatch):
+    from app.models.run import Run
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+    # SUR-2's comment is prepared too, so publish both to reach the end.
+    for c in client.get("/runs/1/comments").json():
+        client.post(f"/comments/{c['id']}/publish")
+
+    run = db_session.get(Run, 1)
+    db_session.refresh(run)
+    assert run.status == "done", comment_id
+
+
+def test_a_run_that_failed_earlier_still_completes_when_the_user_finishes_it(
+    client, db_session, monkeypatch
+):
+    """The reported bug. The run failed at Evidence, the user drove Evidence → Publish
+    by hand, and the terminal guard kept it at "failed · stage 5 of 6" forever."""
+    from app.models.run import Run
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    run = db_session.get(Run, 1)
+    run.status = "failed"
+    run.failed_stage = "evidence"
+    db_session.add(run)
+    db_session.commit()
+
+    client.post("/runs/1/comments/prepare")
+    for c in client.get("/runs/1/comments").json():
+        client.post(f"/comments/{c['id']}/publish")
+
+    db_session.refresh(run)
+    assert run.status == "done"
+    # ...and it no longer reports the stage it failed at, which the header reads to
+    # print "stage N of 6".
+    assert not run.failed_stage
+
+
+def test_a_run_whose_every_publish_failed_is_not_done(client, db_session, monkeypatch):
+    """"All comments terminal" is not "the work happened"."""
+    from app.models.run import Run
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    FakeAdapter.fail_tickets = {"SUR-1", "SUR-2"}
+    client.post("/runs/1/comments/prepare")
+
+    for c in client.get("/runs/1/comments").json():
+        client.post(f"/comments/{c['id']}/publish")
+
+    run = db_session.get(Run, 1)
+    db_session.refresh(run)
+    assert run.status != "done", "reported a finished pipeline for work that never shipped"
+
+
+def test_a_cancelled_run_is_never_completed_behind_the_user(client, db_session, monkeypatch):
+    """A cancel is a decision about the run, not a problem with it."""
+    from app.models.run import Run
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    client.post("/runs/1/comments/prepare")
+    run = db_session.get(Run, 1)
+    run.status = "cancelled"
+    db_session.add(run)
+    db_session.commit()
+
+    for c in client.get("/runs/1/comments").json():
+        client.post(f"/comments/{c['id']}/publish")
+
+    db_session.refresh(run)
+    assert run.status == "cancelled"
+
+
+def test_completing_an_already_done_run_is_idempotent(db_session):
+    """Publishing a second comment must not fail on a run that is already finished."""
+    from app.models.run import Run
+    from app.services.run_status import complete_run
+
+    _seed_report(db_session)
+    run = db_session.get(Run, 1)
+    assert complete_run(db_session, run) is True
+
+    assert complete_run(db_session, run) is True
+    assert run.status == "done"

@@ -79,7 +79,11 @@ export function Projects() {
   // projected from the summary that `GET /projects` mirrors, so asking first
   // would legitimately answer "nothing indexed" and paint the stale badge #603
   // is about.
-  const { data: knowledgeList } = useKnowledgeList(projects !== undefined);
+  const {
+    data: knowledgeList,
+    isFetched: knowledgeFetched,
+    isError: knowledgeError,
+  } = useKnowledgeList(projects !== undefined);
   const refresh = useRefreshProjects();
   // With hub data on, projects are mirrored from EmeHub. Refresh pulls through
   // the provider adapters, which cannot work for a mirrored hub connection —
@@ -88,6 +92,9 @@ export function Projects() {
   // until `/health` answers, so neither flashes on screen first.
   const { enabled: hubProjects, resolved: hubResolved } = useHubDataEnabled();
   const showRefresh = hubResolved && !hubProjects;
+
+  // Both calls have landed (or knowledge has failed) — see the render gate below.
+  const knowledgeSettled = projects !== undefined && (knowledgeFetched || knowledgeError);
 
   // Group per-repo knowledge rows by their owning project and summarize each.
   const byProject = useMemo(() => {
@@ -145,7 +152,15 @@ export function Projects() {
 
       <SharedProjectsCatalog />
 
-      {isLoading || refresh.isPending ? (
+      {/* Wait for the KNOWLEDGE call too, not just the project list (#721).
+          The knowledge query is gated on `projects` (see above), so the two are
+          sequential: the card painted with "nothing indexed" and its fields empty,
+          then re-laid out a second later when knowledge arrived — a visible jump on
+          every visit. `isFetched` rather than `isPending`, because a disabled query
+          stays pending forever and would hold the skeleton up permanently; and an
+          ERRORED knowledge call still lets the list render, since a missing badge is
+          a better outcome than a page that never appears. */}
+      {isLoading || refresh.isPending || !knowledgeSettled ? (
         <div className="grid grid-cols-1 gap-3.5 md:grid-cols-3">
           {[0, 1, 2].map((i) => (
             <div key={i} className="glass h-[240px] animate-pulse rounded-[20px]" />
