@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { runStatusToStage } from "@/components/ui/PipelineRail";
+import { isRunComplete, runStatusToStage } from "@/components/ui/PipelineRail";
 import { useRun } from "@/hooks/queries";
 
 /**
@@ -31,6 +31,8 @@ export function MobileStepperRail({ runId }: { runId: number }) {
 
   const urlSeg = pathname.match(/^\/runs\/\d+(?:\/(\w+))?/)?.[1] ?? "";
   const currentStage = run ? runStatusToStage[run.status] ?? 0 : 0;
+  // See RunSidebar: a finished run has no current stage (#724).
+  const runComplete = isRunComplete(run?.status);
 
   // Centre the active pill whenever the route (or, once loaded, the run) changes.
   useEffect(() => {
@@ -50,7 +52,7 @@ export function MobileStepperRail({ runId }: { runId: number }) {
     >
       {STEPPER.map((step) => {
         const active = urlSeg === step.seg;
-        const done = currentStage > step.stage;
+        const done = runComplete || currentStage > step.stage;
         return (
           <button
             key={step.label}

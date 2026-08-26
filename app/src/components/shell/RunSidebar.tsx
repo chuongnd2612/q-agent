@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { RunSwitcher } from "@/components/shell/RunSwitcher";
 import { GLOBAL_MINI, PIPELINE } from "@/components/shell/navConfig";
 import { runColor, runEffectiveStatus, runRateLabel } from "@/components/dashboard/runStatus";
-import { runStatusToStage } from "@/components/ui/PipelineRail";
+import { isRunComplete, runStatusToStage } from "@/components/ui/PipelineRail";
 import { useRun } from "@/hooks/queries";
 
 /**
@@ -33,6 +33,7 @@ export function RunSidebar({ runId }: { runId: number }) {
         (run.failedStage ? runStatusToStage[run.failedStage] : undefined) ??
         0)
     : 0;
+  const runComplete = isRunComplete(run?.status);
   const effectiveStatus = run ? runEffectiveStatus(run) : null;
   const accent = effectiveStatus ? runColor(effectiveStatus) : "#a0a0b2";
 
@@ -106,8 +107,11 @@ export function RunSidebar({ runId }: { runId: number }) {
         {/* connector rail behind the nodes (node center ≈ 18px from the left) */}
         <div className="absolute bottom-5 left-[18px] top-5 w-0.5 bg-white/[0.09]" />
         {PIPELINE.map((step) => {
-          const done = currentStage > 0 && step.stage < currentStage;
-          const isCurrent = step.stage === currentStage;
+          // A finished run has no current stage (#724) — Publish kept showing "6"
+          // next to a run that had already published, because completion was
+          // `stage < currentStage` and `done` maps to the last stage number.
+          const done = runComplete || (currentStage > 0 && step.stage < currentStage);
+          const isCurrent = !runComplete && step.stage === currentStage;
           const activeUrl = step.seg != null && step.seg === urlSeg;
           const clickable = step.seg != null;
           const emphasized = isCurrent || activeUrl;
