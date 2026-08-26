@@ -31,7 +31,13 @@ export const queryKeys = {
     ["tickets", "filter-options", connectionId ?? 0, providerKind ?? ""] as const,
   linkedCases: (externalId: string) => ["tickets", externalId, "linked-cases"] as const,
   linkStatus: (runId: number | string) => ["runs", runId, "linked"] as const,
-  runs: ["runs"] as const,
+  /** Every run the caller can see. `project` narrows it (#727) and is part of
+   * the key, so the project-scoped list and the workspace-wide one cache
+   * separately instead of overwriting each other. */
+  runs: (project?: string) => ["runs", "list", project ?? "all"] as const,
+  /** Prefix for invalidating every run query at once — the project-scoped lists,
+   * the workspace-wide one, and each run's own sub-queries. */
+  runsAll: ["runs"] as const,
   run: (runId: number | string) => ["runs", runId] as const,
   runRepos: (runId: number | string) => ["runs", runId, "repos"] as const,
   runAiUsage: (runId: number | string) => ["runs", runId, "ai-usage"] as const,
@@ -50,7 +56,7 @@ export const queryKeys = {
   execution: (runId: number | string) => ["runs", runId, "execution"] as const,
   evidence: (runId: number | string) => ["runs", runId, "evidence"] as const,
   report: (runId: number | string) => ["runs", runId, "report"] as const,
-  reports: ["reports"] as const,
+  reports: (project?: string) => ["reports", project ?? "all"] as const,
   comments: (runId: number | string) => ["runs", runId, "comments"] as const,
   auditEvents: (filters?: Record<string, string | undefined>) =>
     ["audit", "events", filters ?? {}] as const,

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,8 @@ from app.models.claude_usage import ClaudeUsage
 from app.models.comment import TicketComment
 from app.models.execution import Execution, ExecutionResult
 from app.models.linked import LinkedTestCase
+from app.models.project import Project
+from app.models.project_config import ProjectConfig
 from app.models.report import Report
 from app.models.run import TERMINAL_RUN_STATUSES, Run, RunTicket
 from app.models.testcase import TestCase
@@ -94,8 +96,64 @@ def _next_run_code(db: Session) -> str:
     return f"RUN-{max_n + 1}"
 
 
+# Re-exported for readability at the call sites below; defined in
+# ``project_config_service`` so the routers that need it (runs, reports) share
+# one constant instead of importing each other.
+UNASSIGNED_PROJECT = project_config_service.UNASSIGNED_PROJECT
+
+
+def _project_key_for_guid(db: Session, guid: str) -> str | None:
+    """Translate a project GUID into the key (name) that config is stored under.
+
+    Prefers the config row's own ``project_guid`` link over a name lookup: it is
+    a stored reference, and its ``key`` is by definition the string the rest of
+    the resolution code expects (which is not always identical in case to
+    ``Project.name``).
+    """
+    cfg = db.query(ProjectConfig).filter(ProjectConfig.project_guid == guid).first()
+    if cfg is not None:
+        return cfg.key
+    project = db.query(Project).filter(Project.guid == guid).first()
+    return project.name if project is not None else None
+
+
+def _resolve_run_project_guid(db: Session, run: Run) -> str | None:
+    """The GUID of the project a run belongs to.
+
+    The stamped column (#727) is authoritative. The first-ticket walk below is
+    kept only as a fallback for rows that predate stamping and could not be
+    backfilled — it is the fragility ADR 0013 recorded, so nothing new should
+    depend on it.
+    """
+    if run.project_guid:
+        return run.project_guid
+    first = (
+        db.query(RunTicket)
+        .filter(RunTicket.run_id == run.id)
+        .order_by(RunTicket.position)
+        .first()
+    )
+    if first is None:
+        return None
+    ticket = (
+        db.query(Ticket).filter(Ticket.external_id == first.ticket_external_id).first()
+    )
+    if ticket is None:
+        return None
+    return project_config_service.project_guid_for_ticket(db, ticket)
+
+
 def _resolve_run_project_key(db: Session, run: Run) -> str | None:
-    """Resolve the project key a run's tickets belong to (via its first ticket)."""
+    """Resolve the project key a run's tickets belong to.
+
+    Reads the stamped ``Run.project_guid`` when there is one, and only falls back
+    to walking the run's first ticket for un-backfilled legacy rows.
+    """
+    guid = run.project_guid
+    if guid:
+        key = _project_key_for_guid(db, guid)
+        if key:
+            return key
     first = (
         db.query(RunTicket)
         .filter(RunTicket.run_id == run.id)
@@ -207,9 +265,66 @@ def _run_result(execution: Execution | None) -> str:
 
 
 @router.get("", response_model=list[RunOut])
-def list_runs(db: Session = Depends(get_db), user: User | None = Depends(current_user)) -> list[Run]:
-    runs = owned(db.query(Run), Run, user).order_by(Run.created_at.desc()).all()
+def list_runs(
+    project: str | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> list[Run]:
+    """The caller's runs, newest first.
+
+    ``?project=<guid>`` narrows the list to one project (ADR 0015: every run list
+    in the UI is now reached *through* a project). ``?project=unassigned``
+    returns the runs whose project could not be resolved — without that bucket
+    those rows would be unreachable from a project-scoped UI.
+    """
+    query = owned(db.query(Run), Run, user)
+    if project == UNASSIGNED_PROJECT:
+        query = query.filter(Run.project_guid.is_(None))
+    elif project:
+        query = query.filter(Run.project_guid == project)
+    runs = query.order_by(Run.created_at.desc()).all()
     return _attach_run_aggregates(db, runs)
+
+
+def _project_guid_for_ticket_ids(
+    db: Session, ticket_ids: list[str], user: User | None
+) -> str | None:
+    """The single project every ticket in a new run belongs to (#727).
+
+    Stamping happens here, at creation, rather than being derived on read — see
+    ``Run.project_guid``. Resolving all of the tickets instead of just the first
+    also makes the mixed-project invariant free: it is the same walk.
+
+    A run spanning two projects is refused with 400. Once slice 6 scopes the
+    ticket picker to the project the user is inside (ADR 0015 §9) this becomes
+    unreachable through the UI, but it stays as a cheap server-side invariant —
+    the API is public, and a mixed run would silently corrupt every
+    project-scoped count downstream.
+
+    Tickets that resolve to no project do not block creation (an install whose
+    project is only *indexed* has no ``projects`` row to resolve to); they simply
+    contribute nothing. When none of the tickets resolve, the run is stamped NULL
+    and lands in the ``unassigned`` bucket.
+    """
+    tickets = owned(
+        db.query(Ticket).filter(Ticket.external_id.in_(ticket_ids)), Ticket, user
+    ).all()
+    guids = {
+        guid
+        for guid in (
+            project_config_service.project_guid_for_ticket(db, t) for t in tickets
+        )
+        if guid
+    }
+    if len(guids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A run cannot span multiple projects "
+                f"({len(guids)} projects in {len(ticket_ids)} ticket(s))."
+            ),
+        )
+    return next(iter(guids), None)
 
 
 @router.post("", response_model=RunDetailOut)
@@ -235,6 +350,8 @@ def create_run(
     if not ticket_ids:
         raise HTTPException(status_code=400, detail="ticket_ids must not be empty")
 
+    project_guid = _project_guid_for_ticket_ids(db, ticket_ids, user)
+
     run = Run(
         code=_next_run_code(db),
         name=f"Run over {len(ticket_ids)} ticket(s)",
@@ -246,6 +363,7 @@ def create_run(
         workers=body.workers,
         retry_policy=body.retry_policy,
         status="processing",
+        project_guid=project_guid,
     )
     stamp_owner(run, user)
     db.add(run)
