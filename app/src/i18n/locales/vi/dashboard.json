@@ -4,6 +4,30 @@
     "missionControl": "Trung tâm điều hành",
     "runsInReview_one": "{{count}} lượt chạy đang chờ đánh giá",
     "runsInReview_other": "{{count}} lượt chạy đang chờ đánh giá",
+    "subtitle": "mọi công việc, lượt chạy và trường hợp kiểm thủ đều thuộc một dự án",
+    "runningNow": {
+      "title": "Đang chạy",
+      "subtitle": "trên tất cả dự án",
+      "count_one": "{{count}} lượt chạy",
+      "count_other": "{{count}} lượt chạy",
+      "empty": "Hiện không có gì đang chạy.",
+      "unassigned": "Không có dự án"
+    },
+    "projectTable": {
+      "columns": {
+        "project": "Dự án",
+        "ticketSource": "Nguồn công việc",
+        "tickets": "Công việc",
+        "testCases": "Trường hợp",
+        "runs": "Lượt chạy",
+        "activeRun": "Lượt chạy hiện hành",
+        "knowledge": "Tri thức"
+      },
+      "sourceActive": "Đang hoạt động",
+      "sourceInactive": "Không hoạt động",
+      "emptyTitle": "Chưa có dự án",
+      "emptyBody": "Kết nối một nhà cung cấp công việc trong Cài đặt rồi làm mội \u2014 mọi công việc, lượt chạy và trường hợp kiểm thủ đều nằm trong một dự án."
+    },
     "stats": {
       "activeRuns": "Lượt chạy đang hoạt động",
       "casesInReview": "Trường hợp đang đánh giá",
@@ -29,6 +53,7 @@
     "suiteHealth": {
       "title": "Tình trạng bộ kiểm thử · 7 ngày",
       "passRate": "tỷ lệ đạt",
+      "passedFailed": "{{passed}} đạt · {{failed}} không đạt",
       "passed": "đạt",
       "failed": "không đạt"
     },
