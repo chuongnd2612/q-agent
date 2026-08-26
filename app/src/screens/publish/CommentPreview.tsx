@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Spinner } from "@/components/ui/misc";
 import { useCommentPreview } from "@/hooks/queries";
+import { api } from "@/lib/api";
 
 /**
  * The comment as the **provider** will render it (#707).
@@ -14,13 +16,33 @@ import { useCommentPreview } from "@/hooks/queries";
  * adapter posts through. A TypeScript twin would drift, and a preview that drifts is
  * worse than no preview: it is confidently wrong.
  *
- * The light surface is deliberate too. Azure DevOps renders comments on white, and a
- * screenshot of a light web app on this shell's near-black card is not what the reader
- * will see — the point of a preview is to look like the destination.
+ * Two things the first version got wrong, both visible only by looking at it:
+ *
+ * * **The images were broken.** `/artifacts/**` needs a short-lived access token that
+ *   lives only in this browser's memory, and the URL needs the SPA's mount prefix — the
+ *   server knows neither. It now emits the artifact path in `data-artifact` and the
+ *   real source is filled in here, through `api.artifactUrl`, which knows both.
+ * * **The surface was hardcoded white.** ADO renders comments on white, but the app
+ *   does not, and a white slab in a dark shell is a worse mismatch than the one it was
+ *   imitating. It now uses the app's own tokens, so it follows the shell — including
+ *   whatever a future light theme does, without this file changing.
  */
 export function CommentPreview({ commentId, body }: { commentId: number; body: string }) {
   const { t } = useTranslation("pipeline");
   const { data, isLoading, isError } = useCommentPreview(commentId, body);
+
+  // Resolve `data-artifact` → a URL this browser can actually load. Parsed as a
+  // document rather than string-replaced: the server escaped this HTML, and putting a
+  // token into it by regex is how an escape gets undone by accident.
+  const html = useMemo(() => {
+    if (!data?.html) return "";
+    const doc = new DOMParser().parseFromString(data.html, "text/html");
+    doc.querySelectorAll<HTMLImageElement>("img[data-artifact]").forEach((img) => {
+      const path = img.getAttribute("data-artifact");
+      if (path) img.setAttribute("src", api.artifactUrl(path));
+    });
+    return doc.body.innerHTML;
+  }, [data?.html]);
 
   if (isLoading) {
     return (
@@ -30,7 +52,7 @@ export function CommentPreview({ commentId, body }: { commentId: number; body: s
     );
   }
 
-  if (isError || !data?.html) {
+  if (isError || !html) {
     // Fall back to the raw body rather than an empty card: the draft is still the
     // thing being reviewed, and showing nothing hides it entirely.
     return (
@@ -46,12 +68,11 @@ export function CommentPreview({ commentId, body }: { commentId: number; body: s
   return (
     <div className="p-3 md:p-[14px_18px]">
       <div
-        className="comment-preview overflow-x-auto rounded-[11px] p-4"
-        style={{ background: "#ffffff", color: "#1f2328" }}
+        className="comment-preview overflow-x-auto rounded-[11px] border border-white/[0.07] bg-white/[0.02] p-4"
         // The HTML is our own render of our own draft, escaped by `comment_markup`
         // before any user text reaches it — the same escaping that protects the work
         // item from whatever a reviewer types into the edit box.
-        dangerouslySetInnerHTML={{ __html: data.html }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>
   );

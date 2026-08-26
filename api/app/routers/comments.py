@@ -541,12 +541,18 @@ def preview_comment(
     comment = _get_comment_or_404(db, comment_id, user)
     run = db.get(Run, comment.run_id)
     owner_id = run.owner_id if run is not None else None
+    # The ARTIFACT PATH, not a URL. `/artifacts/**` needs the caller's short-lived
+    # access token (see `main.py`), which lives only in the browser's memory — a URL
+    # built here would 401, and one built without the SPA's base path would 404. So the
+    # path rides in `data-artifact` and the client resolves it through `api.artifactUrl`,
+    # which knows both. Emitting a bare path as `src` is what left every preview showing
+    # a broken-image icon.
     sources = {
         str(ref.get("filename") or ""): served_evidence_path(owner_id, str(ref.get("path") or ""))
         for ref in (comment.attachments or [])
         if isinstance(ref, dict) and ref.get("path")
     }
-    return {"html": comment_markup.to_html(comment.body, image_src=sources)}
+    return {"html": comment_markup.to_html(comment.body, image_src=sources, deferred=True)}
 
 
 @router.post("/comments/{comment_id}/regenerate", response_model=TicketCommentOut)

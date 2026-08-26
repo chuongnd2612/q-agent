@@ -871,6 +871,12 @@ def test_the_preview_points_images_at_qagent_not_the_provider(
 
     assert "<img" in html, "the inline screenshot is missing from the preview"
     assert "evidence/" in html, "the image does not point at Q-Agent's artifacts"
+    # `data-artifact`, NOT `src` (#711). `/artifacts/**` needs a short-lived access
+    # token that lives only in the browser's memory, and the URL needs the SPA's mount
+    # prefix — the server knows neither, so a bare path as `src` resolves against the
+    # page URL and 404s. That is exactly how every preview showed a broken image.
+    assert "data-artifact=" in html
+    assert "<img src=" not in html, "the server guessed a URL it cannot know"
 
 
 def test_the_preview_is_ownership_checked(client, db_session, monkeypatch):
