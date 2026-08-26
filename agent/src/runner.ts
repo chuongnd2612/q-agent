@@ -1170,6 +1170,18 @@ const AUTHORING_VERIFY_ATTEMPTS = 2;
 
 /** Stage the automation project into an authoring workdir; false when there is
  *  none to stage (older server), which disables verification. */
+/**
+ * A per-session browser-harness daemon name (#739).
+ *
+ * `BU_NAME` becomes a socket/pid filename, so the harness rejects anything outside
+ * `[A-Za-z0-9_-]{1,64}` (`browser_harness/_ipc._check`) — hence the scrub and the cap.
+ */
+export function harnessName(sessionId: string, caseId: number): string {
+  const raw = `qagent-${sessionId}-${caseId}`;
+  const safe = raw.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 64).replace(/^-+|-+$/g, "");
+  return safe || "qagent-authoring";
+}
+
 function stageAuthoringProject(workDir: string, job: api.AuthoringJob): boolean {
   if (!job.project) return false;
   const staged = materializeProject(workDir, job.project);
@@ -1383,6 +1395,15 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     const claudeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       BU_CDP_URL: `http://127.0.0.1:${port}`,
+      // Name the daemon so browser-harness gives itself a DEDICATED tab (#739). With
+      // the default name it attaches to `pages[0]` — whichever page is first in that
+      // Chrome — and this profile is the SAME one the manual-login capture opens for
+      // the operator, so a tab they left there is restored and taken over. Claude then
+      // drives the operator's own tab, on their own machine.
+      //
+      // Per session, not a fixed name: the harness's own comment says named daemons
+      // sharing a name fight over one tab, which is what two authoring runs would do.
+      BU_NAME: harnessName(job.sessionId, job.caseId),
       [pathVar]: `${bh.binDir}${path.delimiter}${process.env[pathVar] || ""}`,
     };
     if (claudeConfigDir) claudeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;

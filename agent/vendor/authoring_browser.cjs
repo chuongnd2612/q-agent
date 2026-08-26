@@ -160,7 +160,16 @@ async function armAuthAndNavigate(chromium, port, sessionByOrigin, state) {
     try { restore(window.sessionStorage, data && data.session && data.session[location.origin]); } catch (e) {}
   }, { local: localByOrigin, session: sessionByOrigin || {} });
 
-  const page = ctx.pages()[0] || (await ctx.newPage());
+  // A page we OWN — never one already showing something else (#739). This used to be
+  // `ctx.pages()[0]`, and this profile is the same one the manual-login capture opens
+  // for the operator: a tab they left in it is restored on launch, so the very first
+  // thing authoring did was navigate the operator's tab away to the app's base URL.
+  // Chrome was launched at about:blank precisely so there is a blank page to claim.
+  const blank = ctx.pages().find((p) => {
+    const u = p.url();
+    return !u || u === 'about:blank' || u === 'chrome://newtab/';
+  });
+  const page = blank || (await ctx.newPage());
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
