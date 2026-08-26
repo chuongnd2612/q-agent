@@ -636,16 +636,21 @@ def test_ado_still_posts_the_comment_when_an_attachment_fails(tmp_path):
 
 
 @respx.mock
-def test_ado_with_no_attachments_posts_exactly_what_it_was_given(tmp_path):
-    """No attachments, no decoration — the common path must stay untouched."""
+def test_ado_with_no_attachments_uploads_nothing_but_still_renders_html(tmp_path):
+    """No attachments, no upload — but the body is still converted (#703).
+
+    A draft is Markdown, an ADO comment renders HTML, and posting the draft verbatim
+    is why `**PASSED**` reached work items as literal asterisks.
+    """
     respx.post(_COMMENTS).mock(return_value=httpx.Response(200, json={"id": 3}))
     upload = respx.post(_ATTACH).mock(return_value=httpx.Response(201, json={}))
 
-    _ado().publish_comment("1377", "just the body")
+    _ado().publish_comment("1377", "**Status:** PASSED")
 
     assert not upload.called
     body = json.loads(respx.calls.last.request.content)["text"]
-    assert body == "just the body"
+    assert "<b>Status:</b> PASSED" in body
+    assert "**" not in body, "markdown reached the work item"
 
 
 def test_ado_declares_the_attachment_capability():

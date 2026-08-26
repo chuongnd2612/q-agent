@@ -17,10 +17,13 @@ def test_summarize_ticket_runs_under_the_run_context(monkeypatch):
         comments.claude_cli, "run_prompt",
         lambda *a, **k: captured.__setitem__("run", run_context.get_run()) or "ok",
     )
-    body = comments._summarize_ticket(
+    observations, summary = comments._summarize_ticket(
         "SUR-1", {"passed": 1, "failed": 0, "total": 1, "cases": []}, "", run_id=10
     )
-    assert body == "ok"
+    # `_summarize_ticket` now returns the two parts that need judgement, not a whole
+    # comment (#703) — the structure is assembled from facts about the run. A reply
+    # that is not the agreed JSON degrades to the summary rather than being discarded.
+    assert (observations, summary) == ({}, "ok")
     assert captured["run"] == 10  # Claude call attributed to the run → owner cred
     assert run_context.get_run() is None  # restored afterwards
 

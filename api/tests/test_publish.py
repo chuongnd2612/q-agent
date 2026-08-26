@@ -406,8 +406,11 @@ def test_the_draft_lists_evidence_for_every_case_including_passes(
     assert resp.status_code == 200
     body = next(c for c in resp.json() if c["ticketExternalId"] == "SUR-1")["body"]
     assert "Evidence per test case" in body
-    assert "TC-01 — PASS" in body, "the passing case has no evidence line"
-    assert "TC-02 — FAIL" in body
+    # The numbered "Actual result" list (#703) carries the pass and the failure alike;
+    # the manifest below it names the artifacts that have no inline form.
+    assert "TC-01" in body and "TC-02" in body
+    assert "**PASS**" in body, "the passing case has no result line"
+    assert "**FAIL**" in body
     # Named artifacts, not a vague "evidence attached".
     assert "Screenshot: screenshot.bin" in body
     assert "Video: video.bin" in body
@@ -553,7 +556,7 @@ def test_a_case_with_no_artifacts_is_reported_not_omitted(client, db_session, mo
     resp = client.post("/runs/1/comments/prepare")
 
     body = next(c for c in resp.json() if c["ticketExternalId"] == "SUR-1")["body"]
-    assert "TC-09 — PASS" in body
+    assert "TC-09" in body
     assert "no artifacts captured" in body
 
 

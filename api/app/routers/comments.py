@@ -11,6 +11,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,7 +28,14 @@ from app.models.run import Run
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import CommentEdit, PublishRequest, TicketCommentOut
-from app.services import audit_service, claude_cli, comment_evidence, run_context, run_control
+from app.services import (
+    audit_service,
+    claude_cli,
+    comment_evidence,
+    comment_template,
+    run_context,
+    run_control,
+)
 from app.services.claude_cli import ClaudeError
 from app.services.ownership import get_owned_or_404
 from app.services.publish_service import publish_one
@@ -120,13 +129,18 @@ def _summarize_ticket(
     ai_failure_analysis: str,
     run_id: int,
     project_context: str = "",
-) -> str:
-    """Ask Claude for ONE consolidated QA comment aggregating all of a ticket's
-    test cases — overall verdict, per-case breakdown, and consolidated findings.
+) -> tuple[dict[str, str], str]:
+    """Ask Claude for the two parts of a comment that need judgement (#703).
 
-    The ticket is only "Passed" when every case passed; any failure means the
-    ticket failed. Raises ClaudeError to the caller (ADR 0001 — no simulated
-    fallback); the router surfaces it as an HTTP error.
+    Returns ``(observations_by_case_code, summary)``. The structure around them — the
+    greeting, the ENV/Status/OS/Browser header, the numbered list, the inline
+    screenshots — is assembled by :mod:`app.services.comment_template` from facts about
+    the run, because a model asked to produce those has nothing to produce them *from*
+    and will write something plausible instead.
+
+    The ticket is only "Passed" when every case passed; any failure means the ticket
+    failed. Raises ClaudeError to the caller (ADR 0001 — no simulated fallback); the
+    router surfaces it as an HTTP error.
     """
     passed, failed, total = summary["passed"], summary["failed"], summary["total"]
     case_lines = []
@@ -151,13 +165,23 @@ def _summarize_ticket(
             if project_context.strip()
             else ""
         )
-        + "Structure the comment as: (1) a one-line overall verdict, (2) a short per-case "
-        "breakdown, and (3) consolidated key findings for any failures (fold in each failing "
-        "case's diagnosis). Do not include a greeting or signature.\n\n"
-        "OUTPUT CONTRACT: Return ONLY the comment body as Markdown — nothing else. Do NOT "
-        "prepend any preamble, status line, or commentary about your process, tools, or files "
-        "(never mention knowledge.md or whether any file exists). Everything you need is in "
-        "this prompt; do NOT read, look for, or reference any files on disk."
+        + "The comment's STRUCTURE is assembled by Q-Agent, not by you (#703) — the "
+        "greeting, the ENV/Status/OS/Browser header and the numbered per-case list are "
+        "facts about the run and are added around what you write. Your job is the two "
+        "pieces that need judgement.\n\n"
+        "OUTPUT CONTRACT: Return ONLY a JSON object, no prose and no code fence, shaped "
+        "exactly like:\n"
+        '{"observations": {"<caseCode>": "<one or two sentences on what this case '
+        'verified, or for a failure what actually happened>"}, '
+        '"summary": "<2-3 sentences consolidating the outcome, folding in the '
+        'cross-case analysis for any failures>"}\n\n'
+        "One observation per case code listed above, including the ones that PASSED — a "
+        "passing case still needs to say what it verified, because the reader is deciding "
+        "whether the coverage is right, not just whether it was green. Write plainly, no "
+        "markdown, no bullet characters, no case code prefix (it is already in the "
+        "heading). Never mention your process, your tools, or any file (never "
+        "knowledge.md, never whether a file exists). Everything you need is in this "
+        "prompt; do NOT read or look for any file on disk."
     )
     # Attribute to the run so Claude resolves the run OWNER's credential
     # (own→shared) rather than the ambient/shared one — a request thread has no
@@ -165,7 +189,7 @@ def _summarize_ticket(
     _prev_run = run_context.get_run()
     run_context.set_run(run_id)
     try:
-        return claude_cli.run_prompt(
+        raw = claude_cli.run_prompt(
             prompt,
             skill=TICKET_COMMENT_GENERATOR,
             include_template=True,
@@ -173,6 +197,121 @@ def _summarize_ticket(
         ).strip()
     finally:
         run_context.set_run(_prev_run)
+    return _parse_observations(raw)
+
+
+def _parse_observations(raw: str) -> tuple[dict[str, str], str]:
+    """Pull ``{observations, summary}`` out of the model's reply, tolerantly.
+
+    A reply that is not the agreed JSON is treated as the **summary** rather than
+    discarded: the structural half of the comment is ours and is unaffected, so a model
+    that ignored the contract costs per-case observations, not the whole comment. That
+    is the difference between a comment that is thinner than intended and a 502 in front
+    of someone trying to publish.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        # Strip a fence the contract asked it not to use.
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return {}, text
+    if not isinstance(parsed, dict):
+        return {}, text
+    observations = parsed.get("observations")
+    clean = (
+        {str(k): str(v).strip() for k, v in observations.items() if str(v).strip()}
+        if isinstance(observations, dict)
+        else {}
+    )
+    return clean, str(parsed.get("summary") or "").strip()
+
+
+
+
+def _run_facts(db: Session, run_id: int) -> tuple[str, str, str]:
+    """``(env, browser, operating_system)`` for the run's latest execution (#703).
+
+    Every one of these is a claim a reader acts on, so an unknown is returned as ""
+    and the template omits the line. The OS is the honest problem: a server-executed
+    run happened on this container, but an agent-executed one happened on someone's
+    laptop and the agent does not report its platform yet — stating this container's
+    OS there would send a reader chasing a platform difference that never existed.
+    """
+    from app.models.execution import Execution
+
+    execution = (
+        db.query(Execution)
+        .filter(Execution.run_id == run_id)
+        .order_by(Execution.id.desc())
+        .first()
+    )
+    if execution is None:
+        return "", "", ""
+    on_server = (execution.target or "server") == "server"
+    return (
+        execution.env or "",
+        execution.browser or "",
+        comment_template.server_os() if on_server else "",
+    )
+
+
+def _result_rows(
+    summary: dict, cases_evidence: list[dict], observations: dict[str, str]
+) -> list[dict]:
+    """One row per test case for the template's numbered list (#703).
+
+    Driven by the REPORT's case list, not the evidence: a case that captured no
+    screenshot still has a result, and dropping it would silently shorten the report.
+    Evidence is matched in by case code to supply the inline screenshot.
+
+    The screenshot is the *attachment filename* the publish step will upload, so the
+    draft and the published comment name the same file — the adapter swaps it for the
+    real embed once it knows the URL.
+    """
+    shots = {
+        case["caseCode"]: next(
+            (
+                f"{case['caseCode']}-{(file['annotatedPath'] or file['path']).replace(chr(92), '/').rsplit('/', 1)[-1]}"
+                for file in case["files"]
+                if file["kind"] == "screenshot"
+            ),
+            "",
+        )
+        for case in cases_evidence
+    }
+    # Old reports predate `_per_ticket_summary`'s `cases` list. Falling back to the
+    # cases the EVIDENCE knows about keeps a regenerated comment from claiming "no test
+    # cases were executed" for a run that plainly executed some — which is the shape a
+    # reader would act on, not merely a cosmetic gap.
+    cases = summary.get("cases") or [
+        {
+            "caseCode": case["caseCode"],
+            "title": case["title"],
+            "status": case["status"],
+        }
+        for case in cases_evidence
+    ]
+    rows: list[dict] = []
+    for case in cases:
+        code = str(case.get("caseCode") or "")
+        # A failure's own diagnosis is a better observation than anything generic, and
+        # it is already computed; the model's line is the fallback, not the other way
+        # round, because the diagnosis was derived from the actual error.
+        observation = observations.get(code) or ""
+        if case.get("status") == "fail" and not observation:
+            observation = str(case.get("diagnosis") or case.get("error") or "").strip()
+        rows.append(
+            {
+                "caseCode": code,
+                "title": case.get("title") or "",
+                "status": case.get("status") or "",
+                "observation": observation,
+                "screenshot": shots.get(code, ""),
+            }
+        )
+    return rows
 
 
 def _build_comment(
@@ -184,6 +323,10 @@ def _build_comment(
     ai_failure_analysis: str,
     project_context: str,
     cases_evidence: list[dict],
+    assignee: str = "",
+    run_env: str = "",
+    run_browser: str = "",
+    operating_system: str = "",
 ) -> TicketComment:
     """Generate (or regenerate) one ticket's draft comment, in place.
 
@@ -205,17 +348,28 @@ def _build_comment(
         _TARGET_STATUS_ALL_PASS if ticket_status == "Passed" else _TARGET_STATUS_ANY_FAIL
     )
     try:
-        body = _summarize_ticket(
+        observations, prose = _summarize_ticket(
             ticket_external_id, summary, ai_failure_analysis, run_id, project_context
         )
-        # The prose is the model's; the evidence list is a FACT and is appended by
-        # code. A model that invented a trace file into this list would be worse than
-        # no list, because the list is what a reader trusts enough to go looking.
-        manifest = comment_evidence.manifest_block(cases_evidence)
-        if manifest:
-            body = body + "\n\n" + manifest
     except ClaudeError as exc:
         raise HTTPException(status_code=502, detail=f"Claude CLI failed: {exc}") from exc
+
+    # Everything structural is a FACT about the run and is assembled here, not asked
+    # for (#703). The model supplies the two parts that need judgement — what each case
+    # observed, and the consolidated summary.
+    body = comment_template.build_body(
+        assignee=assignee,
+        env=run_env,
+        status="PASSED" if ticket_status == "Passed" else "FAILED",
+        operating_system=operating_system,
+        browser=comment_template.browser_label(run_browser),
+        results=_result_rows(summary, cases_evidence, observations),
+        summary=prose,
+        # Screenshots are inline above; video and trace have no inline form, and #696's
+        # promise is that every case's evidence is NAMED. The manifest keeps that true
+        # without the template's shape quietly narrowing it to "screenshots only".
+        evidence=comment_evidence.manifest_block(cases_evidence),
+    )
 
     existing = (
         db.execute(
@@ -283,6 +437,8 @@ def prepare_comments(
     # repeatable, and pushing files into a work item on every regeneration would
     # litter the ticket. The upload happens on publish.
     evidence_by_ticket = comment_evidence.collect_for_run(db, run_id, run.owner_id)
+    # Facts about HOW the run executed, for the comment's header block (#703).
+    run_env, run_browser, operating_system = _run_facts(db, run_id)
 
     tickets = {
         t.external_id: t
@@ -305,6 +461,10 @@ def prepare_comments(
                 ai_failure_analysis=ai_failure_analysis,
                 project_context=project_context,
                 cases_evidence=evidence_by_ticket.get(summary["ticketExternalId"], []),
+                assignee=ticket.assignee if ticket else "",
+                run_env=run_env,
+                run_browser=run_browser,
+                operating_system=operating_system,
             )
         )
 
@@ -414,6 +574,12 @@ def regenerate_comment(
         )
 
     evidence_by_ticket = comment_evidence.collect_for_run(db, comment.run_id, run.owner_id)
+    run_env, run_browser, operating_system = _run_facts(db, comment.run_id)
+    ticket = (
+        db.execute(select(Ticket).where(Ticket.external_id == comment.ticket_external_id))
+        .scalars()
+        .first()
+    )
     regenerated = _build_comment(
         db,
         run_id=comment.run_id,
@@ -422,6 +588,10 @@ def regenerate_comment(
         ai_failure_analysis=report.data.get("aiFailureAnalysis", ""),
         project_context=_project_context_block(db, run),
         cases_evidence=evidence_by_ticket.get(comment.ticket_external_id, []),
+        assignee=ticket.assignee if ticket is not None else "",
+        run_env=run_env,
+        run_browser=run_browser,
+        operating_system=operating_system,
     )
     db.commit()
     db.refresh(regenerated)

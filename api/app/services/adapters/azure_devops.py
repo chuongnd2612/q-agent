@@ -21,8 +21,13 @@ from urllib.parse import quote, unquote
 import httpx
 
 from app.logging import logger
+from app.services import comment_markup
 from app.services.adapters import register
 from app.services.adapters.base import NormalizedTicket, ProviderAdapter, ProviderError
+
+#: Image targets already placed inline by the template, so the trailing link list does
+#: not repeat a screenshot the reader can already see.
+_IMAGE_TARGETS = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 API_VERSION = "7.1"
 
@@ -559,24 +564,32 @@ class AzureDevOpsAdapter(ProviderAdapter):
         the body says which files failed so nobody goes looking for evidence that
         never arrived.
         """
-        uploaded: list[tuple[str, str]] = []
+        uploaded: dict[str, str] = {}
         failed: list[str] = []
         for path in attachments or []:
             file = Path(path)
             try:
                 url = self._upload_attachment(file)
                 self._link_attachment(ticket_external_id, url, file.name)
-                uploaded.append((file.name, url))
+                uploaded[file.name] = url
             except Exception as exc:  # noqa: BLE001 - see the docstring
                 logger.warning("ADO: could not attach {}: {}", file.name, exc)
                 failed.append(file.name)
 
-        text = body
-        if uploaded:
-            links = "".join(f'<li><a href="{url}">{name}</a></li>' for name, url in uploaded)
-            text = f"{body}<br/><b>Attached evidence</b><ul>{links}</ul>"
+        # The draft is Markdown (that is what the Publish screen renders and what a
+        # reviewer edits); an ADO comment renders HTML. Posting the draft verbatim is
+        # why `**PASSED**` reached work items as literal asterisks (#703). Images are
+        # resolved here because only this method knows where each file landed.
+        text = comment_markup.to_html(body, image_src=uploaded)
+        # Files with no inline form — video, trace — still get a link, so #696's promise
+        # that every case's evidence is reachable survives the template.
+        inlined = set(_IMAGE_TARGETS.findall(body))
+        extra = {name: url for name, url in uploaded.items() if name not in inlined}
+        if extra:
+            links = "".join(f'<li><a href="{url}">{name}</a></li>' for name, url in extra.items())
+            text = f"{text}<b>Attached evidence</b><ul>{links}</ul>"
         if failed:
-            text = f"{text}<br/><i>Could not attach: {', '.join(failed)}</i>"
+            text = f"{text}<div><i>Could not attach: {', '.join(failed)}</i></div>"
 
         with self._client() as client:
             resp = client.post(
