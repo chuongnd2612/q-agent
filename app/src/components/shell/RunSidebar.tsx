@@ -2,6 +2,7 @@ import { ArrowLeft, Check, ChevronsUpDown } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import { cn } from "@/lib/cn";
 import { RunSwitcher } from "@/components/shell/RunSwitcher";
 import { GLOBAL_MINI, PIPELINE } from "@/components/shell/navConfig";
@@ -17,6 +18,7 @@ import { useRun } from "@/hooks/queries";
  */
 export function RunSidebar({ runId }: { runId: number }) {
   const navigate = useNavigate();
+  const runPath = useRunPath();
   const { pathname } = useLocation();
   const { t } = useTranslation("nav");
   const { data: run } = useRun(runId);
@@ -167,7 +169,7 @@ export function RunSidebar({ runId }: { runId: number }) {
             <button
               key={step.label}
               data-tour={`stage-${step.seg}`}
-              onClick={() => navigate(`/runs/${runId}/${step.seg}`)}
+              onClick={() => navigate(runPath(step.seg ?? undefined))}
               className={cn(stepClass, "w-full border-none")}
               style={stepStyle}
             >

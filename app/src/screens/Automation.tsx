@@ -6,6 +6,7 @@ import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
 import { PipelineRail } from "@/components/ui/PipelineRail";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import {
   ALL_TICKETS_PAGE_SIZE,
   useAutomationStatus,
@@ -61,6 +62,7 @@ import { buildFileList } from "./automation/projectFiles";
 export function Automation() {
   const { t } = useTranslation("pipeline");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
   const navigate = useNavigate();
   const { data: run } = useRun(runId);
   const { data: specs, isLoading } = useSpecs(runId);
@@ -222,7 +224,7 @@ export function Automation() {
     startExecution.mutate(
       {},
       {
-        onSuccess: () => navigate("/runs/" + runId + "/execution"),
+        onSuccess: () => navigate(runPath("execution")),
         onError: (e) =>
           toast.error(e instanceof Error ? e.message : t("automation.executionFailedToStart")),
       },

@@ -16,9 +16,19 @@ import { SharedWorkspace } from "@/screens/settings/SharedWorkspace";
 import { SharedProjectSettings } from "@/screens/settings/SharedProjectSettings";
 
 import { Dashboard } from "@/screens/Dashboard";
+import {
+  LegacyListRedirect,
+  LegacyRunRedirect,
+} from "@/screens/LegacyRedirects";
 import { GettingStarted } from "@/screens/GettingStarted";
 import { Projects } from "@/screens/Projects";
-import { ProjectDetail } from "@/screens/ProjectDetail";
+import {
+  ProjectConnectionTab,
+  ProjectDetail,
+  ProjectKnowledgeTab,
+  ProjectOverviewTab,
+  ProjectTabIndex,
+} from "@/screens/ProjectDetail";
 import { Tickets } from "@/screens/Tickets";
 import { TicketDetail } from "@/screens/TicketDetail";
 import { Runs } from "@/screens/Runs";
@@ -88,12 +98,32 @@ const ROUTES = [
           // users (#583) and change on rename. An older name-based deep link
           // still lands here and resolves — `ProjectDetail` rewrites it to the
           // canonical GUID URL rather than 404ing.
-          { path: "projects/:projectGuid", element: <ProjectDetail /> },
-          { path: "tickets", element: <Tickets /> },
-          { path: "tickets/:externalId", element: <TicketDetail /> },
-          { path: "runs", element: <Runs /> },
+          //
+          // The project is the CONTAINER (ADR 0015): its six tabs are path
+          // segments below it, and the tickets/runs/reports lists are the
+          // project's own rows rather than the global lists they used to
+          // navigate out to (#693).
           {
-            path: "runs/:runId",
+            path: "projects/:projectGuid",
+            element: <ProjectDetail />,
+            children: [
+              { index: true, element: <ProjectTabIndex /> },
+              { path: "overview", element: <ProjectOverviewTab /> },
+              { path: "tickets", element: <Tickets /> },
+              { path: "tickets/:externalId", element: <TicketDetail /> },
+              { path: "runs", element: <Runs /> },
+              { path: "knowledge", element: <ProjectKnowledgeTab /> },
+              { path: "connection", element: <ProjectConnectionTab /> },
+              { path: "reports", element: <Reports /> },
+            ],
+          },
+          // Run stages are a SIBLING of the project layout, not a child of it:
+          // they take the whole screen rather than rendering inside the tab
+          // body. React Router ranks by specificity, not declaration order, so
+          // this wins over the `runs` tab above for a URL that carries a run id.
+          // Slice 4 turns it into the full-screen overlay.
+          {
+            path: "projects/:projectGuid/runs/:runId",
             element: <RunLayout />,
             children: [
               { index: true, element: <RunDetail /> },
@@ -105,7 +135,21 @@ const ROUTES = [
               { path: "comment", element: <CommentPublish /> },
             ],
           },
-          { path: "reports", element: <Reports /> },
+
+          // --- pre-#728 flat routes, kept resolvable -----------------------
+          // A flat list has no project in the URL and there is deliberately no
+          // "current project" to default to, so it lands on the projects list.
+          // A flat RUN url can be resolved exactly, because the run now knows
+          // its own project (#727).
+          { path: "tickets", element: <LegacyListRedirect /> },
+          { path: "runs", element: <LegacyListRedirect /> },
+          { path: "reports", element: <LegacyListRedirect /> },
+          { path: "runs/:runId", element: <LegacyRunRedirect /> },
+          { path: "runs/:runId/*", element: <LegacyRunRedirect /> },
+          // Ticket detail is not project-shaped beyond its breadcrumb, so the
+          // flat form stays a real route: it is the one deep link that can still
+          // be honoured without inventing a project for it.
+          { path: "tickets/:externalId", element: <TicketDetail /> },
           { path: "audit", element: <AuditLog /> },
           { path: "settings", element: <Settings /> },
           { path: "local-agent", element: <LocalAgent /> },

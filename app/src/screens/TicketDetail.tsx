@@ -1,4 +1,5 @@
 import { useNavigate, useParams } from "react-router-dom";
+import { useOptionalProjectRoute } from "@/screens/ProjectDetail";
 import { useTranslation } from "react-i18next";
 import DOMPurify from "dompurify";
 import { ArrowLeft, CheckSquare, ExternalLink, FileText, GitBranch, RefreshCw } from "lucide-react";
@@ -172,7 +173,18 @@ export function TicketDetail() {
   const navigate = useNavigate();
   const { data: detail, isLoading } = useTicket(externalId ?? null);
 
-  const goTickets = () => navigate("/tickets");
+  // Back to the project's Tickets tab when we got here through a project (ADR
+  // 0015 makes that the only route the UI offers). The flat
+  // `/tickets/:externalId` deep link survives for pasted URLs, and there is no
+  // project to go back to from it — so it lands on the projects list rather
+  // than on a global list that no longer exists.
+  const project = useOptionalProjectRoute();
+  const goTickets = () =>
+    navigate(
+      project?.projectGuid
+        ? `/projects/${encodeURIComponent(project.projectGuid)}/tickets`
+        : "/projects",
+    );
 
   if (isLoading || !detail) {
     return (

@@ -1,19 +1,14 @@
 import { useTranslation } from "react-i18next";
-import { type ProjectTab } from "@/store/ui";
-
-// Only the tabs that are genuinely views OF this project (#693). `tickets` and
-// `runs` used to sit here and navigated straight out to the GLOBAL /tickets and
-// /runs screens — so they read as "this project's tickets", then dropped the user
-// into an unfiltered list with no way back to the tab they clicked. Both already
-// have their own sidebar entries, which is where a global list belongs.
-export const TABS: { id: ProjectTab; labelKey: string }[] = [
-  { id: "overview", labelKey: "tabs.overview" },
-  { id: "knowledge", labelKey: "tabs.knowledge" },
-  { id: "settings", labelKey: "tabs.settings" },
-];
+import { PROJECT_TABS, type ProjectTab } from "./projectTabs";
 
 /** Project detail tab bar. Highlights the active tab; each click is delegated to
- * `onSelect` (the screen routes tickets/runs away and query-syncs the rest). */
+ * `onSelect`, which navigates to that tab's own route (ADR 0015 slice 2).
+ *
+ * `tickets` and `runs` are back after #693 removed them. The bug then was not
+ * that they existed — it was that they navigated *out* of the project into the
+ * unfiltered global lists, so a tab labelled "this project's tickets" showed
+ * every ticket in the workspace with no way back. Under containment they render
+ * the project's own rows, in place. */
 export function ProjectTabsBar({
   active,
   onSelect,
@@ -24,7 +19,7 @@ export function ProjectTabsBar({
   const { t } = useTranslation("projects");
   return (
     <div className="mb-[18px] flex flex-wrap gap-2 border-b border-white/[0.06] pb-4">
-      {TABS.map((tab) => {
+      {PROJECT_TABS.map((tab) => {
         const isActive = active === tab.id;
         return (
           <button

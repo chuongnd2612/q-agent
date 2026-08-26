@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import { isRunComplete, runStatusToStage } from "@/components/ui/PipelineRail";
 import { useRun } from "@/hooks/queries";
 
@@ -24,6 +25,7 @@ const STEPPER: { label: string; seg: string; stage: number }[] = [
 
 export function MobileStepperRail({ runId }: { runId: number }) {
   const navigate = useNavigate();
+  const runPath = useRunPath();
   const { pathname } = useLocation();
   const { data: run } = useRun(runId);
   const railRef = useRef<HTMLDivElement>(null);
@@ -57,7 +59,7 @@ export function MobileStepperRail({ runId }: { runId: number }) {
           <button
             key={step.label}
             ref={active ? activeRef : undefined}
-            onClick={() => navigate(`/runs/${runId}/${step.seg}`)}
+            onClick={() => navigate(runPath(step.seg))}
             className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-[20px] border py-1.5 pl-1.5 pr-3 text-[12px] font-bold transition-colors"
             style={{
               borderColor: active ? "rgba(139,92,246,.5)" : "rgba(255,255,255,.08)",

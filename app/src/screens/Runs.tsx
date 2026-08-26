@@ -16,6 +16,7 @@ import { RunBulkBar } from "@/components/runs/RunBulkBar";
 import { Button } from "@/components/ui/Button";
 import { EmptyState, ErrorState } from "@/components/ui/misc";
 import { useRuns } from "@/hooks/queries";
+import { useProjectRoute } from "@/screens/ProjectDetail";
 import { useUI, type RunFilter } from "@/store/ui";
 import type { RunOut } from "@/types/api";
 
@@ -46,8 +47,14 @@ export function Runs() {
   const clearRunSel = useUI((s) => s.clearRunSel);
   const navigate = useNavigate();
 
-  const { data: runs, isLoading, isError, refetch } = useRuns();
+  // The project's OWN runs (ADR 0015 slice 2). This screen is only reachable as
+  // a project tab now, so the scope is part of the query — the #693 bug was a
+  // project tab that showed the whole workspace's runs.
+  const { projectGuid } = useProjectRoute();
+  const { data: runs, isLoading, isError, refetch } = useRuns(projectGuid ?? undefined);
   const all = runs ?? [];
+  const runHref = (id: number, seg?: string) =>
+    `/projects/${encodeURIComponent(projectGuid ?? "")}/runs/${id}${seg ? `/${seg}` : ""}`;
 
   const groupOf = (r: RunOut) => runGroup(runEffectiveStatus(r));
   const counts = {
@@ -179,8 +186,8 @@ export function Runs() {
                   index={i}
                   selected={!!runSel[r.id]}
                   onToggle={() => toggleRunSel(r.id)}
-                  onOpen={() => navigate(`/runs/${r.id}`)}
-                  onPlay={() => navigate(`/runs/${r.id}/execution`)}
+                  onOpen={() => navigate(runHref(r.id))}
+                  onPlay={() => navigate(runHref(r.id, "execution"))}
                 />
               ))}
             </div>

@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/Button";
 import { providerGlyph } from "@/components/ui/badges";
 import { isRunComplete, PipelineRail, runStatusToStage } from "@/components/ui/PipelineRail";
 import { useNavigate, useParams } from "react-router-dom";
+import { useProjectRouteSegment, useRunPath } from "@/hooks/useRunRouteId";
 import { ALL_TICKETS_PAGE_SIZE, useRun, useRunAiUsage, useTickets } from "@/hooks/queries";
 import { useRunEvents } from "@/hooks/useRunEvents";
 import type { ProgressEvent, RunAiProcess, RunAiTicket, RunAiUsage, RunTicketOut } from "@/types/api";
@@ -46,6 +47,8 @@ const RUN_STATUS_BADGE: Record<string, { color: string; bg: string }> = {
 export function RunDetail() {
   const { t } = useTranslation("runs");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
+  const projectSegment = useProjectRouteSegment();
   const navigate = useNavigate();
 
   const { data: run, isLoading } = useRun(runId);
@@ -79,7 +82,7 @@ export function RunDetail() {
 
   const processing = run.status === "processing";
   const goReview = () => {
-    navigate("/runs/" + run.id + "/review");
+    navigate(runPath("review"));
   };
 
   const total = run.runTickets.length;
@@ -90,7 +93,9 @@ export function RunDetail() {
   return (
     <div className="px-1 pb-10 pt-0.5">
       <button
-        onClick={() => navigate("/runs")}
+        onClick={() =>
+          navigate(projectSegment ? `/projects/${projectSegment}/runs` : "/projects")
+        }
         className="mb-3.5 flex cursor-pointer items-center gap-[7px] border-none bg-transparent p-0 text-[12.5px] font-semibold text-ink-dim hover:text-[#c7c7d4]"
       >
         <ArrowLeft size={14} strokeWidth={2.2} />
@@ -254,7 +259,7 @@ export function RunDetail() {
             phaseMsg={phaseMsgs[rt.ticketExternalId]}
             index={i}
             onReview={() =>
-              navigate("/runs/" + runId + "/review?ticket=" + encodeURIComponent(rt.ticketExternalId))
+              navigate(runPath("review") + "?ticket=" + encodeURIComponent(rt.ticketExternalId))
             }
           />
         ))}

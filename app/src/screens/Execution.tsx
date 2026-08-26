@@ -17,6 +17,7 @@ import { ProgressRing, Spinner } from "@/components/ui/misc";
 import { PipelineRail } from "@/components/ui/PipelineRail";
 import { ApiError } from "@/lib/api";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import { useExecution, useRun, useSettings, useStartExecution } from "@/hooks/queries";
 import { SetupBlockers } from "@/components/setup/SetupBlockers";
 import { useSetupGuard } from "@/components/setup/useSetupGuard";
@@ -31,6 +32,7 @@ function shortTicket(id: string): string {
 export function Execution() {
   const { t } = useTranslation("pipeline");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
   const navigate = useNavigate();
 
   const { data: run } = useRun(runId);
@@ -232,7 +234,7 @@ export function Execution() {
             {current?.title ?? (isIdle ? t("execution.notStarted") : "—")}
           </div>
           {isDone && (
-            <Button variant="glass" size="sm" onClick={() => navigate("/runs/" + runId + "/evidence")} className="mt-1 self-start">
+            <Button variant="glass" size="sm" onClick={() => navigate(runPath("evidence"))} className="mt-1 self-start">
               {t("execution.collectEvidence")}
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M5 12h14M13 6l6 6-6 6" />
