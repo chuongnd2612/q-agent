@@ -533,28 +533,13 @@ def get_settings_endpoint() -> SettingsOut:
 
 @router.put("/settings", response_model=SettingsOut, tags=["settings"])
 def update_settings_endpoint(body: SettingsUpdate) -> SettingsOut:
-    updates = body.model_dump(by_alias=False, exclude_none=True)
-    # settings_store keys are camelCase to match SettingsOut fields directly.
-    camel_updates = {
-        "parallel": updates.get("parallel"),
-        "retryFlaky": updates.get("retry_flaky"),
-        "screenshotOnFail": updates.get("screenshot_on_fail"),
-        "video": updates.get("video"),
-        "maxCasesPerTicket": updates.get("max_cases_per_ticket"),
-        "headless": updates.get("headless"),
-        "autoAnnotate": updates.get("auto_annotate"),
-        "neuralBackground": updates.get("neural_background"),
-        "claudeModel": updates.get("claude_model"),
-        "skillModels": updates.get("skill_models"),
-        "aiPipelineWorkers": updates.get("ai_pipeline_workers"),
-        "weeklyTokenBudget": updates.get("weekly_token_budget"),
-        "executionTarget": updates.get("execution_target"),
-        "authoringMode": updates.get("authoring_mode"),
-        "healMode": updates.get("heal_mode"),
-        "authoringCostBudgetUsd": updates.get("authoring_cost_budget_usd"),
-        "authoringLogVerbosity": updates.get("authoring_log_verbosity"),
-        "gateEnabled": updates.get("gate_enabled"),
-    }
+    # `ApiModel` generates camelCase aliases, and `settings_store` keys ARE camelCase —
+    # so the aliased dump already IS the update. This used to be a hand-written map of
+    # every field, and `dryRun` was simply missing from it (#717): the PATCH returned
+    # 200, the setting never saved, and the "unsaved changes" bar stayed up because the
+    # draft never matched what came back. A field list you have to remember to extend is
+    # a field list that silently drops the next setting someone adds.
+    camel_updates = body.model_dump(by_alias=True, exclude_none=True)
     saved = settings_store.save_settings(camel_updates)
     _changed = ", ".join(k for k, v in camel_updates.items() if v is not None)
     audit_service.record(

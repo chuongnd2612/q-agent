@@ -101,9 +101,6 @@
     "model": {
       "label": "Claude model",
       "placeholder": "Select a model",
-      "opus": "Opus 4.8 — highest quality",
-      "sonnet": "Sonnet 5 — balanced (default)",
-      "haiku": "Haiku 4.5 — fastest",
       "hint": "Model used for all AI actions (analysis, generation, self-heal)."
     },
     "budget": {
