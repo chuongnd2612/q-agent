@@ -1364,6 +1364,11 @@ export const useCommentMutations = (runId: number | string) => {
       }) => api.editComment(commentId, body),
       onSuccess: invalidate,
     }),
+    regenerate: useMutation({
+      mutationFn: async (commentId: number) =>
+        api.regenerateComment(commentId, await hubTokenForRead()),
+      onSuccess: invalidate,
+    }),
     publishOne: useMutation({
       mutationFn: (commentId: number) => api.publishComment(commentId),
       onSuccess: invalidate,

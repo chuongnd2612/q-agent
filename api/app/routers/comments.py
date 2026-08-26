@@ -26,7 +26,7 @@ from app.models.run import Run
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas import CommentEdit, PublishRequest, TicketCommentOut
-from app.services import claude_cli, comment_evidence, run_context, run_control
+from app.services import audit_service, claude_cli, comment_evidence, run_context, run_control
 from app.services.claude_cli import ClaudeError
 from app.services.ownership import get_owned_or_404
 from app.services.publish_service import publish_one
@@ -175,6 +175,82 @@ def _summarize_ticket(
         run_context.set_run(_prev_run)
 
 
+def _build_comment(
+    db: Session,
+    *,
+    run_id: int,
+    summary: dict,
+    provider_kind: str,
+    ai_failure_analysis: str,
+    project_context: str,
+    cases_evidence: list[dict],
+) -> TicketComment:
+    """Generate (or regenerate) one ticket's draft comment, in place.
+
+    Shared by the run-wide prepare and the per-comment regenerate (#700), so a
+    regenerated comment cannot drift from a freshly prepared one — which is the whole
+    point of a Regenerate button that nobody has to think twice about.
+
+    Upserts on ``(run_id, ticket_external_id)`` and always leaves the row as a
+    ``draft`` with no error: a regeneration replaces whatever the previous attempt
+    left behind, including a failure message that no longer applies.
+
+    The caller commits.
+    """
+    ticket_external_id = summary["ticketExternalId"]
+    # Passed only when every approved case's script ran and passed (ticket status from
+    # the report); fall back to the failed-count for old reports.
+    ticket_status = summary.get("status") or ("Passed" if summary["failed"] == 0 else "Failed")
+    target_status = (
+        _TARGET_STATUS_ALL_PASS if ticket_status == "Passed" else _TARGET_STATUS_ANY_FAIL
+    )
+    try:
+        body = _summarize_ticket(
+            ticket_external_id, summary, ai_failure_analysis, run_id, project_context
+        )
+        # The prose is the model's; the evidence list is a FACT and is appended by
+        # code. A model that invented a trace file into this list would be worse than
+        # no list, because the list is what a reader trusts enough to go looking.
+        manifest = comment_evidence.manifest_block(cases_evidence)
+        if manifest:
+            body = body + "\n\n" + manifest
+    except ClaudeError as exc:
+        raise HTTPException(status_code=502, detail=f"Claude CLI failed: {exc}") from exc
+
+    existing = (
+        db.execute(
+            select(TicketComment).where(
+                TicketComment.run_id == run_id,
+                TicketComment.ticket_external_id == ticket_external_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    # Refs, not bytes: a draft may sit for days, and a comment row is not the place to
+    # keep megabytes of video. Resolved back to files on publish.
+    refs = comment_evidence.attachment_refs(cases_evidence)
+    if existing is not None:
+        existing.body = body
+        existing.target_status = target_status
+        existing.status = "draft"
+        existing.error_message = ""
+        existing.attachments = refs
+        comment = existing
+    else:
+        comment = TicketComment(
+            run_id=run_id,
+            ticket_external_id=ticket_external_id,
+            provider_kind=provider_kind,
+            body=body,
+            status="draft",
+            target_status=target_status,
+            attachments=refs,
+        )
+    db.add(comment)
+    return comment
+
+
 @router.post("/runs/{run_id}/comments/prepare", response_model=list[TicketCommentOut])
 def prepare_comments(
     run_id: int,
@@ -219,60 +295,18 @@ def prepare_comments(
 
     comments: list[TicketComment] = []
     for summary in ticket_summaries:
-        ticket_external_id = summary["ticketExternalId"]
-        ticket = tickets.get(ticket_external_id)
-        provider_kind = ticket.provider_kind if ticket else ""
-        # Passed only when every approved case's script ran and passed (ticket
-        # status from the report); fall back to the failed-count for old reports.
-        ticket_status = summary.get("status") or (
-            "Passed" if summary["failed"] == 0 else "Failed"
-        )
-        target_status = (
-            _TARGET_STATUS_ALL_PASS if ticket_status == "Passed" else _TARGET_STATUS_ANY_FAIL
-        )
-        cases_evidence = evidence_by_ticket.get(ticket_external_id, [])
-        try:
-            body = _summarize_ticket(
-                ticket_external_id, summary, ai_failure_analysis, run_id, project_context
-            )
-            # The prose is the model's; the evidence list is a FACT and is appended by
-            # code. A model that invented a trace file into this list would be worse
-            # than no list, because the list is what a reader trusts enough to go
-            # looking for the file.
-            manifest = comment_evidence.manifest_block(cases_evidence)
-            if manifest:
-                body = body + "\n\n" + manifest
-        except ClaudeError as exc:
-            raise HTTPException(status_code=502, detail=f"Claude CLI failed: {exc}") from exc
-
-        existing = db.execute(
-            select(TicketComment).where(
-                TicketComment.run_id == run_id,
-                TicketComment.ticket_external_id == ticket_external_id,
-            )
-        ).scalars().first()
-        # Refs, not bytes: a draft may sit for days, and a comment row is not the
-        # place to keep megabytes of video. Resolved back to files on publish.
-        refs = comment_evidence.attachment_refs(cases_evidence)
-        if existing is not None:
-            existing.body = body
-            existing.target_status = target_status
-            existing.status = "draft"
-            existing.error_message = ""
-            existing.attachments = refs
-            comment = existing
-        else:
-            comment = TicketComment(
+        ticket = tickets.get(summary["ticketExternalId"])
+        comments.append(
+            _build_comment(
+                db,
                 run_id=run_id,
-                ticket_external_id=ticket_external_id,
-                provider_kind=provider_kind,
-                body=body,
-                status="draft",
-                target_status=target_status,
-                attachments=refs,
+                summary=summary,
+                provider_kind=ticket.provider_kind if ticket else "",
+                ai_failure_analysis=ai_failure_analysis,
+                project_context=project_context,
+                cases_evidence=evidence_by_ticket.get(summary["ticketExternalId"], []),
             )
-        db.add(comment)
-        comments.append(comment)
+        )
 
     db.commit()
     for c in comments:
@@ -319,6 +353,85 @@ def edit_comment(
     db.commit()
     db.refresh(comment)
     return comment
+
+
+@router.post("/comments/{comment_id}/regenerate", response_model=TicketCommentOut)
+def regenerate_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    hub_token: str | None = Depends(hub_token_dep),
+) -> TicketComment:
+    """Rebuild ONE ticket's draft from the current report and evidence (#700).
+
+    Once drafts exist there was no way back: Prepare lives in the Publish screen's
+    empty state and disappears with the first draft, so a comment written before the
+    evidence manifest existed — or before a case was re-run or healed — kept asserting
+    whatever it was generated from, and the only remedy was deleting the row by hand.
+
+    Scoped to one ticket on purpose. The run-wide prepare rebuilds *every* draft, which
+    is the wrong tool when one ticket's result changed and the others carry hand edits.
+
+    A **published** comment is refused (409). It is already on the work item, and
+    rebuilding it locally then re-publishing would post a *second* comment rather than
+    replace the first — a footgun dressed as a feature. Edit stays available for
+    anyone who wants the local record to match.
+    """
+    comment = _get_comment_or_404(db, comment_id, user)
+    if comment.status == "published":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This comment is already published to the work item. Regenerating it "
+                "would post a second comment rather than replace the first — edit it "
+                "instead."
+            ),
+        )
+    run = get_owned_or_404(db, Run, comment.run_id, user)
+    # Same hub-resolved Claude credential every other run action uses (#689).
+    use_hub_credential(comment.run_id, hub_token)
+    # See prepare_comments: a lingering cancel event would SIGKILL the summarize call.
+    run_control.clear(comment.run_id)
+
+    report = _latest_report(db, comment.run_id)
+    summary = next(
+        (
+            s
+            for s in report.data.get("ticketSummary", [])
+            if s.get("ticketExternalId") == comment.ticket_external_id
+        ),
+        None,
+    )
+    if summary is None:
+        # The report no longer covers this ticket — regenerating from nothing would
+        # produce a confident comment about a run that does not describe it.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The latest report has no results for {comment.ticket_external_id}, "
+                "so there is nothing to regenerate from."
+            ),
+        )
+
+    evidence_by_ticket = comment_evidence.collect_for_run(db, comment.run_id, run.owner_id)
+    regenerated = _build_comment(
+        db,
+        run_id=comment.run_id,
+        summary=summary,
+        provider_kind=comment.provider_kind,
+        ai_failure_analysis=report.data.get("aiFailureAnalysis", ""),
+        project_context=_project_context_block(db, run),
+        cases_evidence=evidence_by_ticket.get(comment.ticket_external_id, []),
+    )
+    db.commit()
+    db.refresh(regenerated)
+    audit_service.record(
+        category="publish",
+        actor_type="ai",
+        action="Regenerated a ticket comment",
+        target=f"{run.code} · {comment.ticket_external_id}",
+    )
+    return regenerated
 
 
 @router.post("/comments/{comment_id}/publish", response_model=TicketCommentOut)

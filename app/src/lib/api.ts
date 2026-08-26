@@ -1033,6 +1033,14 @@ export const api = {
       undefined,
       hubToken,
     ),
+  /** Rebuild ONE ticket's draft from the current report and evidence (#700). Carries
+   * the hub token like every other Claude-driven run action (#689). */
+  regenerateComment: (commentId: number, hubToken: string | null = null) =>
+    postWithHubToken<TicketCommentOut>(
+      `/comments/${commentId}/regenerate`,
+      undefined,
+      hubToken,
+    ),
   listComments: (runId: number | string) =>
     get<TicketCommentOut[]>(`/runs/${runId}/comments`),
   editComment: (

@@ -555,3 +555,117 @@ def test_a_case_with_no_artifacts_is_reported_not_omitted(client, db_session, mo
     body = next(c for c in resp.json() if c["ticketExternalId"] == "SUR-1")["body"]
     assert "TC-09 — PASS" in body
     assert "no artifacts captured" in body
+
+
+# ----------------------------------------------- regenerating one draft (#700)
+#
+# Prepare lives in the Publish screen's empty state and disappears with the first
+# draft, so a comment written before the evidence manifest existed — or before a
+# case was re-run or healed — kept asserting whatever it was generated from, with no
+# way back short of deleting the row.
+
+
+def test_regenerate_rebuilds_one_comment_from_the_current_evidence(
+    client, db_session, monkeypatch
+):
+    """The case in the report: a draft prepared before the evidence existed."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+    # Evidence arrives after the draft was written.
+    _seed_evidence(db_session)
+
+    resp = client.post(f"/comments/{comment_id}/regenerate")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Evidence per test case" in body["body"]
+    assert {a["caseCode"] for a in body["attachments"]} == {"TC-01", "TC-02"}
+    assert body["status"] == "draft"
+
+
+def test_regenerate_touches_only_its_own_ticket(client, db_session, monkeypatch):
+    """The whole reason it is not "prepare again": the other drafts carry hand edits."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    prepared = client.post("/runs/1/comments/prepare").json()
+    mine = next(c for c in prepared if c["ticketExternalId"] == "SUR-1")
+    other = next(c for c in prepared if c["ticketExternalId"] == "SUR-2")
+    client.patch(f"/comments/{other['id']}", json={"body": "hand-edited, do not touch"})
+
+    client.post(f"/comments/{mine['id']}/regenerate")
+
+    untouched = next(
+        c for c in client.get("/runs/1/comments").json() if c["id"] == other["id"]
+    )
+    assert untouched["body"] == "hand-edited, do not touch"
+
+
+def test_regenerate_clears_a_stale_failure(client, db_session, monkeypatch):
+    """A regenerated comment replaces whatever the last attempt left behind — an error
+    message that no longer applies is exactly what a reviewer would act on."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+    FakeAdapter.fail_tickets = {"SUR-1"}
+    client.post(f"/comments/{comment_id}/publish")
+    assert client.get("/runs/1/comments").json()
+    FakeAdapter.fail_tickets = set()
+
+    resp = client.post(f"/comments/{comment_id}/regenerate")
+
+    assert resp.json()["status"] == "draft"
+    assert resp.json()["errorMessage"] == ""
+
+
+def test_regenerating_a_published_comment_is_refused(client, db_session, monkeypatch):
+    """It is already on the work item. Rebuilding it and re-publishing posts a SECOND
+    comment rather than replacing the first — a footgun dressed as a feature."""
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+    client.post(f"/comments/{comment_id}/publish")
+
+    resp = client.post(f"/comments/{comment_id}/regenerate")
+
+    assert resp.status_code == 409
+    assert "already published" in resp.json()["detail"]
+    # ...and it is still published, not quietly downgraded to a draft.
+    still = next(c for c in client.get("/runs/1/comments").json() if c["id"] == comment_id)
+    assert still["status"] == "published"
+
+
+def test_regenerate_refuses_when_the_report_no_longer_covers_the_ticket(
+    client, db_session, monkeypatch
+):
+    """Regenerating from nothing would produce a confident comment about a run that
+    does not describe this ticket."""
+    from app.models.report import Report
+
+    _patch_adapter_and_claude(monkeypatch)
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+    report = db_session.query(Report).filter(Report.run_id == 1).first()
+    report.data = {
+        "ticketSummary": [s for s in report.data["ticketSummary"] if s["ticketExternalId"] != "SUR-1"],
+        "aiFailureAnalysis": "",
+    }
+    db_session.add(report)
+    db_session.commit()
+
+    resp = client.post(f"/comments/{comment_id}/regenerate")
+
+    assert resp.status_code == 400
+    assert "nothing to regenerate from" in resp.json()["detail"]
