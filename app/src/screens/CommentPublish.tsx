@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Eye, FileText, Pencil, Send, Sparkles } from "lucide-react";
+import { Eye, FileText, Pencil, RefreshCw, Send, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
@@ -28,7 +28,8 @@ export function CommentPublish() {
   const runId = Number(useParams().runId);
   const { data: run } = useRun(runId);
   const { data: comments, isLoading, isError, refetch } = useComments(runId);
-  const { prepare, publishOne, publishAll, retry, edit } = useCommentMutations(runId);
+  const { prepare, publishOne, publishAll, retry, edit, regenerate } =
+    useCommentMutations(runId);
 
   const anyFailed = (comments ?? []).some((c) => c.status === "failed");
 
@@ -136,6 +137,14 @@ export function CommentPublish() {
                 })
               }
               publishing={publishOne.isPending && (publishOne.variables as number) === c.id}
+              onRegenerate={() =>
+                regenerate.mutate(c.id, {
+                  onSuccess: () => toast.success(t("publish.toast.regenerated")),
+                  onError: (e) =>
+                    toast.error(e instanceof Error ? e.message : t("publish.toast.regenerateFailed")),
+                })
+              }
+              regenerating={regenerate.isPending && (regenerate.variables as number) === c.id}
               onSave={(body, done) =>
                 edit.mutate(
                   { commentId: c.id, body: { body } },
@@ -161,6 +170,8 @@ function PublishCard({
   comment,
   index,
   onPublish,
+  onRegenerate,
+  regenerating,
   publishing,
   onSave,
   saving,
@@ -168,6 +179,9 @@ function PublishCard({
   comment: TicketCommentOut;
   index: number;
   onPublish: () => void;
+  onRegenerate: () => void;
+  /** A regeneration for THIS comment is in flight (it makes a Claude call). */
+  regenerating: boolean;
   publishing: boolean;
   /** Persist an edited body; call `done` once the save succeeds to leave edit mode. */
   onSave: (body: string, done: () => void) => void;
@@ -239,7 +253,31 @@ function PublishCard({
               {t("publish.editor.edit")}
             </button>
           )}
-          <Button variant="glass" size="sm" onClick={onPublish} disabled={publishing || editing}>
+          {/* Regenerate (#700). Once drafts exist, Prepare is gone — it lives in the
+              empty state — so a comment written before the evidence manifest, or
+              before a case was re-run, had no way back to a current one. Refused for
+              a PUBLISHED comment: it is already on the work item, and re-publishing a
+              rebuilt one posts a second comment rather than replacing the first. */}
+          <button
+            type="button"
+            onClick={onRegenerate}
+            disabled={regenerating || editing || comment.status === "published"}
+            title={
+              comment.status === "published"
+                ? t("publish.regeneratePublishedHint")
+                : t("publish.regenerateHint")
+            }
+            className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.1] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] font-semibold text-ink-soft transition-colors hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+            data-testid="comment-regenerate"
+          >
+            {regenerating ? (
+              <Spinner size={13} />
+            ) : (
+              <RefreshCw size={13} strokeWidth={2} />
+            )}
+            {regenerating ? t("publish.regenerating") : t("publish.regenerate")}
+          </button>
+          <Button variant="glass" size="sm" onClick={onPublish} disabled={publishing || editing || regenerating}>
             {t("publish.publish")}
           </Button>
         </div>

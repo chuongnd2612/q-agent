@@ -409,7 +409,9 @@
       "publishFailed": "Publish failed",
       "prepareFailed": "Prepare failed",
       "saved": "Comment saved",
-      "saveFailed": "Failed to save comment"
+      "saveFailed": "Failed to save comment",
+      "regenerated": "Comment regenerated",
+      "regenerateFailed": "Could not regenerate the comment"
     },
     "editor": {
       "edit": "Edit",
@@ -427,7 +429,11 @@
     "preparing": "Preparing…",
     "prepareComments": "Prepare comments",
     "summarizing": "Summarizing results with AI…",
-    "attachOnPublish": "Uploaded to the work item on publish"
+    "attachOnPublish": "Uploaded to the work item on publish",
+    "regenerate": "Regenerate",
+    "regenerating": "Regenerating…",
+    "regenerateHint": "Rebuild this comment from the latest results and evidence",
+    "regeneratePublishedHint": "Already published to the work item — edit it instead. Regenerating would post a second comment rather than replace the first."
   },
   "createLink": {
     "header": {

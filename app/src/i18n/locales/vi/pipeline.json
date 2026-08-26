@@ -409,7 +409,9 @@
       "publishFailed": "Xuất bản thất bại",
       "prepareFailed": "Chuẩn bị thất bại",
       "saved": "Đã lưu bình luận",
-      "saveFailed": "Lưu bình luận thất bại"
+      "saveFailed": "Lưu bình luận thất bại",
+      "regenerated": "Đã tạo lại comment",
+      "regenerateFailed": "Không tạo lại được comment"
     },
     "editor": {
       "edit": "Sửa",
@@ -427,7 +429,11 @@
     "preparing": "Đang chuẩn bị…",
     "prepareComments": "Chuẩn bị bình luận",
     "summarizing": "Đang tóm tắt kết quả bằng AI…",
-    "attachOnPublish": "Sẽ được tải lên work item khi publish"
+    "attachOnPublish": "Sẽ được tải lên work item khi publish",
+    "regenerate": "Tạo lại",
+    "regenerating": "Đang tạo lại…",
+    "regenerateHint": "Dựng lại comment này từ kết quả và bằng chứng mới nhất",
+    "regeneratePublishedHint": "Đã publish lên work item — hãy sửa trực tiếp. Tạo lại sẽ đăng thêm một comment mới chứ không thay thế comment cũ."
   },
   "createLink": {
     "header": {
