@@ -1,6 +1,10 @@
 # ADR 0003 — Client-side routing and URL-addressable navigation
 
-- **Status:** Accepted
+- **Status:** Accepted — **route map amended** by
+  [ADR 0015](0015-project-scoped-navigation-and-run-overlay.md) §2: screens nest under
+  `/projects/:projectGuid/*` and the run stage becomes a path segment. The principle
+  below — the URL is the source of truth, not Zustand — is unchanged and reinforced
+  (`projectTab` leaves the store entirely).
 - **Date:** 2026-07-04
 - **Deciders:** Operator (via in-session decisions), Q-Agent build
 - **Supersedes/extends:** builds on [ADR 0001](0001-scope-architecture-and-live-integrations.md)

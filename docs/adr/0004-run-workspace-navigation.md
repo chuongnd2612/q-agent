@@ -1,6 +1,10 @@
 # ADR 0004 — Run workspace-mode navigation (no silent run default)
 
-- **Status:** Accepted
+- **Status:** Superseded by
+  [ADR 0015](0015-project-scoped-navigation-and-run-overlay.md) — workspace mode is
+  replaced by a full-screen run overlay and the "pick a run" interstitial is deleted.
+  **The no-silent-run-default guarantee below still holds**; ADR 0015 §4 restates it and
+  keeps `RunLayout`'s guard.
 - **Date:** 2026-07-04
 - **Deciders:** Operator (via in-session decisions), Q-Agent build
 - **Supersedes/extends:** builds on [ADR 0003](0003-client-side-routing.md)
