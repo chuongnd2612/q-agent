@@ -12,8 +12,10 @@ import { specDisplayPath } from "./projectFiles";
 /**
  * The right-hand code panel for the selected spec: header toolbar (Save/Cancel
  * while editing, or Collapse/Expand/Edit/Regenerate/Run/Self-heal/Copy/Download),
- * the placeholder-gate note, the editing textarea vs the read-only highlighted
- * view, and the footer "Run tests" bar. Pure presentation — every action is a
+ * the placeholder-gate note, and the editing textarea vs the read-only
+ * highlighted view. The suite-wide "Run tests" bar is NOT here — it lives in
+ * the Automation screen above this panel, so it is reachable without scrolling
+ * the editor and stays present while a project file is open (#701). Pure presentation — every action is a
  * callback prop owned by the parent screen.
  */
 export function SpecCodePanel({
@@ -41,7 +43,6 @@ export function SpecCodePanel({
   authoringDone,
   authoringPaused,
   updateSpecPending,
-  startExecutionPending,
   copyLabel,
   changedLines,
   regenVersion,
@@ -55,7 +56,6 @@ export function SpecCodePanel({
   onRunSpec,
   onStartHeal,
   onStartExplore,
-  onStartExecution,
   onOpenChat,
   codeOverride,
   scrollToLine,
@@ -88,7 +88,6 @@ export function SpecCodePanel({
   /** #619: the session is parked with the browser still open, awaiting Continue. */
   authoringPaused: boolean;
   updateSpecPending: boolean;
-  startExecutionPending: boolean;
   copyLabel: string;
   changedLines?: Set<number>;
   regenVersion?: number;
@@ -103,7 +102,6 @@ export function SpecCodePanel({
   onStartHeal: () => void;
   /** Kick off a DOM-exploration session (only meaningful for a blocked spec). */
   onStartExplore: () => void;
-  onStartExecution: () => void;
   onOpenChat: () => void;
   /** When set, shown in the code viewer instead of the spec's code — used to
    * "type out" a chat edit's new code before the query-backed code settles. */
@@ -340,18 +338,6 @@ export function SpecCodePanel({
           )}
         </div>
       ) : null}
-      <div className="flex flex-col gap-2.5 border-t border-white/[0.06] px-4 py-3.5 md:flex-row md:items-center">
-        <span className="text-xs text-muted md:flex-1">{t("spec.footer.description")}</span>
-        <button
-          onClick={onStartExecution}
-          disabled={startExecutionPending}
-          className="flex w-full items-center justify-center gap-2 rounded-xl px-[18px] py-2.5 text-[13px] font-bold text-white disabled:opacity-60 md:w-auto"
-          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)", boxShadow: "0 8px 22px -8px rgba(139,92,246,.8)" }}
-        >
-          <Play size={14} fill="#fff" />
-          {t("spec.runTests")}
-        </button>
-      </div>
     </div>
   );
 }

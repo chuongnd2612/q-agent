@@ -45,6 +45,7 @@ import { GenerationFailureBanner } from "./automation/GenerationFailureBanner";
 import { SpecList } from "./automation/SpecList";
 import { ProductDefectBanner, BlockedBanner } from "./automation/banners";
 import { SpecCodePanel } from "./automation/SpecCodePanel";
+import { RunSuiteBar } from "./automation/RunSuiteBar";
 import { HealTimeline } from "./automation/HealTimeline";
 import { ExploreReview } from "./automation/ExploreReview";
 import { diffLines } from "./automation/lineDiff";
@@ -144,6 +145,22 @@ export function Automation() {
 
   // Approved cases still missing a spec — the target of incremental generation.
   const missingCount = Math.max(0, automatableCount - specCount);
+
+  // What the server would actually execute, mirroring the filter in
+  // `POST /runs/{id}/execution`: approved, not Manual, and not sitting behind a
+  // blocked/product-defect spec. The specs list endpoint filters on nothing but
+  // the run, so `specCount > 0` says nothing about runnability — without this the
+  // suite-run button would look ready and 400 with "No runnable specs to
+  // execute" (#701).
+  const runnableCount = useMemo(() => {
+    const statusByCase = new Map((specs ?? []).map((s) => [s.testCaseId, s.status]));
+    return (cases ?? []).filter(
+      (c) =>
+        c.approval === "approved" &&
+        c.automation !== "Manual" &&
+        !["blocked", "product_defect"].includes(statusByCase.get(c.id) ?? ""),
+    ).length;
+  }, [cases, specs]);
 
   // Latest execution status per case, for the status dot next to each spec.
   const resultStatusByCase = useMemo(() => {
@@ -780,6 +797,16 @@ export function Automation() {
         />
       )}
 
+      {/* The suite-wide action, above the editor and outside the spec panel — see
+          RunSuiteBar for why it is no longer the code panel's footer (#701). */}
+      {!thinking && specs && specs.length > 0 && (
+        <RunSuiteBar
+          pending={startExecution.isPending}
+          runnable={runnableCount > 0}
+          onRun={startExecutionAndView}
+        />
+      )}
+
       {!thinking && specs && specs.length > 0 && (
         <div className="flex flex-col gap-3.5 md:grid md:grid-cols-[230px_1fr] md:items-start">
           <div className="flex flex-col gap-3.5">
@@ -876,7 +903,6 @@ export function Automation() {
             authoringDone={authoringForSelected?.done ?? false}
             authoringPaused={authoringForSelected?.paused ?? false}
             updateSpecPending={updateSpec.isPending}
-            startExecutionPending={startExecution.isPending}
             copyLabel={copyLabel}
             changedLines={
               // While the chat edit is still re-typing, codeOverride shows a
@@ -909,7 +935,6 @@ export function Automation() {
             onRunSpec={runThisSpec}
             onStartHeal={startHeal}
             onStartExplore={startExplore}
-            onStartExecution={startExecutionAndView}
             onOpenChat={openChat}
             codeOverride={editorCodeOverride}
           />
