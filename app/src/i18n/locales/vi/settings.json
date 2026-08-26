@@ -87,6 +87,10 @@
     "headless": {
       "title": "Chạy trình duyệt ẩn",
       "description": "Thực thi Playwright mà không hiển thị cửa sổ trình duyệt (tắt để xem các lần chạy)"
+    },
+    "dryRun": {
+      "title": "Chạy thử (Dry run)",
+      "description": "Không bao giờ ghi lên hệ thống work item. Test case và comment vẫn được tạo và lưu trong Q-Agent, nhưng không có ADO item nào bị tạo, bình luận hay đổi trạng thái."
     }
   },
   "specGate": {

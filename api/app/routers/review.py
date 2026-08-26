@@ -32,7 +32,7 @@ from app.schemas import (
     TestCaseOut,
     TestCaseUpdate,
 )
-from app.services import audit_service, link_service
+from app.services import audit_service, link_service, settings_store
 from app.services.ai_service import next_case_code, regenerate_case
 from app.services.claude_cli import ClaudeError
 from app.services.ownership import get_owned_or_404
@@ -176,12 +176,17 @@ def create_and_link(
     )
     if not approved:
         raise HTTPException(status_code=400, detail="No approved test cases to create")
-    link_service.start_create_link(run_id, body.link, body.ticket_ids, body.dry_run)
+    # The SETTING decides, and it can only ever tighten what the request asked for
+    # (#712). A dry run someone switched on to protect a live board must not be
+    # undone by a client that forgot to send the flag — which is precisely the failure
+    # a per-request flag invites. A request may still opt into a dry run on its own.
+    dry_run = bool(body.dry_run) or bool(settings_store.load_settings().get("dryRun"))
+    link_service.start_create_link(run_id, body.link, body.ticket_ids, dry_run)
     audit_service.record(
         category="sync", actor_type="ai",
         action="Created & linked test cases" if body.link else "Created test cases",
         target=run.code, meta=f"{approved} approved cases"
-        + (" · dry run" if body.dry_run else ""),
+        + (" · dry run (the provider was not contacted)" if dry_run else ""),
     )
     return LinkStatusOut(**link_service.link_status(db, run_id))
 

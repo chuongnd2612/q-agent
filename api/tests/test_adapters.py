@@ -659,3 +659,51 @@ def test_ado_declares_the_attachment_capability():
     assert _ado().supports_attachments() is True
     assert GitHubAdapter(config={}, secrets={}).supports_attachments() is False
     assert JiraAdapter(config={}, secrets={}).supports_attachments() is False
+
+
+# ------------------------------------- the organisation URL's three names (#711)
+#
+# EmeHub calls the field `baseUrl` and that is what `hub_workspace.mirror_connections`
+# writes — so in a hub deployment EVERY connection stored it under a key this adapter
+# did not read, and every write failed with "orgUrl is not configured" about a field the
+# operator had filled in. Only seed.py's local fixtures and these tests ever spelled it
+# `orgUrl`, which is exactly why it survived: the tests agreed with the bug.
+
+
+@pytest.mark.parametrize("key", ["baseUrl", "orgUrl", "org_url"])
+@respx.mock
+def test_ado_accepts_every_spelling_of_the_org_url(key):
+    adapter = AzureDevOpsAdapter(
+        config={key: "https://dev.azure.com/myorg", "project": "MyProj"},
+        secrets={"pat": "secret-pat"},
+    )
+    respx.post("https://dev.azure.com/myorg/_apis/wit/workItems/1377/comments").mock(
+        return_value=httpx.Response(200, json={"id": 7})
+    )
+
+    assert adapter.publish_comment("1377", "body") == "7"
+
+
+def test_the_hub_spelling_wins_when_a_connection_carries_more_than_one():
+    """A mirrored connection can keep an older local key alongside the hub's.
+
+    The hub owns the connection, so its value is the current one — preferring the stale
+    local spelling would point writes at whichever org the connection used to be.
+    """
+    adapter = AzureDevOpsAdapter(
+        config={"baseUrl": "https://dev.azure.com/current", "orgUrl": "https://dev.azure.com/stale"},
+        secrets={"pat": "p"},
+    )
+
+    assert adapter.org_url == "https://dev.azure.com/current"
+
+
+def test_a_connection_with_no_org_url_says_which_keys_it_looked_for():
+    """The old message named `orgUrl` at an operator who had filled in `baseUrl`, which
+    sends them to check a field that is already correct."""
+    adapter = AzureDevOpsAdapter(config={"project": "MyProj"}, secrets={"pat": "p"})
+
+    result = adapter.test_connection()
+
+    assert result["ok"] is False
+    assert "baseUrl" in result["message"]

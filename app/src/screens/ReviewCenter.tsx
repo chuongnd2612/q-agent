@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, ChevronRight, Plus, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FlaskConical, Plus, Sparkles, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +9,13 @@ import { approvalStyle, Pill, priorityBg, priorityColor } from "@/components/ui/
 import { Select } from "@/components/ui/Dropdown";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useCaseMutations, useCreateAndLink, useRun, useRunCases } from "@/hooks/queries";
+import {
+  useCaseMutations,
+  useCreateAndLink,
+  useRun,
+  useRunCases,
+  useSettings,
+} from "@/hooks/queries";
 import { useUI, type CaseDraft } from "@/store/ui";
 import { cn } from "@/lib/cn";
 import type { TestCaseOut } from "@/types/api";
@@ -78,6 +84,10 @@ export function ReviewCenter() {
     navigate("/runs/" + runId + "/sync");
   };
   const starting = createAndLink.isPending;
+  // Reflects the workspace setting; the SERVER is what actually refuses to write, so
+  // this is a label, never the guard (#712).
+  const { data: settings } = useSettings();
+  const dryRun = settings?.dryRun ?? false;
 
   const tickets = useMemo(() => groupByTicket(cases ?? []), [cases]);
 
@@ -108,26 +118,26 @@ export function ReviewCenter() {
           <Button variant="glass" onClick={() => approveAll.mutate()} disabled={approveAll.isPending}>
             {t("review.approveAll")}
           </Button>
-          <Button
-            variant="glass"
-            onClick={() => startCreateLink(false, true)}
-            disabled={starting}
-            title={t("review.createLocallyHint")}
-          >
-            {starting && <Spinner size={13} />}
-            {t("review.createLocally")}
-          </Button>
-          <Button
-            onClick={() => startCreateLink(false)}
-            disabled={starting}
-            className="border-[rgba(139,92,246,.32)] bg-[rgba(139,92,246,.16)] text-[#c4b5fd] hover:bg-[rgba(139,92,246,.24)]"
-          >
-            {starting && <Spinner size={13} />}
-            {t("review.createCases")}
-          </Button>
+          {/* One action, not three (#712). "Create locally" / "Create test cases" /
+              "Create & link" differed only in how much they touched the provider, so
+              the distinction had to be held in the user's head at the moment of
+              clicking — with a real work item as the cost of getting it wrong. That
+              choice now lives in Settings, and shows here as a chip so nobody has to
+              guess which mode they are in. */}
+          {dryRun && (
+            <span
+              className="flex items-center gap-1.5 rounded-full border border-[rgba(245,158,11,.3)] px-2.5 py-1.5 text-[11.5px] font-semibold text-warning-soft"
+              style={{ background: "rgba(245,158,11,.1)" }}
+              title={t("review.dryRunHint")}
+              data-testid="review-dry-run"
+            >
+              <FlaskConical size={13} strokeWidth={2.2} />
+              {t("review.dryRun")}
+            </span>
+          )}
           <Button variant="primary" onClick={() => startCreateLink(true)} disabled={starting}>
             {starting && <Spinner size={13} />}
-            {t("review.createAndLink")}
+            {dryRun ? t("review.createAndLinkDry") : t("review.createAndLink")}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12h14M13 6l6 6-6 6" />
             </svg>

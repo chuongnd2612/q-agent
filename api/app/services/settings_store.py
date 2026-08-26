@@ -19,6 +19,16 @@ DEFAULTS: dict[str, Any] = {
     "maxCasesPerTicket": 8,
     "headless": True,
     "autoAnnotate": True,
+    # Never write to a provider (#712). When on, creating + linking test cases and
+    # publishing comments do all their local work and touch NO work item: nothing is
+    # created, no comment is posted, no status is transitioned.
+    #
+    # A property of how the workspace is being used — evaluating, demoing, testing
+    # against a live board — not a decision to re-make per click, which is what the
+    # three near-identical "create" buttons on Review were asking of everyone.
+    # Enforced server-side: a dry run that is only a UI state is one forgotten request
+    # away from writing to a real work item.
+    "dryRun": False,
     "neuralBackground": True,
     "claudeModel": "claude-sonnet-5",
     # Per-action model overrides, keyed by skill name (#175). Empty = every action

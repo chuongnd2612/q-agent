@@ -1169,6 +1169,9 @@ class SettingsOut(ApiModel):
     max_cases_per_ticket: int = 8
     headless: bool = True
     auto_annotate: bool = True
+    # Never write to a provider (#712) — see `settings_store.DEFAULTS` for why this is
+    # a setting rather than a per-click choice, and why it is enforced server-side.
+    dry_run: bool = False
     neural_background: bool = True
     claude_model: str = "claude-sonnet-5"
     # Per-action model overrides keyed by skill name (#175); {} = defaults/global.
@@ -1206,6 +1209,7 @@ class SettingsUpdate(ApiModel):
     max_cases_per_ticket: int | None = None
     headless: bool | None = None
     auto_annotate: bool | None = None
+    dry_run: bool | None = None
     neural_background: bool | None = None
     claude_model: str | None = None
     skill_models: dict[str, str] | None = None

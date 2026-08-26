@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from app import crypto
 from app.models.comment import TicketComment
 from app.models.ticket import Ticket
-from app.services import audit_service, comment_evidence, connection_service
+from app.logging import logger
+from app.services import audit_service, comment_evidence, connection_service, settings_store
 from app.services.adapters import ProviderError, get_adapter
 from app.ws import hub
 
@@ -112,6 +113,35 @@ def publish_one(db: Session, comment: TicketComment) -> TicketComment:
     hub.publish(
         str(comment.run_id), "publish.status", {"ticket": comment.ticket_external_id, "status": "publishing"}
     )
+
+    if settings_store.load_settings().get("dryRun"):
+        # Dry run (#712): the comment is recorded as published locally and the provider
+        # is never contacted. Enforced HERE rather than in the client, because a dry run
+        # that is only a UI state is one forgotten request away from writing to a real
+        # work item — and the whole reason someone turns this on is that they cannot
+        # afford that mistake.
+        comment.status = "published"
+        comment.external_comment_id = ""
+        comment.error_message = ""
+        db.add(comment)
+        db.commit()
+        db.refresh(comment)
+        audit_service.record(
+            category="publish",
+            action="Recorded a ticket comment (dry run — the provider was not contacted)",
+            target=comment.ticket_external_id,
+            status="warning",
+        )
+        hub.publish(
+            str(comment.run_id),
+            "publish.status",
+            {"ticket": comment.ticket_external_id, "status": "published", "dryRun": True},
+        )
+        logger.info(
+            "dry run: comment for {} recorded without contacting the provider",
+            comment.ticket_external_id,
+        )
+        return comment
 
     try:
         adapter = _build_adapter(db, comment)

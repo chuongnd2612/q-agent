@@ -4,9 +4,19 @@ Talks to the real Azure DevOps REST API via ``httpx`` (ADR 0001 — no mock
 fallback). Authenticates with basic auth using an empty username and a PAT
 (Azure DevOps convention).
 
-Config fields (non-secret): ``orgUrl`` (e.g. "https://dev.azure.com/myorg"),
-``project`` (default ADO project name).
+Config fields (non-secret): the organisation URL (e.g. "https://dev.azure.com/myorg")
+and ``project`` (default ADO project name).
 Secret fields: ``pat`` (Personal Access Token).
+
+**The organisation URL has three accepted spellings**, and that is not tidiness (#711).
+EmeHub calls the field ``baseUrl`` and that is what ``hub_workspace.mirror_connections``
+writes, which is where connections come from in a hub deployment; this adapter only ever
+read ``orgUrl``/``org_url``. So every hub-mirrored connection was unusable for any write
+— publish, create test case, status transition — and failed with "orgUrl is not
+configured" about a field the operator had filled in. It went unnoticed because
+``seed.py``'s local fixtures and the tests were the only things spelling it the way the
+adapter read. Two systems named one field differently; the adapter is where they meet,
+so it is where they are reconciled.
 """
 
 from __future__ import annotations
@@ -117,18 +127,37 @@ def _split_ac(text: str) -> list[str]:
     return [ln for ln in lines if ln]
 
 
+#: Accepted spellings of the organisation URL, most-canonical first. `baseUrl` leads
+#: because it is the hub's name for it and the hub owns most connections; the other two
+#: are what local fixtures and older configs use. See the module docstring for why all
+#: three exist.
+_ORG_URL_KEYS = ("baseUrl", "orgUrl", "org_url")
+
+
+def _org_url(config: dict) -> str:
+    """The organisation URL, whichever of the accepted keys carries it."""
+    for key in _ORG_URL_KEYS:
+        value = str(config.get(key) or "").strip()
+        if value:
+            return value.rstrip("/")
+    return ""
+
+
 class AzureDevOpsAdapter(ProviderAdapter):
     kind = "ado"
 
     def __init__(self, config: dict, secrets: dict) -> None:
         super().__init__(config, secrets)
-        self.org_url = (self.config.get("orgUrl") or self.config.get("org_url") or "").rstrip("/")
+        self.org_url = _org_url(self.config)
         self.project = self.config.get("project") or ""
         self.pat = self.secrets.get("pat") or ""
 
     def _client(self) -> httpx.Client:
         if not self.org_url:
-            raise ProviderError("Azure DevOps orgUrl is not configured")
+            raise ProviderError(
+                "Azure DevOps organisation URL is not configured on this connection "
+                "(expected one of: baseUrl, orgUrl, org_url)"
+            )
         if not self.pat:
             raise ProviderError("Azure DevOps PAT is not configured")
         token = base64.b64encode(f":{self.pat}".encode("utf-8")).decode("utf-8")

@@ -235,6 +235,8 @@ function PublishCard({
           <Pill color={color} bg={bg}>
             {publishing ? t("publish.status.publishing") : t(`publish.status.${statusKey}`)}
           </Pill>
+          {/* A divider, so the status stops reading as a fourth button in the row. */}
+          <span className="mx-0.5 h-4 w-px bg-white/[0.1]" />
           {editing ? (
             <button
               type="button"
@@ -278,7 +280,20 @@ function PublishCard({
             )}
             {regenerating ? t("publish.regenerating") : t("publish.regenerate")}
           </button>
-          <Button variant="glass" size="sm" onClick={onPublish} disabled={publishing || editing || regenerating}>
+          {/* Weighted by what it costs to click (#713). Publish is the one action that
+              leaves Q-Agent and writes to a real work item, so it carries the primary
+              treatment and the same send icon as "Publish all" above — Edit and
+              Regenerate only touch the local draft and stay quiet. It was three
+              identical grey pills, and the one with consequences looked like the two
+              without. */}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={onPublish}
+            disabled={publishing || editing || regenerating}
+            data-testid="comment-publish"
+          >
+            {publishing ? <Spinner size={13} className="border-white/40 border-t-white" /> : <Send size={13} strokeWidth={2.2} />}
             {t("publish.publish")}
           </Button>
         </div>
@@ -331,49 +346,13 @@ function PublishCard({
         {comment.errorMessage && (
           <div className="px-[18px] pb-2 text-[12px] text-danger-soft">{comment.errorMessage}</div>
         )}
-        <div className="flex flex-wrap gap-2 p-[0_18px_14px]">
-          {/* The real files this comment will attach on publish (#696). There used to
-              be two hardcoded `evidence.zip` / `trace.zip` chips here with nothing
-              behind either — a fake attachment is worse than none, because a reviewer
-              goes looking for it in the work item. */}
-          {comment.attachments.map((file) => (
-            <AttachmentChip
-              key={`${file.caseCode}-${file.filename}`}
-              label={`${file.caseCode} · ${file.filename}`}
-              hint={humanSize(file.sizeBytes)}
-            />
-          ))}
-          {comment.status === "draft" && comment.attachments.length > 0 && (
-            <span className="rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-faint">
-              {t("publish.attachOnPublish", { count: comment.attachments.length })}
-            </span>
-          )}
-          {comment.targetStatus && (
-            <span className="rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-ink-soft">
-              → {comment.targetStatus}
-            </span>
-          )}
-        </div>
+        {/* The attachment chips and the "→ Passed" chip are gone (#713). Both restated
+            what the preview above already shows: every file is named in the comment's
+            own evidence list, and the target status is the header's `Status:` line. A
+            second, quieter copy of the same facts is not reassurance, it is noise —
+            and it competed with the actions for the same corner of the card. */}
       </GlassCard>
     </motion.div>
   );
 }
 
-function AttachmentChip({ label, hint }: { label: string; hint?: string }) {
-  return (
-    <span className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/[0.05] px-2.5 py-1.5 text-[11.5px] text-ink-soft">
-      <FileText size={13} color="#a78bfa" strokeWidth={2} />
-      {label}
-      {hint && <span className="text-faint">{hint}</span>}
-    </span>
-  );
-}
-
-/** Sizes a reviewer can read — the chip's whole job is "is this the big video or the
- * small screenshot?". */
-function humanSize(bytes: number): string {
-  if (bytes <= 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

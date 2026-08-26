@@ -87,6 +87,10 @@
     "headless": {
       "title": "Run browser headless",
       "description": "Execute Playwright without a visible browser window (turn off to watch runs)"
+    },
+    "dryRun": {
+      "title": "Dry run",
+      "description": "Never write to your work-item provider. Test cases and comments are prepared and recorded in Q-Agent, and no ADO item is created, commented on or transitioned."
     }
   },
   "specGate": {
