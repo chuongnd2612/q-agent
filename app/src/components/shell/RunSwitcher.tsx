@@ -38,7 +38,9 @@ export function RunSwitcher({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   // Sub-screen segment after the run id (e.g. "review"), preserved on switch.
-  const seg = pathname.match(/^\/runs\/\d+\/(.+)$/)?.[1] ?? "";
+  // Matches the nested run route and the pre-#728 flat one.
+  const seg =
+    pathname.match(/^(?:\/projects\/[^/]+)?\/runs\/\d+\/(.+)$/)?.[1] ?? "";
 
   useEffect(() => {
     if (!open) return;
@@ -76,8 +78,17 @@ export function RunSwitcher({
 
   if (!open || !pos) return null;
 
+  // Switching runs can cross projects, so the target's own stamped project
+  // decides the path (#727) — not the project currently in the URL. Sending a
+  // Claims Portal run to a Surency Platform URL is exactly the misattribution
+  // containment exists to prevent.
   const select = (id: number) => {
-    navigate(`/runs/${id}${seg ? `/${seg}` : ""}`);
+    const target = runs?.find((r) => r.id === id);
+    const project = target?.projectGuid;
+    const base = project
+      ? `/projects/${encodeURIComponent(project)}/runs/${id}`
+      : `/runs/${id}`;
+    navigate(`${base}${seg ? `/${seg}` : ""}`);
     onClose();
   };
 

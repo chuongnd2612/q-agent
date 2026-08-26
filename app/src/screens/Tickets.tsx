@@ -47,6 +47,7 @@ import {
 import { toast } from "@/lib/toast";
 import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
+import { useProjectRoute } from "@/screens/ProjectDetail";
 import type { ConnectionOut, ProviderKind, TicketFilters, TicketOut } from "@/types/api";
 
 // Last-resort priority values, used only when no ticket is loaded yet. They are a
@@ -142,6 +143,10 @@ function ConnectionSelect({
 
 export function Tickets() {
   const { t } = useTranslation("tickets");
+  // This screen is reachable only as a project tab now (ADR 0015 slice 2).
+  const { projectGuid } = useProjectRoute();
+  const ticketHref = (externalId: string) =>
+    `/projects/${encodeURIComponent(projectGuid ?? "")}/tickets/${encodeURIComponent(externalId)}`;
   const { t: tCommon } = useTranslation("common");
   const ticketSearch = useUI((s) => s.ticketSearch);
   const setTicketSearch = useUI((s) => s.setTicketSearch);
@@ -233,6 +238,12 @@ export function Tickets() {
   const filters: TicketFilters = {
     connectionId: connectionId ?? undefined,
     providerKind: selectedConn?.kind,
+    // Project containment (ADR 0015 slice 2). Set OUTSIDE the compiled-query
+    // spread on purpose: it is the tab's scope, not one of the user's filters,
+    // so an applied builder query must not be able to widen it back to the
+    // workspace. #732 removes the provider switcher above it, at which point
+    // this is the only thing deciding which rows can appear.
+    project: projectGuid ?? undefined,
     ...(compiled ?? flatFilters),
     // The search box keeps driving `q` unless the query names `title`, in which
     // case the applied query wins — one parameter, one owner.
@@ -531,7 +542,7 @@ export function Tickets() {
                 ticket={tk}
                 selected={!!selected[tk.externalId]}
                 onToggle={() => toggleSelected(tk.externalId)}
-                onOpen={() => navigate(`/tickets/${encodeURIComponent(tk.externalId)}`)}
+                onOpen={() => navigate(ticketHref(tk.externalId))}
                 onRequestDelete={() => setConfirmTicket(tk)}
                 index={i}
               />

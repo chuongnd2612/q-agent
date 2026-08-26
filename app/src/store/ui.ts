@@ -10,7 +10,6 @@ import type { TestDatum, TestStep } from "@/types/api";
 
 export type TicketFilter = "all" | "ready" | "mine" | "sprint";
 export type RunFilter = "all" | "active" | "review" | "completed" | "failed";
-export type ProjectTab = "overview" | "knowledge" | "tickets" | "runs" | "settings";
 export type EvidenceTab = "screenshot" | "video" | "trace" | "console" | "network";
 export type AnnotationTool = "cursor" | "rectangle" | "arrow" | "highlight" | "circle" | "text";
 

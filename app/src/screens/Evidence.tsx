@@ -21,6 +21,7 @@ import { PipelineRail } from "@/components/ui/PipelineRail";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import { useAnnotate, useAutoAnnotate, useEvidence, useSettings } from "@/hooks/queries";
 import { useEvidenceUploading } from "@/hooks/useRunEvents";
 import { AnnotationCanvas } from "./evidence/AnnotationCanvas";
@@ -56,6 +57,7 @@ export function Evidence() {
   // `t` is used as a loop variable below, so alias the translator to `tr`.
   const { t: tr } = useTranslation("pipeline");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
   const navigate = useNavigate();
   const evidenceTab = useUI((s) => s.evidenceTab);
   const setEvidenceTab = useUI((s) => s.setEvidenceTab);
@@ -150,7 +152,7 @@ export function Evidence() {
               variant="primary"
               size="lg"
               className="w-full md:w-auto"
-              onClick={() => navigate("/runs/" + runId + "/execution")}
+              onClick={() => navigate(runPath("execution"))}
             >
               {tr("evidence.empty.action")}
             </Button>
@@ -229,7 +231,7 @@ export function Evidence() {
                 })}
               </div>
             </div>
-            <Button variant="primary" size="lg" onClick={() => navigate("/runs/" + runId + "/comment")} className="w-full">
+            <Button variant="primary" size="lg" onClick={() => navigate(runPath("comment"))} className="w-full">
               {tr("evidence.prepareComments")}
               <ArrowRight size={15} strokeWidth={2.2} />
             </Button>
@@ -384,7 +386,7 @@ export function Evidence() {
           <Button
             variant="primary"
             size="lg"
-            onClick={() => navigate("/runs/" + runId + "/comment")}
+            onClick={() => navigate(runPath("comment"))}
             className="w-full md:hidden"
           >
             {tr("evidence.prepareComments")}

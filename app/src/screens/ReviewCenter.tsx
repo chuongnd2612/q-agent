@@ -9,6 +9,7 @@ import { approvalStyle, Pill, priorityBg, priorityColor } from "@/components/ui/
 import { Select } from "@/components/ui/Dropdown";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import {
   useCaseMutations,
   useCreateAndLink,
@@ -40,6 +41,7 @@ export function ReviewCenter() {
   const { t } = useTranslation("runs");
   const { t: tCommon } = useTranslation("common");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
   const navigate = useNavigate();
   const { data: run } = useRun(runId);
   const { data: cases, isLoading, isError, refetch } = useRunCases(runId);
@@ -81,7 +83,7 @@ export function ReviewCenter() {
   const startCreateLink = (link: boolean, dryRun = false) => {
     if (createAndLink.isPending) return;
     createAndLink.mutate({ link, dryRun });
-    navigate("/runs/" + runId + "/sync");
+    navigate(runPath("sync"));
   };
   const starting = createAndLink.isPending;
   // Reflects the workspace setting; the SERVER is what actually refuses to write, so

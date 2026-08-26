@@ -7,6 +7,7 @@ import { providerGlyph } from "@/components/ui/badges";
 import { Spinner } from "@/components/ui/misc";
 import { providerLabel } from "@/data/projects";
 import { useNavigate, useParams } from "react-router-dom";
+import { useRunPath } from "@/hooks/useRunRouteId";
 import { useIsMutating } from "@tanstack/react-query";
 import {
   ALL_TICKETS_PAGE_SIZE,
@@ -27,6 +28,7 @@ import type { LinkTicketResult, ProviderKind } from "@/types/api";
 export function CreateLinkSync() {
   const { t } = useTranslation("pipeline");
   const runId = Number(useParams().runId);
+  const runPath = useRunPath();
   const navigate = useNavigate();
   const { data: run } = useRun(runId);
   const { data: ticketsPage } = useTickets({ pageSize: ALL_TICKETS_PAGE_SIZE });
@@ -84,7 +86,7 @@ export function CreateLinkSync() {
             className="w-full md:w-auto"
             onClick={() => {
               generateAutomation.mutate(undefined);
-              navigate("/runs/" + runId + "/automation");
+              navigate(runPath("automation"));
             }}
           >
             {t("createLink.generateAutomation")} <ArrowRight size={15} strokeWidth={2.2} />

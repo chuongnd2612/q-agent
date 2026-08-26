@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/misc";
 import { runColor, runEffectiveStatus, timeAgo } from "@/components/dashboard/runStatus";
 import { useReports, useRuns } from "@/hooks/queries";
+import { useProjectRoute } from "@/screens/ProjectDetail";
 import type { ReportOut } from "@/types/api";
 
 /** Columns exported by the Export CSV button, in order. Every one is a real
@@ -43,8 +44,15 @@ interface FlakyRow {
 export function Reports() {
   const { t } = useTranslation("reports");
   const { t: tCommon } = useTranslation("common");
-  const { data: reports, isLoading: reportsLoading, isError: reportsError } = useReports();
-  const { data: runs, isLoading: runsLoading } = useRuns();
+  // Scoped to the project this tab belongs to (#727 gave reports the filter;
+  // they inherit their run's stamped project).
+  const { projectGuid } = useProjectRoute();
+  const {
+    data: reports,
+    isLoading: reportsLoading,
+    isError: reportsError,
+  } = useReports(projectGuid ?? undefined);
+  const { data: runs, isLoading: runsLoading } = useRuns(projectGuid ?? undefined);
   const navigate = useNavigate();
 
   // Everything on this screen is derived from real run reports (GET /reports).
@@ -216,7 +224,7 @@ export function Reports() {
                 return (
                   <div
                     key={r.id}
-                    onClick={() => navigate(`/runs/${r.id}`)}
+                    onClick={() => navigate(`/projects/${encodeURIComponent(projectGuid ?? "")}/runs/${r.id}`)}
                     className="flex cursor-pointer items-center gap-3 rounded-[13px] p-3"
                     style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.05)" }}
                   >
