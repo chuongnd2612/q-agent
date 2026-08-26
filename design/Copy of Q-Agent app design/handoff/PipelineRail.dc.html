@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="display:flex;align-items:center;width:100%;padding:15px 20px;border-radius:16px;background:rgba(255,255,255,.035);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);border:1px solid rgba(255,255,255,.07);overflow-x:auto">
+  <sc-for list="{{ steps }}" as="st" hint-placeholder-count="8">
+    <div style="{{ st.itemStyle }}">
+      <div style="display:flex;align-items:center;gap:9px;flex-shrink:0">
+        <div style="{{ st.circle }}">
+          <sc-if value="{{ st.done }}" hint-placeholder-val="">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </sc-if>
+          <sc-if value="{{ st.notDone }}" hint-placeholder-val="{{ true }}">{{ st.n }}</sc-if>
+        </div>
+        <span style="{{ st.labelStyle }}">{{ st.label }}</span>
+      </div>
+      <sc-if value="{{ st.showConnector }}" hint-placeholder-val="{{ true }}"><div style="{{ st.connStyle }}"></div></sc-if>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;76px&quot;},&quot;stage&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;,&quot;min&quot;:0,&quot;max&quot;:7}}">
+class Component extends DCLogic {
+  renderVals() {
+    const stage = this.props.stage ?? 0;
+    const base = ['Read Ticket','Analyze','Generate','Review','Sync','Automation','Execute','Evidence','Comment'];
+    const steps = base.map((label, i) => {
+      const done = i < stage, active = i === stage;
+      const circle = done
+        ? 'width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;background:#10b981;color:#fff'
+        : active
+        ? 'width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;box-shadow:0 0 0 4px rgba(139,92,246,.2)'
+        : 'width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:rgba(255,255,255,.05);color:#7a7a8c;border:1px solid rgba(255,255,255,.1)';
+      return { label, n: i+1, done, notDone: !done, active, circle,
+        labelStyle: 'font-size:12px;font-weight:600;white-space:nowrap;' + ((done||active) ? 'color:#ececf1' : 'color:#7a7a8c'),
+        itemStyle: 'display:flex;align-items:center;gap:9px;' + (i===8 ? '' : 'flex:1;'),
+        showConnector: i !== 8,
+        connStyle: 'flex:1;height:2px;border-radius:2px;margin:0 10px;min-width:14px;background:' + (i < stage ? '#10b981' : 'rgba(255,255,255,.1)'),
+      };
+    });
+    return { steps };
+  }
+}
+</script>
+</body>
+</html>

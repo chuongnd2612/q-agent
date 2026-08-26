@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,600,700,900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:#0a0a0f;color:#ECECF1;font-family:'Satoshi',system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+  ::selection{background:rgba(139,92,246,.4);color:#fff}
+  input:-webkit-autofill,input:-webkit-autofill:focus{-webkit-text-fill-color:#ECECF1;-webkit-box-shadow:0 0 0 40px #16161f inset;caret-color:#ECECF1}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:8px}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+  @keyframes glowPulse{0%,100%{opacity:.5}50%{opacity:.85}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+  @keyframes checkPop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+  @keyframes dotB{0%,80%,100%{transform:scale(.5);opacity:.4}40%{transform:scale(1);opacity:1}}
+  @keyframes barFill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  @keyframes fieldIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+  @keyframes ovIn{from{opacity:0}to{opacity:1}}
+  @keyframes orbit{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+  @keyframes ring{0%{transform:scale(.5);opacity:.8}100%{transform:scale(1.35);opacity:0}}
+  @keyframes slide{0%{left:-42%}100%{left:100%}}
+  @keyframes logoPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.09)}}
+  @keyframes logoHalo{0%,100%{opacity:.5;transform:scale(.9)}50%{opacity:1;transform:scale(1.15)}}
+  @keyframes shimmer{0%{background-position:-360px 0}100%{background-position:360px 0}}
+  .f-stag{animation:fieldIn .45s ease both}
+  .f-stag:nth-child(1){animation-delay:.04s}.f-stag:nth-child(2){animation-delay:.1s}.f-stag:nth-child(3){animation-delay:.16s}.f-stag:nth-child(4){animation-delay:.22s}.f-stag:nth-child(5){animation-delay:.28s}.f-stag:nth-child(6){animation-delay:.34s}
+</style>
+</helmet>
+
+<div style="position:fixed;inset:0;background:#0a0a0f;z-index:0"></div>
+<div style="position:fixed;top:-12%;left:-6%;width:620px;height:620px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.26),transparent 62%);filter:blur(30px);z-index:1;pointer-events:none;animation:glowPulse 9s ease-in-out infinite"></div>
+<div style="position:fixed;bottom:-18%;right:-6%;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.22),transparent 62%);filter:blur(30px);z-index:1;pointer-events:none;animation:glowPulse 11s ease-in-out infinite 1s"></div>
+
+<!-- state switcher (preview aid) -->
+<div style="position:fixed;bottom:16px;left:16px;z-index:40;display:flex;gap:4px;padding:5px;border-radius:13px;background:rgba(22,22,30,.8);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.1);box-shadow:0 16px 40px -18px #000">
+  <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5"><button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.label }}</button></sc-for>
+</div>
+
+<div style="position:relative;z-index:2;height:100vh;width:100vw;overflow-y:auto">
+
+  <!-- ========== FULL-SCREEN AUTH LOADING (redirect into app) ========== -->
+  <sc-if value="{{ redirecting }}" hint-placeholder-val="">
+    <div style="position:fixed;inset:0;z-index:90;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;animation:ovIn .4s ease both">
+      <div style="position:absolute;top:-12%;left:-6%;width:620px;height:620px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.24),transparent 62%);filter:blur(30px);animation:glowPulse 4s ease-in-out infinite"></div>
+      <div style="position:absolute;bottom:-16%;right:-6%;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.2),transparent 62%);filter:blur(30px);animation:glowPulse 5s ease-in-out infinite 1s"></div>
+      <div style="position:relative;width:132px;height:132px;display:flex;align-items:center;justify-content:center">
+        <span style="position:absolute;width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.45),transparent 68%);filter:blur(10px);animation:logoHalo 2.6s ease-in-out infinite"></span>
+        <span style="position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(167,139,250,.4);animation:ring 2.4s ease-out infinite"></span>
+        <span style="position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(167,139,250,.4);animation:ring 2.4s ease-out infinite .8s"></span>
+        <span style="position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(167,139,250,.4);animation:ring 2.4s ease-out infinite 1.6s"></span>
+        <span style="position:relative;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#6366f1);display:flex;align-items:center;justify-content:center;box-shadow:0 0 44px -4px rgba(139,92,246,.9);animation:logoPulse 2.2s ease-in-out infinite"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7z"/></svg></span>
+      </div>
+      <div style="position:relative;text-align:center">
+        <div style="font-size:22px;font-weight:900;letter-spacing:-.02em">Q&#8209;Agent</div>
+        <div style="font-size:12.5px;color:#8b8b9e;margin-top:6px;letter-spacing:.03em">Loading your workspace&#8230;</div>
+      </div>
+      <div style="position:relative;width:200px;height:3px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden"><div style="position:absolute;top:0;left:0;height:100%;width:42%;border-radius:3px;background:linear-gradient(90deg,transparent,#a78bfa,#8b5cf6,transparent);animation:slide 1.2s ease-in-out infinite"></div></div>
+    </div>
+  </sc-if>
+
+  <!-- ========== AUTH SPLIT (login / signup / forgot / signed-out) ========== -->
+  <sc-if value="{{ isAuth }}" hint-placeholder-val="{{ true }}">
+    <div style="min-height:100vh;display:flex;align-items:stretch">
+      <!-- brand panel -->
+      <div style="flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:54px 50px;background:linear-gradient(150deg,rgba(139,92,246,.16),rgba(99,102,241,.05));border-right:1px solid rgba(255,255,255,.06)">
+        <div style="position:absolute;top:20%;right:-40px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.3),transparent 65%);filter:blur(24px);animation:floaty 8s ease-in-out infinite"></div>
+        <div style="position:relative;display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:13px;background:linear-gradient(135deg,#8b5cf6,#6366f1);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 22px -6px rgba(139,92,246,.8)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7z"/></svg></div>
+          <div><div style="font-weight:900;font-size:18px;letter-spacing:-.02em">Q&#8209;Agent</div><div style="font-size:10.5px;color:#a99fce;letter-spacing:.05em;font-weight:600">QA OPERATING SYSTEM</div></div>
+        </div>
+        <div style="position:relative;max-width:400px">
+          <h1 style="font-size:34px;font-weight:900;letter-spacing:-.03em;line-height:1.15;margin:0 0 16px">Ship tested, evidenced releases — on autopilot.</h1>
+          <p style="font-size:14.5px;line-height:1.6;color:#c3c3d4;margin:0 0 26px">Q&#8209;Agent reads your tickets, generates Azure DevOps test cases, writes Playwright, runs it in parallel, and publishes evidence back — one continuous pipeline.</p>
+          <div style="display:flex;flex-direction:column;gap:13px">
+            <sc-for list="{{ brandPoints }}" as="b" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:11px"><span style="width:22px;height:22px;flex-shrink:0;border-radius:7px;background:rgba(16,185,129,.16);display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ee7b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span style="font-size:13.5px;color:#dcdce4;font-weight:500">{{ b }}</span></div></sc-for>
+          </div>
+        </div>
+        <div style="position:relative;display:flex;align-items:center;gap:9px;font-size:12px;color:#8b8b9e"><span style="width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e"></span>SOC 2 Type II &#183; SSO &#183; credentials encrypted at rest</div>
+      </div>
+
+      <!-- form panel -->
+      <div style="width:min(520px,46vw);flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:40px 30px">
+        <div style="width:100%;max-width:380px;animation:fadeUp .5s ease both">
+
+          <!-- LOGIN -->
+          <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+            <div style="margin-bottom:26px"><h2 style="font-size:26px;font-weight:900;letter-spacing:-.02em;margin:0 0 6px">Welcome back</h2><p style="font-size:13.5px;color:#8b8b9e;margin:0">Sign in to your Q&#8209;Agent workspace.</p></div>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-bottom:18px">
+              <sc-for list="{{ ssoProviders }}" as="p" hint-placeholder-count="3"><button onClick="{{ noop }}" style="display:flex;align-items:center;justify-content:center;gap:10px;height:44px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#ececf1;font-weight:600;font-size:13.5px;cursor:pointer;font-family:inherit" style-hover="background:rgba(255,255,255,.09);border-color:rgba(139,92,246,.3)"><span dangerouslySetInnerHTML="{{ p.icon }}"></span>Continue with {{ p.name }}</button></sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px"><span style="flex:1;height:1px;background:rgba(255,255,255,.09)"></span><span style="font-size:11px;color:#6c6c7e;font-weight:600">OR</span><span style="flex:1;height:1px;background:rgba(255,255,255,.09)"></span></div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <div><label style="{{ labelStyle }}">Work email</label><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg><input type="email" value="{{ email }}" onInput="{{ onEmail }}" placeholder="you@company.com" style="{{ inputStyle }}"/></div></div>
+              <div><div style="display:flex;justify-content:space-between;align-items:center"><label style="{{ labelStyle }}">Password</label><button onClick="{{ goForgot }}" style="background:none;border:none;color:#a78bfa;font-size:12px;font-weight:600;cursor:pointer;padding:0 0 8px">Forgot?</button></div><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><input type="{{ pwType }}" value="{{ password }}" onInput="{{ onPassword }}" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" style="{{ inputStyle }}"/><button onClick="{{ togglePw }}" style="background:none;border:none;cursor:pointer;color:#7a7a8c;display:flex;padding:0" dangerouslySetInnerHTML="{{ pwIcon }}"></button></div></div>
+              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:#c3c3d0"><span onClick="{{ toggleRemember }}" style="{{ rememberBox }}"><sc-if value="{{ remember }}" hint-placeholder-val=""><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span>Keep me signed in for 30 days</label>
+              <button onClick="{{ signIn }}" style="height:46px;border-radius:12px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff;font-weight:700;font-size:14.5px;cursor:pointer;box-shadow:0 10px 26px -8px rgba(139,92,246,.8);margin-top:2px;display:flex;align-items:center;justify-content:center;gap:9px" style-hover="filter:brightness(1.08)"><sc-if value="{{ signinLoading }}" hint-placeholder-val=""><span style="width:17px;height:17px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .7s linear infinite"></span>Signing in&#8230;</sc-if><sc-if value="{{ signinIdle }}" hint-placeholder-val="{{ true }}">Sign in</sc-if></button>
+            </div>
+            <p style="text-align:center;font-size:13px;color:#8b8b9e;margin:22px 0 0">New to Q&#8209;Agent? <button onClick="{{ goSignup }}" style="background:none;border:none;color:#a78bfa;font-weight:700;cursor:pointer;font-size:13px">Create an account</button></p>
+          </sc-if>
+
+          <!-- SIGN UP -->
+          <sc-if value="{{ isSignup }}" hint-placeholder-val="">
+            <div style="margin-bottom:24px"><h2 style="font-size:26px;font-weight:900;letter-spacing:-.02em;margin:0 0 6px">Create your workspace</h2><p style="font-size:13.5px;color:#8b8b9e;margin:0">Start automating QA in minutes.</p></div>
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
+                <div><label style="{{ labelStyle }}">First name</label><div style="{{ fieldWrap }}"><input value="{{ fname }}" onInput="{{ onFname }}" placeholder="Maya" style="{{ inputStyle }}"/></div></div>
+                <div><label style="{{ labelStyle }}">Last name</label><div style="{{ fieldWrap }}"><input value="{{ lname }}" onInput="{{ onLname }}" placeholder="Kaur" style="{{ inputStyle }}"/></div></div>
+              </div>
+              <div><label style="{{ labelStyle }}">Work email</label><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg><input type="email" value="{{ email }}" onInput="{{ onEmail }}" placeholder="you@company.com" style="{{ inputStyle }}"/></div></div>
+              <div><label style="{{ labelStyle }}">Organization</label><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01"/></svg><input value="{{ org }}" onInput="{{ onOrg }}" placeholder="Surency" style="{{ inputStyle }}"/></div></div>
+              <div><label style="{{ labelStyle }}">Password</label><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><input type="{{ pwType }}" value="{{ password }}" onInput="{{ onPassword }}" placeholder="Create a strong password" style="{{ inputStyle }}"/><button onClick="{{ togglePw }}" style="background:none;border:none;cursor:pointer;color:#7a7a8c;display:flex;padding:0" dangerouslySetInnerHTML="{{ pwIcon }}"></button></div>
+                <div style="display:flex;gap:5px;margin-top:9px"><sc-for list="{{ pwBars }}" as="b" hint-placeholder-count="4"><span style="{{ b }}"></span></sc-for></div>
+                <div style="font-size:11.5px;color:#8b8b9e;margin-top:6px">Strength: <span style="color:{{ pwColor }};font-weight:700">{{ pwLabel }}</span></div>
+              </div>
+              <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:12px;color:#a6a6b6;line-height:1.5;margin-top:2px"><span onClick="{{ toggleTerms }}" style="{{ termsBox }}"><sc-if value="{{ terms }}" hint-placeholder-val=""><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span><span>I agree to the <span style="color:#a78bfa;font-weight:600">Terms</span> and <span style="color:#a78bfa;font-weight:600">Privacy Policy</span></span></label>
+              <button onClick="{{ createAccount }}" style="height:46px;border-radius:12px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff;font-weight:700;font-size:14.5px;cursor:pointer;box-shadow:0 10px 26px -8px rgba(139,92,246,.8);margin-top:4px;display:flex;align-items:center;justify-content:center;gap:9px" style-hover="filter:brightness(1.08)"><sc-if value="{{ signupLoading }}" hint-placeholder-val=""><span style="width:17px;height:17px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .7s linear infinite"></span>Creating account&#8230;</sc-if><sc-if value="{{ signupIdle }}" hint-placeholder-val="{{ true }}">Create account</sc-if></button>
+            </div>
+            <p style="text-align:center;font-size:13px;color:#8b8b9e;margin:20px 0 0">Already have an account? <button onClick="{{ goLogin }}" style="background:none;border:none;color:#a78bfa;font-weight:700;cursor:pointer;font-size:13px">Sign in</button></p>
+          </sc-if>
+
+          <!-- FORGOT -->
+          <sc-if value="{{ isForgot }}" hint-placeholder-val="">
+            <button onClick="{{ goLogin }}" style="display:flex;align-items:center;gap:7px;background:none;border:none;color:#8b8b9e;font-size:12.5px;font-weight:600;cursor:pointer;padding:0;margin-bottom:22px" style-hover="color:#c7c7d4"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg> Back to sign in</button>
+            <sc-if value="{{ resetSent }}" hint-placeholder-val="">
+              <div style="text-align:center"><div style="width:58px;height:58px;border-radius:18px;background:rgba(16,185,129,.16);border:1px solid rgba(16,185,129,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 18px;animation:checkPop .4s ease both"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6ee7b7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg></div><h2 style="font-size:22px;font-weight:800;margin:0 0 8px">Check your inbox</h2><p style="font-size:13.5px;color:#8b8b9e;line-height:1.6;margin:0 0 22px">We sent a reset link to <span style="color:#c7c7d4;font-weight:600">{{ email }}</span>. It expires in 30 minutes.</p><button onClick="{{ goLogin }}" style="width:100%;height:44px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer" style-hover="background:rgba(255,255,255,.12)">Back to sign in</button></div>
+            </sc-if>
+            <sc-if value="{{ resetSent }}" hint-placeholder-val="{{ true }}" style="display:none"></sc-if>
+            <sc-if value="{{ resetNotSent }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-bottom:24px"><h2 style="font-size:26px;font-weight:900;letter-spacing:-.02em;margin:0 0 6px">Reset password</h2><p style="font-size:13.5px;color:#8b8b9e;margin:0;line-height:1.6">Enter your work email and we'll send you a secure reset link.</p></div>
+              <div><label style="{{ labelStyle }}">Work email</label><div style="{{ fieldWrap }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a7a8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg><input type="email" value="{{ email }}" onInput="{{ onEmail }}" placeholder="you@company.com" style="{{ inputStyle }}"/></div></div>
+              <button onClick="{{ sendReset }}" style="width:100%;height:46px;border-radius:12px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff;font-weight:700;font-size:14.5px;cursor:pointer;box-shadow:0 10px 26px -8px rgba(139,92,246,.8);margin-top:18px;display:flex;align-items:center;justify-content:center;gap:9px" style-hover="filter:brightness(1.08)"><sc-if value="{{ resetSending }}" hint-placeholder-val=""><span style="width:17px;height:17px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .7s linear infinite"></span>Sending&#8230;</sc-if><sc-if value="{{ resetSending }}" hint-placeholder-val="{{ true }}" style="display:none"></sc-if><sc-if value="{{ resetIdle }}" hint-placeholder-val="{{ true }}">Send reset link</sc-if></button>
+            </sc-if>
+          </sc-if>
+
+          <!-- SIGNED OUT -->
+          <sc-if value="{{ isSignedOut }}" hint-placeholder-val="">
+            <div style="text-align:center"><div style="width:60px;height:60px;border-radius:19px;background:linear-gradient(135deg,#8b5cf6,#6366f1);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;box-shadow:0 12px 30px -8px rgba(139,92,246,.7);animation:scaleIn .4s ease both"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></div><h2 style="font-size:24px;font-weight:900;letter-spacing:-.02em;margin:0 0 8px">You're signed out</h2><p style="font-size:13.5px;color:#8b8b9e;line-height:1.6;margin:0 0 24px">Your session on this device has ended. Sign back in whenever you're ready to pick up where you left off.</p><button onClick="{{ goLogin }}" style="width:100%;height:46px;border-radius:12px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff;font-weight:700;font-size:14.5px;cursor:pointer;box-shadow:0 10px 26px -8px rgba(139,92,246,.8)" style-hover="filter:brightness(1.08)">Sign back in</button></div>
+          </sc-if>
+
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ========== PROFILE MANAGEMENT ========== -->
+  <sc-if value="{{ isProfile }}" hint-placeholder-val="">
+    <div style="max-width:720px;margin:0 auto;padding:70px 24px 60px;animation:fadeUp .5s ease both">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:26px">
+        <div style="width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cf6,#6366f1);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7z"/></svg></div>
+        <div><div style="font-size:13px;color:#8b8b9e;font-weight:500">Account settings</div><h1 style="margin:0;font-size:26px;font-weight:900;letter-spacing:-.03em">Your profile</h1></div>
+      </div>
+
+      <!-- identity card -->
+      <div style="padding:22px;border-radius:20px;background:rgba(255,255,255,.035);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.07);margin-bottom:16px;display:flex;align-items:center;gap:18px">
+        <div style="position:relative;flex-shrink:0"><div style="width:66px;height:66px;border-radius:20px;background:linear-gradient(135deg,#f59e0b,#f43f5e);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:24px;color:#fff">MK</div><button onClick="{{ noop }}" style="position:absolute;bottom:-4px;right:-4px;width:26px;height:26px;border-radius:9px;background:#1a1a24;border:1px solid rgba(255,255,255,.16);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#c4b5fd" style-hover="background:#23232f"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button></div>
+        <div style="flex:1;min-width:0"><div style="font-size:19px;font-weight:800;letter-spacing:-.01em">Maya Kaur</div><div style="font-size:13px;color:#8b8b9e;margin-top:2px">maya.kaur@surency.com</div><div style="display:inline-flex;align-items:center;gap:6px;margin-top:9px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;background:rgba(139,92,246,.16);color:#c4b5fd">QA Lead &#183; Admin</div></div>
+        <button onClick="{{ signOut }}" style="display:flex;align-items:center;gap:8px;padding:10px 15px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#dcdce4;font-weight:600;font-size:13px;cursor:pointer;flex-shrink:0;align-self:flex-start;min-width:118px;justify-content:center" style-hover="background:rgba(244,63,94,.14);color:#fb7185;border-color:rgba(244,63,94,.3)"><sc-if value="{{ signingOut }}" hint-placeholder-val=""><span style="width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fb7185;animation:spin .7s linear infinite"></span>Signing out&#8230;</sc-if><sc-if value="{{ signingOut }}" hint-placeholder-val="{{ true }}" style="display:none"></sc-if><sc-if value="{{ notSigningOut }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>Sign out</sc-if></button>
+      </div>
+
+      <!-- personal info -->
+      <div style="padding:22px;border-radius:20px;background:rgba(255,255,255,.035);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.07);margin-bottom:16px">
+        <div style="font-size:15px;font-weight:700;margin-bottom:16px">Personal information</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+          <div><label style="{{ labelStyle }}">First name</label><div style="{{ fieldWrap }}"><input value="{{ pFname }}" onInput="{{ onPFname }}" style="{{ inputStyle }}"/></div></div>
+          <div><label style="{{ labelStyle }}">Last name</label><div style="{{ fieldWrap }}"><input value="{{ pLname }}" onInput="{{ onPLname }}" style="{{ inputStyle }}"/></div></div>
+          <div><label style="{{ labelStyle }}">Email</label><div style="{{ fieldWrap }}"><input value="{{ pEmail }}" onInput="{{ onPEmail }}" style="{{ inputStyle }}"/></div></div>
+          <div><label style="{{ labelStyle }}">Role</label><div style="{{ fieldWrapStatic }}"><span style="flex:1;font-size:13px;color:#c3c3d0">QA Lead</span><span style="font-size:10px;color:#7a7a8c">managed by admin</span></div></div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end"><button onClick="{{ saveProfile }}" style="padding:10px 18px;border-radius:11px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff;font-weight:700;font-size:13px;cursor:pointer" style-hover="filter:brightness(1.08)">Save changes</button></div>
+      </div>
+
+      <!-- security -->
+      <div style="padding:22px;border-radius:20px;background:rgba(255,255,255,.035);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.07);margin-bottom:16px">
+        <div style="font-size:15px;font-weight:700;margin-bottom:16px">Security</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)"><div><div style="font-size:13.5px;font-weight:600">Password</div><div style="font-size:12px;color:#8b8b9e">Last changed 3 months ago</div></div><button onClick="{{ noop }}" style="padding:8px 14px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#dcdce4;font-weight:600;font-size:12.5px;cursor:pointer" style-hover="background:rgba(255,255,255,.1)">Change</button></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)"><div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:13.5px;font-weight:600">Two-factor authentication</span><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(16,185,129,.14);color:#6ee7b7">On</span></div><div style="font-size:12px;color:#8b8b9e">Authenticator app &#183; enabled</div></div><div onClick="{{ toggle2fa }}" style="{{ twofaTrack }}"><div style="{{ twofaKnob }}"></div></div></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 0"><div><div style="font-size:13.5px;font-weight:600">Single sign-on</div><div style="font-size:12px;color:#8b8b9e">Microsoft Entra ID &#183; connected</div></div><span style="font-size:11.5px;font-weight:700;color:#6ee7b7">Connected</span></div>
+      </div>
+
+      <!-- sessions -->
+      <div style="padding:22px;border-radius:20px;background:rgba(255,255,255,.035);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.07);margin-bottom:16px">
+        <div style="display:flex;align-items:center;margin-bottom:16px"><span style="font-size:15px;font-weight:700;flex:1">Active sessions</span><button onClick="{{ noop }}" style="background:none;border:none;color:#fb7185;font-size:12.5px;font-weight:600;cursor:pointer">Revoke all others</button></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ sessions }}" as="se" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:13px;padding:12px;border-radius:13px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)"><div style="width:34px;height:34px;flex-shrink:0;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;color:#a0a0b2" dangerouslySetInnerHTML="{{ se.icon }}"></div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">{{ se.device }}</div><div style="font-size:11.5px;color:#7a7a8c">{{ se.meta }}</div></div><sc-if value="{{ se.current }}" hint-placeholder-val=""><span style="font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:20px;background:rgba(16,185,129,.14);color:#6ee7b7">This device</span></sc-if><sc-if value="{{ se.current }}" hint-placeholder-val="{{ true }}"><button onClick="{{ noop }}" style="font-size:11.5px;font-weight:600;color:#8b8b9e;background:none;border:none;cursor:pointer" style-hover="color:#fb7185">Revoke</button></sc-if></div></sc-for>
+        </div>
+      </div>
+
+      <!-- danger -->
+      <div style="padding:18px 22px;border-radius:20px;background:rgba(244,63,94,.05);border:1px solid rgba(244,63,94,.2);display:flex;align-items:center;gap:16px">
+        <div style="flex:1"><div style="font-size:14px;font-weight:700;color:#fb7185">Delete account</div><div style="font-size:12px;color:#a6a6b6;margin-top:2px">Permanently remove your account, runs, and evidence. This cannot be undone.</div></div>
+        <button onClick="{{ noop }}" style="padding:10px 16px;border-radius:11px;background:rgba(244,63,94,.14);border:1px solid rgba(244,63,94,.32);color:#fb7185;font-weight:700;font-size:12.5px;cursor:pointer;flex-shrink:0" style-hover="background:rgba(244,63,94,.22)">Delete</button>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { screen:'login', email:'maya.kaur@surency.com', password:'', pwVisible:false, remember:true, terms:false, fname:'', lname:'', org:'', resetSent:false, resetSending:false,
+    loading:null, redirecting:false, redirectStep:0, savingProfile:false, profileSaved:false, signingOut:false,
+    pFname:'Maya', pLname:'Kaur', pEmail:'maya.kaur@surency.com', twofa:true };
+
+  ic(p,st){ return {__html:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="'+(st||'currentColor')+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>'}; }
+  go=(sc)=>this.setState({screen:sc});
+  noop=()=>{};
+  onEmail=(e)=>this.setState({email:e.target.value});
+  onPassword=(e)=>this.setState({password:e.target.value});
+  onFname=(e)=>this.setState({fname:e.target.value});
+  onLname=(e)=>this.setState({lname:e.target.value});
+  onOrg=(e)=>this.setState({org:e.target.value});
+  togglePw=()=>this.setState(s=>({pwVisible:!s.pwVisible}));
+  toggleRemember=()=>this.setState(s=>({remember:!s.remember}));
+  toggleTerms=()=>this.setState(s=>({terms:!s.terms}));
+  sendReset=()=>{ if(this.state.resetSending)return; this.setState({resetSending:true}); clearTimeout(this._rt); this._rt=setTimeout(()=>this.setState({resetSending:false,resetSent:true}),1400); };
+  enterApp=()=>{ try{localStorage.setItem('qagent_authed','1');}catch(e){} this.setState({redirecting:true}); clearTimeout(this._rd); this._rd=setTimeout(()=>{ try{window.location.href='Q-Agent.dc.html';}catch(e){} },2200); };
+  doSignIn=()=>{ if(this.state.loading)return; this.setState({loading:'signin'}); clearTimeout(this._st); this._st=setTimeout(()=>{ this.setState({loading:null}); this.enterApp(); },1200); };
+  doSignup=()=>{ if(this.state.loading)return; this.setState({loading:'signup'}); clearTimeout(this._st); this._st=setTimeout(()=>{ this.setState({loading:null}); this.enterApp(); },1400); };
+  saveProfile=()=>{ if(this.state.savingProfile)return; this.setState({savingProfile:true,profileSaved:false}); clearTimeout(this._pt); this._pt=setTimeout(()=>{ this.setState({savingProfile:false,profileSaved:true}); clearTimeout(this._pt2); this._pt2=setTimeout(()=>this.setState({profileSaved:false}),2200); },1200); };
+  doSignOut=()=>{ if(this.state.signingOut)return; this.setState({signingOut:true}); try{localStorage.removeItem('qagent_authed');}catch(e){} clearTimeout(this._so); this._so=setTimeout(()=>this.setState({signingOut:false,screen:'signedout'}),1100); };
+  onPFname=(e)=>this.setState({pFname:e.target.value});
+  onPLname=(e)=>this.setState({pLname:e.target.value});
+  onPEmail=(e)=>this.setState({pEmail:e.target.value});
+  toggle2fa=()=>this.setState(s=>({twofa:!s.twofa}));
+  goForgot=()=>this.setState({screen:'forgot',resetSent:false});
+
+  pwScore(){ const p=this.state.password; let n=0; if(p.length>=8)n++; if(/[A-Z]/.test(p))n++; if(/[0-9]/.test(p))n++; if(/[^A-Za-z0-9]/.test(p))n++; return n; }
+
+  renderVals(){
+    const s=this.state;
+    const screens=['login','signup','forgot','signedout','profile'];
+    const tabDefs=[['login','Login'],['signup','Sign up'],['forgot','Forgot'],['signedout','Signed out'],['profile','Profile']];
+    const tabs=tabDefs.map(([id,label])=>({label,go:()=>this.go(id),style:'padding:7px 13px;border-radius:9px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;'+(s.screen===id?'background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff':'background:transparent;color:#9a9aae')}));
+
+    const labelStyle='display:block;font-size:12px;font-weight:600;color:#9494a6;margin-bottom:8px';
+    const fieldWrap='display:flex;align-items:center;gap:10px;height:46px;padding:0 14px;border-radius:12px;background:#16161f;border:1px solid rgba(255,255,255,.1)';
+    const fieldWrapStatic='display:flex;align-items:center;gap:10px;height:46px;padding:0 14px;border-radius:12px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.07)';
+    const inputStyle='flex:1;min-width:0;background:none;border:none;outline:none;color:#ECECF1;font-size:14px;font-family:inherit';
+
+    const eye='<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
+    const eyeOff='<path d="M17.9 17.9A10.7 10.7 0 0 1 12 19c-6.5 0-10-7-10-7a18 18 0 0 1 4.2-5M9.9 4.2A10.7 10.7 0 0 1 12 4c6.5 0 10 7 10 7a18 18 0 0 1-2.3 3.3M1 1l22 22"/>';
+
+    const score=this.pwScore();
+    const pwMeta=[['#6b7280','—'],['#fb7185','Weak'],['#fbbf24','Fair'],['#67e8f9','Good'],['#6ee7b7','Strong']][score];
+    const pwBars=[0,1,2,3].map(i=>'flex:1;height:4px;border-radius:4px;background:'+(i<score?pwMeta[0]:'rgba(255,255,255,.08)'));
+
+    const ssoProviders=[
+      {name:'Microsoft', icon:{__html:'<svg width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" fill="#f25022"/><rect x="13" y="3" width="8" height="8" fill="#7fba00"/><rect x="3" y="13" width="8" height="8" fill="#00a4ef"/><rect x="13" y="13" width="8" height="8" fill="#ffb900"/></svg>'}},
+      {name:'Google', icon:{__html:'<svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.6a4.8 4.8 0 0 1-2.1 3.1v2.6h3.4c2-1.8 3.1-4.5 3.1-7.6z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.4-2.6c-.9.6-2 1-3.2 1-2.5 0-4.6-1.7-5.3-4H3.2v2.6A10 10 0 0 0 12 22z"/><path fill="#FBBC05" d="M6.7 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2V7.4H3.2A10 10 0 0 0 2 12c0 1.6.4 3.1 1.2 4.6z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.9A10 10 0 0 0 3.2 7.4l3.5 2.6c.7-2.3 2.8-4 5.3-4z"/></svg>'}},
+      {name:'GitHub', icon:{__html:'<svg width="16" height="16" viewBox="0 0 24 24" fill="#e5e7eb"><path d="M12 2A10 10 0 0 0 8.8 21.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.4-2.2-.2-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>'}},
+    ].map(p=>({name:p.name, icon:p.icon||this.ic('<circle cx="12" cy="12" r="9"/>')}));
+
+    const sessions=[
+      {device:'MacBook Pro · Chrome', meta:'Ho Chi Minh City · Active now', current:true, icon:this.ic('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>')},
+      {device:'iPhone 15 · Q-Agent app', meta:'Ho Chi Minh City · 2 hours ago', current:false, icon:this.ic('<rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/>')},
+      {device:'Windows · Edge', meta:'Da Nang · 3 days ago', current:false, icon:this.ic('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>')},
+    ];
+
+    const twofaTrack='width:42px;height:24px;border-radius:20px;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;background:'+(s.twofa?'linear-gradient(135deg,#8b5cf6,#6366f1)':'rgba(255,255,255,.12)');
+    const twofaKnob='position:absolute;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;left:'+(s.twofa?'21px':'3px');
+
+    const boxOn='width:19px;height:19px;flex-shrink:0;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#8b5cf6,#6366f1);border:1px solid transparent';
+    const boxOff='width:19px;height:19px;flex-shrink:0;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.16)';
+
+    return {
+      tabs, noop:this.noop,
+      isAuth: s.screen!=='profile', isProfile: s.screen==='profile',
+      isLogin:s.screen==='login', isSignup:s.screen==='signup', isForgot:s.screen==='forgot', isSignedOut:s.screen==='signedout',
+      goLogin:()=>this.go('login'), goSignup:()=>this.go('signup'), goForgot:this.goForgot, signIn:this.doSignIn, signOut:this.doSignOut,
+      loading:s.loading, signinLoading:s.loading==='signin', signinIdle:s.loading!=='signin', signupLoading:s.loading==='signup', signupIdle:s.loading!=='signup', redirecting:s.redirecting,
+      redirectSteps:[{t:'Authenticating credentials',done:s.redirectStep>0,active:s.redirectStep===0,pending:false},{t:'Loading your workspace',done:s.redirectStep>1,active:s.redirectStep===1,pending:s.redirectStep<1},{t:'Restoring active runs',done:s.redirectStep>2,active:s.redirectStep===2,pending:s.redirectStep<2}],
+      createAccount:this.doSignup, signingOut:s.signingOut, notSigningOut:!s.signingOut,
+      savingProfile:s.savingProfile, profileSaved:s.profileSaved,
+      brandPoints:['Ticket → tested PR in one pipeline','Azure DevOps, Jira & GitHub native','Evidence auto-published back to tickets'],
+      ssoProviders, sessions, labelStyle, fieldWrap, fieldWrapStatic, inputStyle,
+      email:s.email, password:s.password, onEmail:this.onEmail, onPassword:this.onPassword,
+      pwType:s.pwVisible?'text':'password', togglePw:this.togglePw, pwIcon:this.ic(s.pwVisible?eyeOff:eye,'#7a7a8c'),
+      remember:s.remember, toggleRemember:this.toggleRemember, rememberBox:s.remember?boxOn:boxOff,
+      terms:s.terms, toggleTerms:this.toggleTerms, termsBox:s.terms?boxOn:boxOff,
+      fname:s.fname, lname:s.lname, org:s.org, onFname:this.onFname, onLname:this.onLname, onOrg:this.onOrg,
+      pwBars, pwColor:pwMeta[0], pwLabel:pwMeta[1],
+      resetSent:s.resetSent, resetNotSent:!s.resetSent, sendReset:this.sendReset, resetSending:s.resetSending, resetIdle:!s.resetSending,
+      pFname:s.pFname, pLname:s.pLname, pEmail:s.pEmail, onPFname:this.onPFname, onPLname:this.onPLname, onPEmail:this.onPEmail, saveProfile:this.saveProfile,
+      twofaTrack, twofaKnob, toggle2fa:this.toggle2fa,
+    };
+  }
+}
+</script>
+</body>
+</html>
