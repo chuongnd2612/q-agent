@@ -519,3 +519,84 @@ def test_drop_queued_cases_spares_a_claimed_session(workspace_dir, db_session):
     assert agent_authoring_service.drop_queued_cases({case.id}) == 0
     db_session.expire_all()
     assert db_session.query(AgentAuthoringSession).one().status == "running"
+
+
+# ------------------------- the harness must drive OUR tab, not theirs (#739)
+#
+# Live authoring left `BU_NAME` unset, so the browser-harness daemon was "default" and
+# attached to `pages[0]` — whichever page happened to be first in that Chrome. The
+# authoring profile is the SAME one the manual-login capture opens for the operator, so
+# a tab they left in it is restored on launch and taken over: Claude drove the
+# operator's own tab. A NAMED daemon gets its own dedicated tab, which is the fix.
+#
+# "Correctly named" has teeth: the harness turns the name into a socket/pid FILENAME and
+# rejects anything outside [A-Za-z0-9_-]{1,64}, so an invalid name does not degrade to
+# the old behaviour — it fails authoring outright.
+
+import re as _re
+
+_LEGAL_BU_NAME = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def test_the_harness_daemon_name_is_always_legal():
+    from app.services.live_authoring_service import _harness_name
+
+    for run_code, case_code in [
+        ("RUN-208", "763-TC-01"),
+        ("RUN/1", "a b"),
+        ("", ""),
+        ("R" * 200, "C" * 200),
+        ("RUN-1", "tên-việt"),
+        ("../etc", "passwd"),
+    ]:
+        name = _harness_name(run_code, case_code)
+        assert _LEGAL_BU_NAME.match(name), f"{run_code}/{case_code} -> {name!r}"
+
+
+def test_the_name_is_never_the_default_daemon():
+    """"default" is precisely the value that makes the harness attach to `pages[0]`, so
+    a fallback landing there would silently restore the bug."""
+    from app.services.live_authoring_service import _harness_name
+
+    assert _harness_name("", "") != "default"
+    assert _harness_name("///", "///") != "default"
+
+
+def test_distinct_cases_get_distinct_names():
+    """The harness's own comment: named daemons sharing a name fight over one tab and
+    their navigations clobber each other."""
+    from app.services.live_authoring_service import _harness_name
+
+    assert _harness_name("RUN-1", "TC-01") != _harness_name("RUN-1", "TC-02")
+    assert _harness_name("RUN-1", "TC-01") != _harness_name("RUN-2", "TC-01")
+
+
+def test_the_launcher_never_navigates_a_page_it_does_not_own():
+    """The second half of #739, asserted on the source because the behaviour lives in a
+    Node launcher we cannot exercise from pytest.
+
+    `ctx.pages()[0]` is what navigated a restored, unrelated tab away to the app's base
+    URL before the harness even attached — losing whatever the operator had there.
+    """
+    from pathlib import Path
+
+    raw = Path("app/services/pw_scripts/authoring_browser.cjs").read_text(encoding="utf-8")
+    # Comments explain the old behaviour by name, so match on CODE only — otherwise the
+    # test fails on its own documentation.
+    code = chr(10).join(
+        line for line in raw.splitlines() if not line.lstrip().startswith("//")
+    )
+
+    assert "ctx.pages()[0]" not in code, "the launcher claims whatever tab is first"
+    assert "ctx.pages().find(" in code, "the launcher no longer picks a blank page"
+
+
+def test_both_copies_of_the_launcher_are_identical():
+    """Its own header requires it: the agent runs the vendored copy, the server runs the
+    api copy, and a fix that lands in one is a fix the other silently lacks."""
+    from pathlib import Path
+
+    api_copy = Path("app/services/pw_scripts/authoring_browser.cjs").read_text(encoding="utf-8")
+    vendored = Path("../agent/vendor/authoring_browser.cjs").read_text(encoding="utf-8")
+
+    assert api_copy == vendored

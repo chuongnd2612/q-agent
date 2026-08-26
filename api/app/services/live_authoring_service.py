@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -73,6 +74,22 @@ class AuthoringResult:
     project_key: str | None = None
     repo: str = ""
     owner_id: int | None = None
+
+
+#: `BU_NAME` must match this — the harness turns it into a socket/pid filename and
+#: rejects anything else (`_ipc._check`).
+_HARNESS_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _harness_name(run_code: str, case_code: str) -> str:
+    """A per-session browser-harness daemon name (#739).
+
+    Unique per (run, case) so each authoring session gets its own dedicated tab, and
+    sanitised to ``[A-Za-z0-9_-]{1,64}`` because the harness builds a filename from it
+    and refuses anything else.
+    """
+    raw = f"qagent-{run_code}-{case_code}"
+    return _HARNESS_NAME_RE.sub("-", raw)[:64].strip("-") or "qagent-authoring"
 
 
 def _free_port() -> int:
@@ -343,7 +360,19 @@ def author_case(
             skill="live-authoring",
             include_template=True,
             label=f"Live authoring: {case.ticket_external_id} · {case.code}",
-            extra_env={"BU_CDP_URL": f"http://127.0.0.1:{port}"},
+            extra_env={
+                "BU_CDP_URL": f"http://127.0.0.1:{port}",
+                # Name the daemon so the harness gives itself a DEDICATED tab (#739).
+                # With the default name it attaches to `pages[0]` — whichever page is
+                # first in that Chrome — and this profile is the same one the manual
+                # login capture opens for the operator, so a tab they left there is
+                # restored and taken over. Claude then drives the operator's tab.
+                #
+                # Per SESSION, not a fixed name: the harness's own comment says named
+                # daemons sharing a name fight over one tab, which is what concurrent
+                # authoring runs would do.
+                "BU_NAME": _harness_name(run.code, case.code or str(case.id)),
+            },
             max_budget_usd=budget,
         )
     finally:
