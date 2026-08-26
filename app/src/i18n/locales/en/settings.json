@@ -265,7 +265,10 @@
       "hubBadge": "EmeHub",
       "hubUnavailableTitle": "EmeHub credential unavailable",
       "hubExpiredTitle": "The Claude account EmeHub resolved is expired — fix it in EmeHub",
-      "hubExpiredNote": "This account looks expired at EmeHub — fix it there; it can't be changed here."
+      "hubExpiredNote": "This account looks expired at EmeHub — fix it there; it can't be changed here.",
+      "rejectedTitle": "CREDENTIAL REJECTED",
+      "rejectedHubBody": "The last Claude call was rejected. Reconnect the Claude account in EmeHub — the stored credential still reports as active, but it no longer authenticates.",
+      "rejectedLocalBody": "The last Claude call was rejected. Re-upload your credentials below, or test them to confirm."
     },
     "dropzone": {
       "parsing": "Parsing your .credentials.json",

@@ -14,9 +14,13 @@ from datetime import datetime, timedelta, timezone
 from app.config import settings as app_settings
 from app.services import ai_usage_service, claude_cli, claude_usage_reader
 
+#: Keys the SPA reads. Asserted as a SUBSET, not an exact match: an exact key set fails
+#: on correct additive changes, so it rots instead of being maintained — `credentialOk`
+#: (#736) broke it, and the fix would otherwise be to delete the assertion. Anything the
+#: SPA relies on is named here; anything new is additive and does not need to be.
 CONTRACT_KEYS = {
-    "model", "modelLabel", "operational", "ctxWindow",
-    "session", "week", "breakdown", "byModel", "limitsStatus",
+    "model", "modelLabel", "operational", "credentialOk", "credentialDetail",
+    "ctxWindow", "session", "week", "breakdown", "byModel", "limitsStatus",
 }
 WINDOW_KEYS = {"costUsd", "tokens", "requests", "resetsAt", "pctUsed", "resetLabel"}
 
@@ -67,7 +71,7 @@ def test_read_stats_new_shape(workspace_dir, tmp_path, monkeypatch):
 
     s = claude_usage_reader.read_stats()
 
-    assert set(s) == CONTRACT_KEYS
+    assert CONTRACT_KEYS <= set(s)
     assert set(s["session"]) == WINDOW_KEYS
     assert set(s["week"]) == WINDOW_KEYS
     assert set(s["breakdown"]) == {"input", "output", "cacheRead", "cacheWrite"}
@@ -108,7 +112,7 @@ def test_read_stats_missing_home_is_zero(workspace_dir, tmp_path, monkeypatch):
 
     s = claude_usage_reader.read_stats()
 
-    assert set(s) == CONTRACT_KEYS
+    assert CONTRACT_KEYS <= set(s)
     assert s["week"]["tokens"] == 0
     assert s["week"]["requests"] == 0
     assert s["session"]["tokens"] == 0

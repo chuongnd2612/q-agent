@@ -169,3 +169,55 @@ def test_an_unrelated_failure_still_reports_its_own_output(_cli, monkeypatch):
         claude_cli.run_prompt("hi")
 
     assert "Rate limit exceeded" in str(excinfo.value)
+
+
+# ------------------------------- the CLI records what it observed (#736)
+#
+# The health service can be perfectly correct while nothing calls it, and the symptom
+# would be identical to the original bug: a chip reporting Operational through a wall of
+# rejected calls. So these pin the wiring, not the service.
+
+
+def test_a_rejected_call_records_the_credential_as_bad(_cli, monkeypatch, workspace_dir):
+    from app.services import claude_health
+
+    claude_health.record_success()
+    monkeypatch.setattr(claude_cli.subprocess, "Popen", _popen(1, NOT_LOGGED_IN))
+
+    with pytest.raises(claude_cli.ClaudeError):
+        claude_cli.run_prompt("hi")
+
+    status = claude_health.status()
+    assert status["ok"] is False
+    assert "not logged in" in status["detail"].lower()
+
+
+def test_a_successful_call_records_the_credential_as_good(_cli, monkeypatch, workspace_dir):
+    from app.services import claude_health
+
+    claude_health.record_auth_failure("stale rejection")
+    monkeypatch.setattr(
+        claude_cli.subprocess,
+        "Popen",
+        _popen(0, json.dumps({"type": "result", "result": "hello"})),
+    )
+
+    assert claude_cli.run_prompt("hi") == "hello"
+
+    assert claude_health.status()["ok"] is True
+
+
+def test_a_non_auth_failure_does_not_blame_the_credential(_cli, monkeypatch, workspace_dir):
+    """A rate limit is a problem with the request, not the credential. Flagging it would
+    put an amber warning on the chip every time something unrelated broke — which is how
+    a health indicator stops being read."""
+    from app.services import claude_health
+
+    claude_health.record_success()
+    envelope = json.dumps({"type": "result", "is_error": True, "result": "Rate limit exceeded"})
+    monkeypatch.setattr(claude_cli.subprocess, "Popen", _popen(1, envelope))
+
+    with pytest.raises(claude_cli.ClaudeError):
+        claude_cli.run_prompt("hi")
+
+    assert claude_health.status()["ok"] is True

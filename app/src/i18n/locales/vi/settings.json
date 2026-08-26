@@ -262,7 +262,10 @@
       "hubBadge": "EmeHub",
       "hubUnavailableTitle": "Chưa đọc được thông tin từ EmeHub",
       "hubExpiredTitle": "Tài khoản Claude do EmeHub xác định đã hết hạn — hãy xử lý trong EmeHub",
-      "hubExpiredNote": "Tài khoản này có vẻ đã hết hạn ở EmeHub — hãy xử lý tại đó; không thể thay đổi từ đây."
+      "hubExpiredNote": "Tài khoản này có vẻ đã hết hạn ở EmeHub — hãy xử lý tại đó; không thể thay đổi từ đây.",
+      "rejectedTitle": "THÔNG TIN ĐĂNG NHẬP BỊ TỪ CHỐI",
+      "rejectedHubBody": "Lần gọi Claude gần nhất bị từ chối. Hãy kết nối lại tài khoản Claude trong EmeHub — thông tin đã lưu vẫn báo đang hoạt động, nhưng không còn xác thực được.",
+      "rejectedLocalBody": "Lần gọi Claude gần nhất bị từ chối. Hãy tải lại thông tin đăng nhập bên dưới, hoặc kiểm tra để xác nhận."
     },
     "dropzone": {
       "parsing": "Đang phân tích .credentials.json của bạn",
