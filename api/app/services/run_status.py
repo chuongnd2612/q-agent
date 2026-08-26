@@ -56,6 +56,49 @@ def set_run_status(db: Session, run: Run, new: str) -> bool:
     return True
 
 
+def complete_run(db: Session, run: Run) -> bool:
+    """Finish a run because the USER drove its last stage to completion (#720).
+
+    Distinct from :func:`set_run_status` on purpose. That function's terminal guard
+    exists so a worker thread finishing a stage *after* a cancel or failure cannot
+    resurrect the run — a race. This is not a race: publishing the last comment is a
+    deliberate act, taken later, by a person who has just finished the pipeline by hand.
+
+    Without this, a run that failed at, say, Evidence and was then driven through
+    Evidence → Publish successfully stayed "failed · stage 5 of 6" **forever**, with the
+    only escape being a full re-run. The guard was protecting a failure the user had
+    already resolved.
+
+    ``cancelled`` is NOT recoverable: a cancel is a decision about the run, not a
+    problem with it, and completing one behind the user's back would overrule them.
+
+    Returns True when the run is now ``done``.
+    """
+    if run.status == "cancelled":
+        return False
+    if run.status == "done":
+        return True  # idempotent: publishing a second comment must not fail
+    was_failed = run.status == "failed"
+    run.status = "done"
+    run.finished_at = utcnow()
+    # The stage it failed at is no longer where it stands, and leaving it set keeps the
+    # UI reading a stage number off a run that has finished.
+    run.failed_stage = ""
+    db.add(run)
+    db.commit()
+    audit_service.record(
+        category="run", actor_type="user",
+        action="Run completed after the user finished the remaining stages"
+        if was_failed
+        else "Run status changed",
+        target=f"{run.code} · done",
+    )
+    hub.publish(str(run.id), "run.status", {"status": "done"})
+    if was_failed:
+        logger.info("run {} recovered from failed to done after a user-driven finish", run.code)
+    return True
+
+
 def recover_orphaned_runs(db: Session) -> int:
     """Sweep runs left in a non-terminal "active work" status with no worker.
 
