@@ -12,8 +12,8 @@ import { ProviderGroup } from "@/components/settings/ProviderGroup";
 import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
 import { FEATURES } from "@/config/features";
 import { ToggleRow } from "@/components/settings/ToggleRow";
-import { useProviders, useSettings, useUpdateSettings } from "@/hooks/queries";
-import { AI_MODEL_OPTIONS } from "@/lib/models";
+import { useAiModels, useProviders, useSettings, useUpdateSettings } from "@/hooks/queries";
+
 import type { AuthoringLogVerbosity, AuthoringMode, ExecutionTarget, HealMode, ProviderGroupOut, ProviderKind, SettingsOut } from "@/types/api";
 
 /** A never-configured provider: the backend catalog omits it (fresh machine),
@@ -46,6 +46,7 @@ export function Settings() {
   const { data: providers, isLoading: providersLoading } = useProviders();
   const { data: settings, isLoading: settingsLoading } = useSettings();
   const updateSettings = useUpdateSettings();
+  const aiModels = useAiModels();
   const location = useLocation();
   const { t: tNav } = useTranslation("nav");
   const { t } = useTranslation("settings");
@@ -456,7 +457,7 @@ export function Settings() {
                         onChange={(v) => setSkillModel(skill.id, v ?? null)}
                         placeholder={t("perAction.overrides.placeholder")}
                         allowClear
-                        options={AI_MODEL_OPTIONS}
+                        options={aiModels}
                       />
                     </div>
                   </div>

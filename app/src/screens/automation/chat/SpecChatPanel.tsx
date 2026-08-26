@@ -13,8 +13,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { useRunEvents } from "@/hooks/useRunEvents";
-import { useAuthoringState, useSendSpecChat, useSpecs, useUpdateSpec } from "@/hooks/queries";
-import { AI_MODEL_OPTIONS } from "@/lib/models";
+import {
+  useAiModels,
+  useAuthoringState,
+  useSendSpecChat,
+  useSpecs,
+  useUpdateSpec,
+} from "@/hooks/queries";
+
 import { useUI } from "@/store/ui";
 import type { AutomationSpecOut, ChatErrorPayload, ChatReplyPayload } from "@/types/api";
 import { diffLines } from "@/screens/automation/lineDiff";
@@ -54,7 +60,8 @@ export function SpecChatPanel({ runId, spec }: Props) {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [model, setModel] = useState<string>(AI_MODEL_OPTIONS[1]?.value ?? "");
+  const aiModels = useAiModels();
+  const [model, setModel] = useState<string>(aiModels[1]?.value ?? "");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Message ids whose reply has already typed out once — so closing + reopening
@@ -222,7 +229,7 @@ export function SpecChatPanel({ runId, spec }: Props) {
                 className="ml-auto rounded-lg border border-white/[0.1] bg-white/[0.04] px-2 py-1 text-[11px] text-ink-soft"
                 title={t("automation.chat.model")}
               >
-                {AI_MODEL_OPTIONS.map((o) => (
+                {aiModels.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label.split(" — ")[0]}
                   </option>

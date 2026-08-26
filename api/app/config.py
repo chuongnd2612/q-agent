@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     # The heal fix call runs on a fast model (#398) — the fixer is a targeted,
     # DOM-grounded edit, so Haiku is enough and ~4x faster than the heavy global
     # model; fresh spec generation keeps the global model. Override via settings.
-    heal_fix_model: str = "claude-haiku-4-5-20251001"
+    heal_fix_model: str = "claude-haiku-4-5"
     # DOM exploration agent (ADR 0010): max observe→decide→act steps per session
     # (hard-clamped to <=20 in the loop) and the per-session Claude cost ceiling in
     # USD — the loop halts when either is reached, so exploration can never run

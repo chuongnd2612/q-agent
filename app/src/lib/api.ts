@@ -1074,6 +1074,10 @@ export const api = {
   ) => get<BackendLogOut[]>("/audit/logs" + qs(params)),
   backendLogStats: () => get<BackendLogStats>("/audit/logs/stats"),
 
+  /** The Claude models this deployment offers (#715) — one catalog, served, so the
+   * dropdown cannot disagree with what the server bills for. */
+  aiModels: () => get<{ value: string; label: string }[]>("/ai/models"),
+
   // artifacts — a browser <img>/<video> can't send the Authorization header,
   // and the backend /artifacts guard reads the access token from ?token= only
   // (same as WebSocket URLs), so append it here or images 401.

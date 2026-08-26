@@ -37,7 +37,7 @@ class ClaudeError(RuntimeError):
 # Per-action model defaults (#175): small, mechanical structured-JSON tasks run
 # on a cheaper/faster model; heavy generation/review inherit the global model.
 # Keyed by skill name; overridable per skill via the "skillModels" settings map.
-_HAIKU = "claude-haiku-4-5-20251001"
+_HAIKU = "claude-haiku-4-5"
 _DEFAULT_SKILL_MODELS = {
     "execution-analyzer": _HAIKU,        # failure classification (runs up to 3x per heal)
     "screenshot-annotator": _HAIKU,      # bounding-box / caption extraction

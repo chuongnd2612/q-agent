@@ -26,13 +26,14 @@ from app.config import settings as app_settings
 from app.logging import logger
 from app.models.claude_usage import ClaudeUsage
 from app.models.user import User
+from app.services import model_catalog
 
 # Static presentation map: model id -> (human label, context window).
-MODEL_LABELS: dict[str, tuple[str, str]] = {
-    "claude-opus-4-8": ("Claude Opus 4.8", "200K"),
-    "claude-sonnet-5": ("Claude Sonnet 5", "200K"),
-    "claude-haiku-4-5-20251001": ("Claude Haiku 4.5", "200K"),
-}
+#
+# Derived from `model_catalog`, which is the single source of truth (#715). These used
+# to be a second hardcoded table, and it drifted: two 1M-context models were labelled
+# 200K, and the chip reported "Opus 4.8 · 200K ctx" for a model with five times that.
+MODEL_LABELS: dict[str, tuple[str, str]] = model_catalog.labels()
 
 # Recorded CLI ``action`` (skill id) -> (process key, display name). Groups the
 # raw per-call usage rows into the coarse "process" buckets the per-run cost panel
