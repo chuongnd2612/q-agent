@@ -3,8 +3,10 @@
  * of calling `api.*` directly, so cache keys + invalidation stay consistent.
  */
 
+import { useMemo } from "react";
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   type UseQueryOptions,
@@ -38,6 +40,9 @@ import type {
   TestCaseOut,
   TestCaseUpdate,
   TicketFilters,
+  KnowledgeStatus,
+  ProjectKnowledgeOut,
+  ProjectOut,
 } from "@/types/api";
 
 // -------------------------------------------------------------- health
@@ -1413,5 +1418,141 @@ export const useCommentMutations = (runId: number | string) => {
       mutationFn: () => api.retryComments(runId),
       onSuccess: invalidate,
     }),
+  };
+};
+
+// ------------------------------------------------- project counts (ADR 0015 §8)
+/** Everything the project-scoped surfaces show as a per-project figure. */
+export interface ProjectCounts {
+  /** Tickets the project's ticket source claims. `null` until the count lands. */
+  tickets: number | null;
+  /** Test cases across the project's runs (sum of `run.caseCount`). */
+  cases: number;
+  /** Runs stamped with this project's GUID (#727). */
+  runs: number;
+  /** The newest non-terminal run, i.e. "what is running right now" for this
+   *  project. `null` when nothing is in flight. */
+  activeRun: RunOut | null;
+  /** Knowledge confidence 0..100, or `null` when nothing is indexed yet. */
+  confidence: number | null;
+  knowledgeStatus: KnowledgeStatus;
+}
+
+export const EMPTY_PROJECT_COUNTS: ProjectCounts = {
+  tickets: null,
+  cases: 0,
+  runs: 0,
+  activeRun: null,
+  confidence: null,
+  knowledgeStatus: "not_indexed",
+};
+
+/** Runs a project is *not* done with — the same set the sidebar badge pulses on. */
+const TERMINAL_RUN_STATUSES = new Set(["done", "cancelled", "failed"]);
+
+/** The address used to key a project everywhere: its GUID, falling back to the
+ *  name for a row the G1 backfill hasn't reached (mirrors Projects.tsx). */
+export const projectCountsKey = (p: ProjectOut) => p.guid || p.name;
+
+/** Collapse a project's per-repo knowledge rows into one confidence + status.
+ *  Mirrors the Projects grid: a hub row is already project-level, so it passes
+ *  through; local rows average the confidence of the indexed ones. */
+function summarizeKnowledge(
+  rows: ProjectKnowledgeOut[],
+): { confidence: number | null; status: KnowledgeStatus } {
+  if (!rows.length) return { confidence: null, status: "not_indexed" };
+  if (rows.every((r) => r.source === "hub")) {
+    return { confidence: rows[0].confidence, status: rows[0].status };
+  }
+  const indexed = rows.filter((r) => r.status === "indexed");
+  if (!indexed.length) return { confidence: null, status: rows[0].status ?? "not_indexed" };
+  return {
+    confidence: Math.round(
+      indexed.reduce((sum, r) => sum + r.confidence, 0) / indexed.length,
+    ),
+    status: "indexed",
+  };
+}
+
+/**
+ * The single source for per-project figures (ADR 0015 §8) — the sidebar tree,
+ * the Dashboard comparison table, the Projects cards and the project Overview
+ * all read this instead of a literal total off `project.meta`.
+ *
+ * Request shape, deliberately: **runs, cases and the active run are derived from
+ * ONE workspace-wide `GET /runs`**, grouped client-side by `run.projectGuid`
+ * (#727), so adding a project costs no extra request. Knowledge comes from the
+ * one `GET /projects/knowledge` the Projects grid already fetches. Only the
+ * ticket count is per-project, because `TicketOut` carries no project id — the
+ * project-to-ticket link lives server-side (`ticket_project_criterion`), so a
+ * count can only be asked for one project at a time. Those probes ask for
+ * `pageSize: 1` and read the envelope's `total`, i.e. a count, not a page.
+ */
+export const useProjectCounts = () => {
+  const { data: projects, isLoading: projectsLoading } = useProjects();
+  const { data: runs, isLoading: runsLoading } = useRuns();
+  const { data: knowledge } = useKnowledgeList(projects !== undefined);
+
+  const keys = useMemo(() => (projects ?? []).map(projectCountsKey), [projects]);
+
+  // One count probe per project. `pageSize: 1` keeps each response to a single
+  // row plus the total; the key matches `useTickets({ project, pageSize: 1 })`
+  // so a screen already asking that question shares the cache entry.
+  const ticketCounts = useQueries({
+    queries: keys.map((key) => ({
+      queryKey: queryKeys.tickets({ project: key, pageSize: 1 }),
+      queryFn: async () =>
+        api.listTickets({ project: key, pageSize: 1 }, await hubTokenForRead()),
+      staleTime: 30_000,
+    })),
+  });
+  const ticketTotals = ticketCounts.map((q) => q.data?.total ?? null);
+  const ticketsLoading = ticketCounts.some((q) => q.isLoading);
+  const ticketTotalsKey = ticketTotals.join(",");
+
+  const byProject = useMemo(() => {
+    const knowledgeRows = new Map<string, ProjectKnowledgeOut[]>();
+    for (const row of knowledge ?? []) {
+      const pk = row.projectKey || row.key;
+      knowledgeRows.set(pk, [...(knowledgeRows.get(pk) ?? []), row]);
+    }
+    const runsByProject = new Map<string, RunOut[]>();
+    for (const run of runs ?? []) {
+      const guid = run.projectGuid;
+      if (!guid) continue;
+      runsByProject.set(guid, [...(runsByProject.get(guid) ?? []), run]);
+    }
+    const out = new Map<string, ProjectCounts>();
+    (projects ?? []).forEach((p, i) => {
+      const key = projectCountsKey(p);
+      const own = runsByProject.get(key) ?? [];
+      const live = own
+        .filter((r) => !TERMINAL_RUN_STATUSES.has(r.status))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      // Knowledge rows are keyed by project *name*, not GUID (they predate it).
+      const kn = summarizeKnowledge(knowledgeRows.get(p.name) ?? []);
+      out.set(key, {
+        tickets: ticketTotals[i] ?? null,
+        cases: own.reduce((sum, r) => sum + r.caseCount, 0),
+        runs: own.length,
+        activeRun: live[0] ?? null,
+        confidence: kn.confidence,
+        knowledgeStatus: kn.status,
+      });
+    });
+    return out;
+    // `ticketTotals` is rebuilt every render by `.map`, so the memo depends on
+    // its *contents* (`ticketTotalsKey`) rather than its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, runs, knowledge, ticketTotalsKey]);
+
+  return {
+    projects,
+    byProject,
+    /** True while the project list or the runs list is still in flight. Ticket
+     *  totals arrive later and are reported separately, so the table can paint
+     *  its rows and fill the Tickets column in. */
+    isLoading: projectsLoading || runsLoading,
+    ticketsLoading,
   };
 };

@@ -4,6 +4,30 @@
     "missionControl": "Mission control",
     "runsInReview_one": "{{count}} run in review",
     "runsInReview_other": "{{count}} runs in review",
+    "subtitle": "every ticket, run and test case belongs to a project",
+    "runningNow": {
+      "title": "Running now",
+      "subtitle": "across every project",
+      "count_one": "{{count}} run",
+      "count_other": "{{count}} runs",
+      "empty": "Nothing is running right now.",
+      "unassigned": "No project"
+    },
+    "projectTable": {
+      "columns": {
+        "project": "Project",
+        "ticketSource": "Ticket source",
+        "tickets": "Tickets",
+        "testCases": "Test cases",
+        "runs": "Runs",
+        "activeRun": "Active run",
+        "knowledge": "Knowledge"
+      },
+      "sourceActive": "Active",
+      "sourceInactive": "Inactive",
+      "emptyTitle": "No projects yet",
+      "emptyBody": "Connect a work-item provider in Settings, then refresh \u2014 every ticket, run and test case lives inside a project."
+    },
     "stats": {
       "activeRuns": "Active runs",
       "casesInReview": "Cases in review",
@@ -29,6 +53,7 @@
     "suiteHealth": {
       "title": "Suite health · 7d",
       "passRate": "pass rate",
+      "passedFailed": "{{passed}} passed · {{failed}} failed",
       "passed": "passed",
       "failed": "failed"
     },
