@@ -32,14 +32,36 @@ export const runStatusToStage: Record<string, number> = {
   done: 6,
 };
 
-export function PipelineRail({ stage }: { stage: number }) {
+/**
+ * Has the run finished the whole pipeline? (#724)
+ *
+ * `runStatusToStage` collapses `comment` and `done` to the same number, which is
+ * right for "which stage is this" and wrong for "is that stage still in progress":
+ * every stage view marks completion as `idx < stage`, so the LAST stage could never
+ * be ticked. A run sitting at Publish and a run that has finished Publish looked
+ * identical, and the sidebar kept showing "6" next to Publish on a finished run.
+ *
+ * A finished run has no current stage — every one of them is behind it.
+ */
+export function isRunComplete(status: string | undefined): boolean {
+  return status === "done";
+}
+
+export function PipelineRail({
+  stage,
+  complete = false,
+}: {
+  stage: number;
+  /** The run has finished the pipeline — tick every stage, including the last. */
+  complete?: boolean;
+}) {
   const { t } = useTranslation("commands");
   return (
     <div className="glass flex items-center gap-1 overflow-x-auto rounded-[18px] px-4 py-4">
       {STAGES.map((label, i) => {
         const idx = i + 1;
-        const done = idx < stage;
-        const active = idx === stage;
+        const done = complete || idx < stage;
+        const active = !complete && idx === stage;
         return (
           <div key={label} className="flex flex-1 items-center gap-1">
             <div className="flex items-center gap-2.5">

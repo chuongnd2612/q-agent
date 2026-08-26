@@ -17,7 +17,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { providerGlyph } from "@/components/ui/badges";
-import { PipelineRail, runStatusToStage } from "@/components/ui/PipelineRail";
+import { isRunComplete, PipelineRail, runStatusToStage } from "@/components/ui/PipelineRail";
 import { useNavigate, useParams } from "react-router-dom";
 import { ALL_TICKETS_PAGE_SIZE, useRun, useRunAiUsage, useTickets } from "@/hooks/queries";
 import { useRunEvents } from "@/hooks/useRunEvents";
@@ -128,7 +128,10 @@ export function RunDetail() {
       </div>
 
       <div className="mb-4 hidden md:block">
-        <PipelineRail stage={runStatusToStage[run.status] ?? 0} />
+        <PipelineRail
+          stage={runStatusToStage[run.status] ?? 0}
+          complete={isRunComplete(run.status)}
+        />
       </div>
 
       {processing && (
