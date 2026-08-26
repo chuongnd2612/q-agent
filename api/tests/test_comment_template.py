@@ -213,3 +213,27 @@ def test_nested_bullets_stay_under_the_case_they_describe():
     first_item = html[html.index("<li>") : html.index("</li>")]
     assert "Screenshot: a.png" in first_item
     assert html.count("<li>") == 2, "a nested artifact became a case of its own"
+
+
+def test_the_published_image_carries_a_real_src():
+    """The provider's reader has no Q-Agent session, so the published form must be a
+    URL their browser can load unaided — the opposite of the preview's deferred one."""
+    html = comment_markup.to_html(
+        "![TC-01](shot.png)", image_src={"shot.png": "https://dev.azure.com/org/attach/1"}
+    )
+
+    assert '<img src="https://dev.azure.com/org/attach/1"' in html
+    assert "data-artifact" not in html
+
+
+def test_the_preview_image_defers_its_source_to_the_client():
+    """`/artifacts/**` needs a token that never leaves the browser's memory, and the
+    URL needs the SPA's mount prefix. The server knows neither."""
+    html = comment_markup.to_html(
+        "![TC-01](shot.png)",
+        image_src={"shot.png": "users/3/evidence/RUN-1/shot.png"},
+        deferred=True,
+    )
+
+    assert 'data-artifact="users/3/evidence/RUN-1/shot.png"' in html
+    assert "src=" not in html, "a bare path as src is what rendered as a broken image"

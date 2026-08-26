@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Callable
 
 __all__ = ["to_html"]
 
@@ -34,16 +35,24 @@ _NUMBERED = re.compile(r"^(\d+)\.\s+(.*)$")
 _BULLET = re.compile(r"^(\s*)-\s+(.*)$")
 
 
-def to_html(markdown: str, *, image_src: dict[str, str] | None = None) -> str:
+def to_html(
+    markdown: str, *, image_src: dict[str, str] | None = None, deferred: bool = False
+) -> str:
     """Render ``markdown`` as the HTML subset a work-item comment accepts.
 
     ``image_src`` maps an image target (the attachment filename the template wrote) to
     the URL it ended up at. An image whose target is **not** in the map is dropped
     rather than emitted with a dead source: a broken-image icon in a ticket reads as
     "the evidence is gone", which is a worse lie than the line not being there.
+
+    ``deferred`` puts the resolved value in ``data-artifact`` instead of ``src``, for
+    the in-app preview: Q-Agent's own ``/artifacts`` need a short-lived access token
+    that lives only in the browser's memory, so the client finishes the URL. Emitting a
+    bare path as ``src`` is exactly how the preview ended up showing broken images.
     """
     sources = image_src or {}
     out: list[str] = []
+    render_image = _deferred_image if deferred else _direct_image
     # The open list, if any: "ol" | "ul", plus whether a <li> is still open so an
     # indented continuation line can be folded into it.
     list_kind: str | None = None
@@ -79,7 +88,7 @@ def to_html(markdown: str, *, image_src: dict[str, str] | None = None) -> str:
                 out.append("<ol>")
                 list_kind = "ol"
             close_item()
-            out.append(f"<li>{_inline(numbered.group(2), sources)}")
+            out.append(f"<li>{_inline(numbered.group(2), sources, render_image)}")
             item_open = True
             continue
 
@@ -87,32 +96,53 @@ def to_html(markdown: str, *, image_src: dict[str, str] | None = None) -> str:
             nested = len(bullet.group(1)) >= 2
             if nested and item_open:
                 # One level of nesting, folded into the item it belongs to.
-                out.append(f"<br/>&nbsp;&nbsp;• {_inline(bullet.group(2), sources)}")
+                out.append(f"<br/>&nbsp;&nbsp;• {_inline(bullet.group(2), sources, render_image)}")
                 continue
             if list_kind != "ul":
                 close_list()
                 out.append("<ul>")
                 list_kind = "ul"
             close_item()
-            out.append(f"<li>{_inline(bullet.group(2), sources)}")
+            out.append(f"<li>{_inline(bullet.group(2), sources, render_image)}")
             item_open = True
             continue
 
         if indented and item_open:
             # A continuation line — the observation, or the screenshot under it. It
             # stays inside the <li> so the evidence sits with its finding.
-            out.append(f"<br/>{_inline(stripped, sources)}")
+            out.append(f"<br/>{_inline(stripped, sources, render_image)}")
             continue
 
         close_list()
-        rendered = _inline(stripped, sources)
+        rendered = _inline(stripped, sources, render_image)
         out.append(f"<div>{rendered}</div>")
 
     close_list()
     return "".join(out)
 
 
-def _inline(text: str, sources: dict[str, str]) -> str:
+def _direct_image(alt: str, value: str) -> str:
+    """An ``<img>`` a reader's browser can load unaided — the published form."""
+    return f'<img src="{html.escape(value)}" alt="{alt}" style="max-width:100%"/>'
+
+
+def _deferred_image(alt: str, value: str) -> str:
+    """An ``<img>`` the SPA finishes, for the in-app preview.
+
+    No ``src``: a bare artifact path resolves against the page URL and 404s, and the
+    access token ``/artifacts`` needs never leaves the browser's memory. The client
+    sets the real source through ``api.artifactUrl``, which knows both the mount and
+    the token. Emitting the bare path as ``src`` is exactly how every preview ended up
+    showing a broken-image icon.
+    """
+    return f'<img data-artifact="{html.escape(value)}" alt="{alt}" style="max-width:100%"/>'
+
+
+def _inline(
+    text: str,
+    sources: dict[str, str],
+    render_image: Callable[[str, str], str] = _direct_image,
+) -> str:
     """Escape one line, then re-introduce the handful of constructs we emit.
 
     Order matters: escaping first means a reviewer who types ``<script>`` into the edit
@@ -122,11 +152,11 @@ def _inline(text: str, sources: dict[str, str]) -> str:
 
     def image(match: re.Match[str]) -> str:
         alt, target = match.group(1), html.unescape(match.group(2))
-        url = sources.get(target)
-        if not url:
+        value = sources.get(target)
+        if not value:
             return ""  # see the note on dead sources in `to_html`
-        return f'<img src="{html.escape(url)}" alt="{alt}" style="max-width:100%"/>'
+        return render_image(alt, value)
 
     # The image pattern runs over the ESCAPED text so everything around it stays escaped.
     with_images = _IMAGE.sub(image, escaped)
-    return _BOLD.sub(r"<b>\1</b>", with_images)
+    return _BOLD.sub("<b>" + chr(92) + "1</b>", with_images)
