@@ -450,9 +450,9 @@
       "title": "Sẵn sàng tạo ca kiểm thử",
       "descLocal": "Chế độ cục bộ đang bật — các ca đã duyệt chỉ được ghi lại cục bộ. Không có gì được ghi lên nhà cung cấp.",
       "descProvider": "Các ca đã duyệt sẽ được tạo trong nhà cung cấp và liên kết tới từng hạng mục công việc trước khi tự động hóa được tạo.",
-      "localToggle": "Chế độ cục bộ — không tạo trong nhà cung cấp (tránh làm lộn xộn các mục kiểm thử)",
       "createLocally": "Tạo cục bộ",
-      "createAndLinkNow": "Tạo & liên kết ngay"
+      "createAndLinkNow": "Tạo & liên kết ngay",
+      "dryRun": "Chạy thử — không ghi gì lên hệ thống work item"
     },
     "starting": {
       "title": "Đang bắt đầu…",
@@ -478,7 +478,8 @@
       "providerNotTouched": "Nhà cung cấp không bị thay đổi",
       "linkedTo": "Đã liên kết với {{provider}}",
       "pending": "Đang chờ…"
-    }
+    },
+    "loading": "Đang kiểm tra trạng thái của run…"
   },
   "plan": {
     "title": "KẾ HOẠCH TỰ ĐỘNG HÓA",

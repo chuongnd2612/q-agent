@@ -138,7 +138,11 @@ export function ClaudeStatsButton() {
   const operational = stats?.operational ?? false;
   // Three-state health: down (no CLI) → red, warn (CLI up but the credential is
   // expired/invalid) → amber, ok → green. The old dot only reflected the binary.
-  const expired = credentialLooksExpired(hubData, hubCred, credStatus);
+  // An OBSERVED rejection outranks a stored status (#736): the hub reports its row
+  // "active"/"refreshable" because the row exists, which says nothing about whether the
+  // material still authenticates — so the dot stayed green while every call failed.
+  const rejected = stats?.credentialOk === false;
+  const expired = rejected || credentialLooksExpired(hubData, hubCred, credStatus);
   const health = !operational ? "down" : expired ? "warn" : "ok";
   const dotColor = health === "down" ? "#f43f5e" : health === "warn" ? "#f59e0b" : "#34d399";
   const healthTitle =
@@ -289,14 +293,23 @@ function StatsPanel({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const switching = setMode.isPending || uploadOwn.isPending;
   const effMeta = effectiveCredMeta(credStatus);
-  const expired = credentialLooksExpired(hubData, hubCred, credStatus);
+  const rejected = stats.credentialOk === false;
+  const expired = rejected || credentialLooksExpired(hubData, hubCred, credStatus);
   const accountName = effMeta?.accountEmail ?? null;
   const accountOrg = effMeta?.accountOrg ?? null;
   // Three-state health line (mirrors the chip dot): down / warn / ok.
   const health = !stats.operational ? "down" : expired ? "warn" : "ok";
   const healthColor = health === "down" ? "#f43f5e" : health === "warn" ? "#f59e0b" : "#34d399";
   const healthLabel =
-    health === "down" ? "Unavailable" : health === "warn" ? "Credential expired" : "Operational";
+    health === "down"
+      ? "Unavailable"
+      : health === "warn"
+        // "Rejected" rather than "expired" when we watched it happen: expiry is a guess
+        // from a timestamp, a rejection is what the CLI told us.
+        ? rejected
+          ? "Credential rejected"
+          : "Credential expired"
+        : "Operational";
 
   const runTest = () =>
     test.mutate(undefined, {
@@ -464,6 +477,31 @@ function StatsPanel({
           />
         </button>
       </div>
+
+      {/* What actually went wrong, when we watched it go wrong (#736). An amber dot
+          that does not say why leaves the user testing a credential the store already
+          reports as healthy — which is exactly the loop this closes. */}
+      {rejected && (
+        <div
+          className="mt-[14px] rounded-xl border border-[rgba(245,158,11,.28)] p-3"
+          style={{ background: "rgba(245,158,11,.08)" }}
+          data-testid="credential-rejected"
+        >
+          <div className="mb-1 text-[10px] font-bold tracking-[0.06em] text-warning-soft">
+            {t("credential.popover.rejectedTitle")}
+          </div>
+          <div className="text-[11.5px] leading-relaxed text-ink-soft">
+            {hubData
+              ? t("credential.popover.rejectedHubBody")
+              : t("credential.popover.rejectedLocalBody")}
+          </div>
+          {stats.credentialDetail && (
+            <div className="mt-1.5 line-clamp-2 font-mono text-[10.5px] text-faint">
+              {stats.credentialDetail}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Credential summary. With hub data on, EmeHub owns the credential: show
           what it resolved and drop the self-configuration controls — the

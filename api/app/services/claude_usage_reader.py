@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings as app_settings
-from app.services import model_catalog
+from app.services import claude_health, model_catalog
 from app.logging import logger
 from app.services.ai_usage_service import MODEL_LABELS, _current_model
 
@@ -478,10 +478,18 @@ def _compute() -> dict[str, Any]:
         reverse=True,
     )
 
+    _health = claude_health.status()
     return {
         "model": cur_model,
         "modelLabel": cur_label,
+        # `operational` is the BINARY's presence — `is_available()` says so itself
+        # ("does not verify auth"). `credentialOk` is the separate question the chip's
+        # dot was being read as answering (#736): did the credential work last time it
+        # was used. Kept separate rather than folded together, so "no CLI" and "CLI
+        # fine, credential rejected" stay distinguishable — they need different advice.
         "operational": claude_cli.is_available(),
+        "credentialOk": _health["ok"],
+        "credentialDetail": _health["detail"],
         "ctxWindow": cur_ctx,
         "session": _window_summary(session_models, session_requests, session_resets_at),
         "week": _window_summary(week_models, week_requests, week_resets_at),
@@ -514,6 +522,8 @@ def _compute_zero() -> dict[str, Any]:
         "model": cur_model,
         "modelLabel": label,
         "operational": False,
+        "credentialOk": True,
+        "credentialDetail": "",
         "ctxWindow": ctx,
         "session": {**zero, "resetsAt": _iso_z(now_local + _SESSION_WINDOW)},
         "week": {**zero, "resetsAt": week_resets},

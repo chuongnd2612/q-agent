@@ -505,6 +505,15 @@ def run_prompt(
         # activity log (#394).
         is_auth_failure = any(m in (out + err).lower() for m in _AUTH_ERROR_MARKERS)
         if is_auth_failure:
+            # The only authoritative signal that the credential is dead (#736). The
+            # local-row flag below is a no-op in hub-data mode — there IS no local row
+            # — which is exactly where the credential lives, so the chip kept reading
+            # "Operational" while every call was being rejected.
+            from app.services import claude_health
+
+            claude_health.record_auth_failure(
+                (out or err or "Claude rejected the credential").strip()[:300]
+            )
             _mark_credential_invalid(owner_id)
             from app.services import audit_service
 
@@ -534,6 +543,15 @@ def run_prompt(
         raise ClaudeError(f"Claude CLI exited {proc.returncode}: {detail}")
 
     activity.finish(call_id, ok=True)
+    # A call that returned means the credential authenticated — clears any outstanding
+    # failure without a probe (#736). The chip polls; asking the API would cost a Claude
+    # call per poll, and every real call already produces this answer for free.
+    try:
+        from app.services import claude_health
+
+        claude_health.record_success()
+    except Exception as exc:  # noqa: BLE001 - bookkeeping, never the work
+        logger.warning("Could not record Claude credential health: {}", exc)
     wall_ms = int((time.monotonic() - t0) * 1000)
     raw = stdout_text.strip()
     # JSON envelope: {"type":"result","result":"...","usage":{...},"total_cost_usd":...}

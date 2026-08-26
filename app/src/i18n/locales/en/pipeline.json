@@ -450,9 +450,9 @@
       "title": "Ready to create test cases",
       "descLocal": "Local mode is on — approved cases are recorded locally only. Nothing is written to the provider.",
       "descProvider": "Approved cases will be created in the provider and linked to each work item before automation is generated.",
-      "localToggle": "Local mode — don't create in the provider (avoid test-item clutter)",
       "createLocally": "Create locally",
-      "createAndLinkNow": "Create & link now"
+      "createAndLinkNow": "Create & link now",
+      "dryRun": "Dry run — nothing is written to the provider"
     },
     "starting": {
       "title": "Starting…",
@@ -478,7 +478,8 @@
       "providerNotTouched": "Provider not touched",
       "linkedTo": "Linked to {{provider}}",
       "pending": "Pending…"
-    }
+    },
+    "loading": "Checking where this run stands…"
   },
   "plan": {
     "title": "AUTOMATION PLAN",

@@ -1,5 +1,4 @@
-import { ArrowRight, Check, Link2, RefreshCw, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, Check, FlaskConical, Link2, RefreshCw, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
@@ -16,6 +15,7 @@ import {
   useGenerateAutomation,
   useLinkStatus,
   useRun,
+  useSettings,
   useTickets,
 } from "@/hooks/queries";
 import type { LinkTicketResult, ProviderKind } from "@/types/api";
@@ -31,19 +31,16 @@ export function CreateLinkSync() {
   const { data: run } = useRun(runId);
   const { data: ticketsPage } = useTickets({ pageSize: ALL_TICKETS_PAGE_SIZE });
   const tickets = ticketsPage?.items;
-  const { data: status } = useLinkStatus(runId);
+  const { data: status, isFetched: statusFetched } = useLinkStatus(runId);
   const createAndLink = useCreateAndLink(runId);
   const generateAutomation = useGenerateAutomation(runId);
 
-  // Local mode: create cases locally only, never write to the live provider.
-  // Persisted so the choice sticks across visits during local development.
-  const [localMode, setLocalMode] = useState(
-    () => localStorage.getItem("qagent.localCreateLink") === "1",
-  );
-  const toggleLocalMode = (on: boolean) => {
-    setLocalMode(on);
-    localStorage.setItem("qagent.localCreateLink", on ? "1" : "0");
-  };
+  // Dry run is a WORKSPACE setting now (#712), so this screen reflects it rather than
+  // keeping a second, per-browser copy of the same decision in localStorage. Two places
+  // to set one thing is how a user ends up writing to a real provider because they
+  // switched it off in the wrong one. The server enforces it either way.
+  const { data: settings } = useSettings();
+  const dryRun = settings?.dryRun ?? false;
 
   // Review fires the mutation and navigates here in the same tick, so this screen
   // renders while the request is still in flight and `linkStatus` still says "idle"
@@ -51,7 +48,17 @@ export function CreateLinkSync() {
   // lost click (#694). The mutation is keyed so it can be seen from here, where it
   // was started elsewhere.
   const starting = useIsMutating({ mutationKey: CREATE_LINK_MUTATION_KEY }) > 0;
-  const state = starting ? "running" : (status?.status ?? "idle");
+  // Until the status has actually been READ, there is no state to render (#737).
+  // `status?.status ?? "idle"` treated "not fetched yet" as "nothing has happened",
+  // so arriving from Review flashed the idle panel — checkbox, big Create button and
+  // all — before the real state replaced it a moment later. On a screen whose idle
+  // panel offers to write to a provider, showing it for work that is already done is
+  // worse than a beat of nothing.
+  const state = starting
+    ? "running"
+    : !statusFetched
+      ? "loading"
+      : (status?.status ?? "idle");
   const results = status?.results ?? [];
   const byTicket = new Map<string, LinkTicketResult>(results.map((r) => [r.ticketExternalId, r]));
 
@@ -89,6 +96,13 @@ export function CreateLinkSync() {
         <PipelineRail stage={2} />
       </div>
 
+      {state === "loading" && (
+        <div className="glass flex items-center justify-center gap-2.5 rounded-[22px] px-5 py-12">
+          <Spinner size={15} />
+          <span className="text-[13px] text-ink-dim">{t("createLink.loading")}</span>
+        </div>
+      )}
+
       {state === "idle" && (
         <div className="glass flex flex-col items-center rounded-[22px] px-5 py-10 text-center md:px-8 md:py-12">
           <div
@@ -99,26 +113,23 @@ export function CreateLinkSync() {
           </div>
           <h2 className="m-0 mb-2 text-xl font-extrabold">{t("createLink.idle.title")}</h2>
           <p className="m-0 mb-[18px] max-w-[400px] text-[13.5px] leading-relaxed text-ink-dim">
-            {localMode ? t("createLink.idle.descLocal") : t("createLink.idle.descProvider")}
+            {dryRun ? t("createLink.idle.descLocal") : t("createLink.idle.descProvider")}
           </p>
 
-          <label
-            className="mb-[18px] flex w-full cursor-pointer items-center gap-2.5 rounded-xl border px-[14px] py-2.5 md:w-auto"
-            style={{
-              background: localMode ? "rgba(139,92,246,.12)" : "rgba(255,255,255,.03)",
-              borderColor: localMode ? "rgba(139,92,246,.35)" : "rgba(255,255,255,.08)",
-            }}
-          >
-            <input
-              type="checkbox"
-              className="h-4 w-4 shrink-0 accent-violet"
-              checked={localMode}
-              onChange={(e) => toggleLocalMode(e.target.checked)}
-            />
-            <span className="text-[13px] font-semibold text-ink-soft">
-              {t("createLink.idle.localToggle")}
+          {/* The checkbox is gone (#737). Dry run is a workspace setting (#712), and a
+              second per-browser copy of the same decision is how someone writes to a
+              real provider because they switched it off in the other place. Shown as a
+              read-only chip so the mode is still visible where it matters. */}
+          {dryRun && (
+            <span
+              className="mb-[18px] flex items-center gap-2 rounded-full border border-[rgba(245,158,11,.3)] px-3 py-1.5 text-[11.5px] font-semibold text-warning-soft"
+              style={{ background: "rgba(245,158,11,.1)" }}
+              data-testid="sync-dry-run"
+            >
+              <FlaskConical size={13} strokeWidth={2.2} />
+              {t("createLink.idle.dryRun")}
             </span>
-          </label>
+          )}
 
           <Button
             variant="primary"
@@ -126,13 +137,15 @@ export function CreateLinkSync() {
             className="w-full md:w-auto"
             onClick={() =>
               createAndLink.mutate(
-                { link: !localMode, dryRun: localMode },
+                // The SETTING decides; the server enforces it and can only tighten
+                // what is asked for (#712), so this is what it is asking for.
+                { link: !dryRun, dryRun },
                 { onError: (e) => toast.error(e instanceof Error ? e.message : t("createLink.toast.createLinkFailed")) },
               )
             }
           >
             <Sparkles size={16} strokeWidth={2.2} />{" "}
-            {localMode ? t("createLink.idle.createLocally") : t("createLink.idle.createAndLinkNow")}
+            {dryRun ? t("createLink.idle.createLocally") : t("createLink.idle.createAndLinkNow")}
           </Button>
         </div>
       )}

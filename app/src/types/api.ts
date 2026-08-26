@@ -1188,6 +1188,15 @@ export interface ClaudeStats {
   model: string; // "claude-sonnet-5"
   modelLabel: string; // "Claude Sonnet 5"
   operational: boolean;
+  /** Did the credential authenticate on the LAST real Claude call? (#736)
+   *
+   * Separate from `operational`, which is only the CLI binary's presence — the two
+   * need different advice ("install the CLI" vs "reconnect the account"), and the chip
+   * reported Operational while every call was being rejected because it had no signal
+   * for the second. */
+  credentialOk: boolean;
+  /** Why the last call was rejected, for the popover. Empty when healthy. */
+  credentialDetail: string;
   ctxWindow: string; // "200K"
   session: UsageWindow; // current rolling session
   week: UsageWindow; // current rolling week
