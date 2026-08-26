@@ -129,9 +129,6 @@
     "title": "Review Center",
     "approveSelected": "Approve selected ({{count}})",
     "approveAll": "Approve all",
-    "createLocally": "Create locally",
-    "createLocallyHint": "Record approved cases locally only — nothing is written to the provider",
-    "createCases": "Create test cases",
     "createAndLink": "Create & link to ticket",
     "stat": {
       "approved": "Approved",
@@ -187,6 +184,9 @@
       "addStep": "Add step",
       "saveChanges": "Save changes",
       "cancel": "Cancel"
-    }
+    },
+    "dryRun": "Dry run",
+    "dryRunHint": "Dry run is on in Settings — test cases are recorded in Q-Agent and no work item is touched.",
+    "createAndLinkDry": "Create test cases (dry run)"
   }
 }

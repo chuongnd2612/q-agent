@@ -884,3 +884,97 @@ def test_the_preview_is_ownership_checked(client, db_session, monkeypatch):
     resp = client.get("/comments/424242/preview")
 
     assert resp.status_code == 404
+
+
+# ------------------------------------------------- dry run, enforced server-side (#712)
+#
+# Whether Q-Agent may write to a provider is a property of how the workspace is being
+# used — evaluating, demoing, testing against a live board — not a decision to re-make
+# on every click, which is what three near-identical "create" buttons were asking of
+# everyone. And it is enforced HERE, not in the client: a dry run that is only a UI
+# state is one forgotten request away from writing to a real work item, and the reason
+# someone turns it on is that they cannot afford that mistake.
+
+
+def test_publishing_under_dry_run_never_reaches_the_provider(client, db_session, monkeypatch):
+    from app.services import settings_store
+
+    _patch_adapter_and_claude(monkeypatch)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"dryRun": True})
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+
+    resp = client.post(f"/comments/{comment_id}/publish")
+
+    assert resp.status_code == 200
+    assert FakeAdapter.calls == [], "a dry run contacted the provider"
+    # Recorded as published so the pipeline still completes — the point is that nothing
+    # was written, not that the run gets stuck.
+    assert resp.json()["status"] == "published"
+    assert resp.json()["externalCommentId"] == "", "a dry run invented a provider id"
+
+
+def test_dry_run_also_skips_the_status_transition(client, db_session, monkeypatch):
+    """Transitioning the work item is a write like any other, and the easy one to
+    forget: it happens after the comment call, in the same try block."""
+    from app.services import settings_store
+
+    _patch_adapter_and_claude(monkeypatch)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"dryRun": True})
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+
+    client.post(f"/comments/{comment_id}/publish")
+
+    assert not any("status" in call for call in FakeAdapter.calls)
+
+
+def test_with_dry_run_off_publishing_still_reaches_the_provider(client, db_session, monkeypatch):
+    """The negative control that makes the two above mean something."""
+    from app.services import settings_store
+
+    _patch_adapter_and_claude(monkeypatch)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"dryRun": False})
+    _seed_report(db_session)
+    comment_id = next(
+        c for c in client.post("/runs/1/comments/prepare").json()
+        if c["ticketExternalId"] == "SUR-1"
+    )["id"]
+
+    client.post(f"/comments/{comment_id}/publish")
+
+    assert any(call.get("ticket") == "SUR-1" for call in FakeAdapter.calls)
+
+
+def test_the_setting_can_tighten_a_request_but_a_request_cannot_loosen_the_setting(
+    client, db_session, monkeypatch
+):
+    """A client that forgets the flag must not undo a dry run someone switched on to
+    protect a live board. That is exactly the failure a per-request flag invites."""
+    from app.services import link_service, settings_store
+
+    _patch_adapter_and_claude(monkeypatch)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"dryRun": True})
+    _seed_report(db_session)
+    from app.models.testcase import TestCase
+
+    db_session.add(
+        TestCase(run_id=1, ticket_external_id="SUR-1", code="TC-77", title="x", approval="approved")
+    )
+    db_session.commit()
+    captured: dict = {}
+    monkeypatch.setattr(
+        link_service,
+        "start_create_link",
+        lambda run_id, link, ticket_ids, dry_run: captured.update(dry_run=dry_run),
+    )
+
+    client.post("/runs/1/testcases/create-link", json={"link": True, "dryRun": False})
+
+    assert captured["dry_run"] is True, "the request overrode the workspace's dry run"

@@ -129,9 +129,6 @@
     "title": "Trung tâm đánh giá",
     "approveSelected": "Phê duyệt mục đã chọn ({{count}})",
     "approveAll": "Phê duyệt tất cả",
-    "createLocally": "Tạo cục bộ",
-    "createLocallyHint": "Chỉ ghi nhận các trường hợp đã phê duyệt tại chỗ — không ghi gì lên nhà cung cấp",
-    "createCases": "Tạo trường hợp kiểm thử",
     "createAndLink": "Tạo & liên kết với công việc",
     "stat": {
       "approved": "Đã phê duyệt",
@@ -187,6 +184,9 @@
       "addStep": "Thêm bước",
       "saveChanges": "Lưu thay đổi",
       "cancel": "Hủy"
-    }
+    },
+    "dryRun": "Chạy thử",
+    "dryRunHint": "Chế độ chạy thử đang bật trong Cài đặt — test case chỉ được lưu trong Q-Agent, không đụng tới work item nào.",
+    "createAndLinkDry": "Tạo test case (chạy thử)"
   }
 }

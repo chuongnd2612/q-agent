@@ -312,6 +312,17 @@ export function Settings() {
                   onChange={(v) => set({ screenshotOnFail: v })}
                 />
               )}
+              {/* One setting instead of three near-identical buttons on Review (#712).
+                  Whether Q-Agent may write to a provider is a property of how this
+                  workspace is being used, not a decision to re-make per click — and
+                  the consequence of choosing wrong at the moment of clicking is
+                  writing to a real work item. */}
+              <ToggleRow
+                title={t("execution.dryRun.title")}
+                description={t("execution.dryRun.description")}
+                checked={draft.dryRun}
+                onChange={(v) => set({ dryRun: v })}
+              />
               <ToggleRow
                 title={t("execution.autoAnnotate.title")}
                 description={t("execution.autoAnnotate.description")}

@@ -1064,6 +1064,9 @@ export interface SettingsOut {
   maxCasesPerTicket: number;
   headless: boolean;
   autoAnnotate: boolean;
+  /** Never write to a provider (#712): create+link and publish do their local work and
+   * touch no work item. Enforced server-side; the UI only reflects it. */
+  dryRun: boolean;
   neuralBackground: boolean;
   claudeModel: string;
   /** Per-action model overrides keyed by skill name (#175). Absent keys inherit
