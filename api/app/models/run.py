@@ -48,6 +48,23 @@ class Run(Base):
     retry_policy: Mapped[int] = mapped_column(Integer, default=2)  # retries on flaky
 
     status: Mapped[str] = mapped_column(String(32), default="processing", index=True)
+    # The project this run belongs to (#727, ADR 0015 slice 1), stamped at
+    # creation from the run's tickets — never derived on read.
+    #
+    # It used to be derived: ``_resolve_run_project_key()`` walked the run's
+    # *first* ticket to a project. ADR 0013 recorded why that is fragile — it is
+    # simply wrong for a run whose tickets span projects, and it makes
+    # project-scoped listing impossible, because you cannot filter a listing on a
+    # value you can only compute per row after loading it. A column read replaces
+    # the walk.
+    #
+    # Nullable for now: backfilled by the migration that adds it, and enforced
+    # non-null by the cleanup slice (#734's epic). NULL therefore means "a run
+    # whose project could not be resolved", not "no project" — the API surfaces
+    # those under the explicit ``unassigned`` bucket rather than hiding them.
+    project_guid: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True, default=None
+    )
     created_at: Mapped[datetime] = timestamp_column()
     # Lifecycle metadata (ADR 0005) — set exclusively via app.services.run_status.
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

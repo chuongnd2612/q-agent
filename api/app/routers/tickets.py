@@ -73,6 +73,7 @@ from app.services import (
     connection_service,
     hub_client,
     hub_workspace,
+    project_config_service,
     ticket_facets,
 )
 from app.services.adapters.base import ProviderError
@@ -366,6 +367,7 @@ def list_tickets(
     q: str | None = None,
     connection_id: int | None = Query(None, alias="connectionId"),
     provider_kind: str | None = Query(None, alias="providerKind"),
+    project: str | None = Query(None),
     priority: str | None = None,
     epic: str | None = None,
     page: int = 1,
@@ -393,6 +395,15 @@ def list_tickets(
         query = query.filter(Ticket.connection_id == connection_id)
     if provider_kind:
         query = query.filter(Ticket.provider_kind == provider_kind)
+    if project:
+        # Project containment (#727, ADR 0015): this tab is only reached through
+        # a project, so the scope is part of the query rather than something the
+        # UI filters after the fact. A project the caller cannot see yields an
+        # empty page — never an unfiltered one.
+        criterion = project_config_service.ticket_project_criterion(db, project, user)
+        if criterion is None:
+            return TicketPageOut(items=[], total=0, page=page, page_size=page_size)
+        query = query.filter(criterion)
 
     # Hub read-through. Scoping filters (owner / connection / provider) are already
     # applied above, so the hub path inherits them; the value filters below are

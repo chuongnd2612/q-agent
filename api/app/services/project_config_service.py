@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import crypto
@@ -517,6 +518,132 @@ def project_key_for_ticket(db: Session, ticket: Ticket) -> str | None:
     except ProviderError:
         connection = None
     return resolve_project_key(db, connection)
+
+
+def project_guid_for_key(db: Session, key: str, owner_id: int | None = None) -> str | None:
+    """Translate a project **key** (its name) into its GUID (#727).
+
+    The inverse of :func:`resolve_project_identifier`, which exists because the
+    G1 bridge for #585 left storage keyed by name while identity moved to the
+    GUID. Anything that wants to *store* a project reference — ``Run.project_guid``
+    — needs to travel in this direction.
+
+    Owner-scoped the same way ``get_config_visible_to`` is: the caller's own
+    project wins, then an unowned/shared row, never somebody else's. Matching on
+    the name is case-insensitive because :func:`resolve_project_key` is, so a
+    config keyed ``"surency"`` still finds the project named ``"Surency"``.
+
+    Returns None when no project matches — a legitimate outcome for an install
+    whose project is only *indexed* (a ``ProjectKnowledge`` row with no
+    ``projects`` row behind it), which is why callers treat it as "unresolved"
+    rather than an error.
+    """
+    if not key:
+        return None
+    if looks_like_guid(key):
+        return key
+    # The config row records the GUID explicitly when it has one; prefer it over
+    # a name match, since it is a stored link rather than a comparison.
+    cfg = db.query(ProjectConfig).filter(
+        ProjectConfig.key == key, ProjectConfig.project_guid.isnot(None)
+    )
+    if owner_id is not None:
+        cfg = cfg.filter(
+            (ProjectConfig.owner_id == owner_id) | (ProjectConfig.owner_id.is_(None))
+        )
+    row = cfg.first()
+    if row is not None:
+        return row.project_guid
+    query = db.query(Project).filter(func.lower(Project.name) == key.lower())
+    if owner_id is not None:
+        query = query.filter((Project.owner_id == owner_id) | (Project.owner_id.is_(None)))
+    # Own rows before shared/legacy ones, so a second user with a same-named
+    # project resolves to theirs rather than whichever row was inserted first.
+    projects = query.all()
+    if not projects:
+        return None
+    projects.sort(key=lambda p: (p.owner_id is None, p.id))
+    return projects[0].guid
+
+
+def project_guid_for_ticket(db: Session, ticket: Ticket) -> str | None:
+    """Resolve the project GUID a ticket belongs to (#727).
+
+    Same walk as :func:`project_key_for_ticket`, one step further: connection →
+    project key → GUID. Best-effort, never raises.
+    """
+    key = project_key_for_ticket(db, ticket)
+    if not key:
+        return None
+    return project_guid_for_key(db, key, owner_id=ticket.owner_id)
+
+
+# The listing value for "a row whose project could not be resolved" (#727),
+# mirrored by ``app.routers.runs.UNASSIGNED_PROJECT``.
+UNASSIGNED_PROJECT = "unassigned"
+
+
+def ticket_project_criterion(db: Session, project: str, user: "User | None"):
+    """A SQLAlchemy filter narrowing tickets to one project (#727).
+
+    ``Ticket.project_id`` is a nullable bare integer, so every ticket synced
+    before project stamping is NULL. Under ADR 0015 containment those rows would
+    belong to no project and **appear nowhere** — the tickets tab is only ever
+    reached through a project. So the criterion is two-legged:
+
+    1. the stamped ``project_id``, and
+    2. an un-stamped ticket whose ``connection_id`` is the project's configured
+       work-item connection (ADR 0006) — the same link
+       :func:`resolve_project_key` reads, applied as a query filter instead of
+       row-by-row.
+
+    ``project == "unassigned"`` inverts it: un-stamped tickets that no project's
+    work-item connection claims. That bucket is deliberately reachable, so a
+    legacy ticket is *visibly* unassigned rather than silently gone.
+
+    Returns None when ``project`` names nothing the caller can see, which callers
+    translate into an empty page rather than an unfiltered one — a mistyped GUID
+    must not fall back to "every project".
+    """
+    if project == UNASSIGNED_PROJECT:
+        claimed = [
+            cid
+            for (cid,) in db.query(ProjectConfig.work_item_connection_id)
+            .filter(ProjectConfig.work_item_connection_id.isnot(None))
+            .distinct()
+            .all()
+        ]
+        criterion = Ticket.project_id.is_(None)
+        if claimed:
+            criterion = criterion & (
+                Ticket.connection_id.is_(None) | Ticket.connection_id.notin_(claimed)
+            )
+        return criterion
+
+    query = db.query(Project).filter(Project.guid == project)
+    if user is not None:
+        query = query.filter((Project.owner_id == user.id) | (Project.owner_id.is_(None)))
+    row = query.first()
+    if row is None:
+        return None
+
+    connection_ids = [
+        cid
+        for (cid,) in db.query(ProjectConfig.work_item_connection_id)
+        .filter(
+            (ProjectConfig.project_guid == project)
+            | (func.lower(ProjectConfig.key) == row.name.lower()),
+            ProjectConfig.work_item_connection_id.isnot(None),
+        )
+        .distinct()
+        .all()
+    ]
+    criterion = Ticket.project_id == row.id
+    if connection_ids:
+        criterion = criterion | (
+            Ticket.project_id.is_(None) & Ticket.connection_id.in_(connection_ids)
+        )
+    return criterion
 
 
 def repo_options(db: Session, project_key: str) -> list[dict[str, Any]]:

@@ -801,7 +801,12 @@ export const api = {
     post<{ deleted: number }>("/tickets/delete", { externalIds }),
 
   // runs
-  listRuns: () => get<RunOut[]>("/runs"),
+  /** Runs, optionally narrowed to one project (#727). Pass the project's GUID,
+   * or the literal `"unassigned"` for runs whose project could not be resolved.
+   * Omitted, the list is workspace-wide — which the Dashboard still needs for
+   * the cross-project "running now" question (#733). */
+  listRuns: (project?: string) =>
+    get<RunOut[]>("/runs" + (project ? `?project=${encodeURIComponent(project)}` : "")),
   // The three run-start calls accept an optional hub token so the backend can
   // resolve the Claude credential from EmeHub (#499/#505). Omitted -> resolved
   // locally, exactly as before.
@@ -1024,7 +1029,10 @@ export const api = {
     post<ReportOut>(`/runs/${runId}/report`),
   getReport: (runId: number | string) =>
     get<ReportOut>(`/runs/${runId}/report`),
-  listReports: () => get<ReportOut[]>("/reports"),
+  /** Reports, optionally narrowed to one project (#727) — reports inherit their
+   * run's stamped project. */
+  listReports: (project?: string) =>
+    get<ReportOut[]>("/reports" + (project ? `?project=${encodeURIComponent(project)}` : "")),
 
   // comments / publish
   prepareComments: (runId: number | string, hubToken: string | null = null) =>

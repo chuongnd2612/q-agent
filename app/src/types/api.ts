@@ -511,6 +511,11 @@ export interface TicketFilters {
   /** Scope the list to a single work-item connection (ADR 0006). */
   connectionId?: number;
   providerKind?: ProviderKind;
+  /** Scope the list to a single project (#727) — its GUID, or the literal
+   * `"unassigned"` for tickets no project's ticket-source connection claims.
+   * Under ADR 0015 containment this is how the project's Tickets tab is served;
+   * an unknown GUID returns an empty page, never an unfiltered one. */
+  project?: string;
   priority?: string;
   /** Jira epic key. */
   epic?: string;
@@ -683,6 +688,10 @@ export interface RunOut {
   finishedAt?: string;
   cancelledAt?: string;
   failedStage?: string;
+  /** The project this run belongs to (#727), stamped server-side at creation.
+   * `null` only for legacy rows whose project could not be resolved — those are
+   * reachable via `?project=unassigned`. */
+  projectGuid: string | null;
   ticketIds: string[];
   /** Number of test cases in the run. */
   caseCount: number;

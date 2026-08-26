@@ -942,6 +942,10 @@ class RunOut(ApiModel):
     finished_at: datetime | None = None
     cancelled_at: datetime | None = None
     failed_stage: str | None = None
+    # The project this run belongs to (#727). Stamped at creation; NULL only for
+    # legacy rows whose project could not be resolved, which the UI shows under
+    # the "unassigned" bucket rather than hiding.
+    project_guid: str | None = None
     ticket_ids: list[str] = Field(default_factory=list)
     # Aggregates for the runs list (attached in the router; default 0/None so
     # mutation responses that don't compute them still serialize).

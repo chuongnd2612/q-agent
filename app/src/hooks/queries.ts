@@ -697,8 +697,13 @@ export const useDeleteTickets = () => {
 };
 
 // -------------------------------------------------------------- runs
-export const useRuns = () =>
-  useQuery({ queryKey: queryKeys.runs, queryFn: api.listRuns });
+/** Runs, workspace-wide by default or narrowed to one project (#727).
+ *
+ * ADR 0015 reaches every run list through a project, but the Dashboard's
+ * "running now" is inherently cross-project (#733) — hence the optional arg
+ * rather than a required one. */
+export const useRuns = (project?: string) =>
+  useQuery({ queryKey: queryKeys.runs(project), queryFn: () => api.listRuns(project) });
 
 // Statuses where the backend is actively advancing the run (not waiting on the
 // user and not terminal). The run WebSocket drives refreshes, but its events are
@@ -740,7 +745,7 @@ export const useCreateRun = () => {
     mutationFn: async (body: RunCreate) =>
       api.createRun(body, await hubTokenForRead()),
     onSuccess: (run) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.setQueryData(queryKeys.run(run.id), run);
     },
   });
@@ -754,7 +759,7 @@ export const useEnsureSampleRun = () => {
   return useMutation({
     mutationFn: () => api.createSampleRun(),
     onSuccess: (run) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.setQueryData(queryKeys.run(run.id), run);
     },
   });
@@ -773,7 +778,7 @@ export const useCancelRun = () => {
   return useMutation({
     mutationFn: (runId: number | string) => api.cancelRun(runId),
     onSuccess: (run) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.invalidateQueries({ queryKey: queryKeys.run(run.id) });
     },
   });
@@ -784,7 +789,7 @@ export const useStopRun = () => {
   return useMutation({
     mutationFn: (runId: number | string) => api.stopRun(runId),
     onSuccess: (run) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.invalidateQueries({ queryKey: queryKeys.run(run.id) });
       qc.invalidateQueries({ queryKey: queryKeys.specs(run.id) });
       qc.invalidateQueries({ queryKey: queryKeys.execution(run.id) });
@@ -798,7 +803,7 @@ export const useRetryRun = () => {
     mutationFn: async (runId: number | string) =>
       api.retryRun(runId, await hubTokenForRead()),
     onSuccess: (run) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.invalidateQueries({ queryKey: queryKeys.run(run.id) });
     },
   });
@@ -809,7 +814,7 @@ export const useDeleteRun = () => {
   return useMutation({
     mutationFn: (runId: number | string) => api.deleteRun(runId),
     onSuccess: (_data, runId) => {
-      qc.invalidateQueries({ queryKey: queryKeys.runs });
+      qc.invalidateQueries({ queryKey: queryKeys.runsAll });
       qc.invalidateQueries({ queryKey: queryKeys.run(runId) });
     },
   });
@@ -1287,8 +1292,8 @@ export const useReport = (runId: number | string | null) =>
     retry: false,
   });
 
-export const useReports = () =>
-  useQuery({ queryKey: queryKeys.reports, queryFn: api.listReports });
+export const useReports = (project?: string) =>
+  useQuery({ queryKey: queryKeys.reports(project), queryFn: () => api.listReports(project) });
 
 // -------------------------------------------------------------- audit log
 export const useAuditEvents = (filters: {
