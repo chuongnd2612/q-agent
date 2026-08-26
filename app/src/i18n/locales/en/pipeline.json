@@ -4,6 +4,11 @@
     "approvedCasesOnly": "approved cases only",
     "generateNew": "Generate new ({{count}})",
     "regenerateAll": "Regenerate all",
+    "runSuite": {
+      "label": "Run tests",
+      "description": "Execute the approved suite in parallel across the Run",
+      "noneRunnable": "Nothing to execute yet — every approved case is blocked or a product defect"
+    },
     "copy": "Copy",
     "copied": "Copied!",
     "codeCopied": "Code copied to clipboard",
@@ -53,7 +58,6 @@
     "saving": "Saving…",
     "cancel": "Cancel",
     "regenerate": "Regenerate",
-    "runTests": "Run tests",
     "run": {
       "label": "Run",
       "running": "Running…",
@@ -91,9 +95,6 @@
     "notGenerated": {
       "title": "No code yet",
       "hint": "This test case has a spec row, but generation hasn't produced any code for it yet. Use Regenerate to have Q-Agent author it."
-    },
-    "footer": {
-      "description": "Execute the approved suite in parallel across the Run"
     },
     "code": {
       "expandRegion": "Expand region",

@@ -4,6 +4,11 @@
     "approvedCasesOnly": "chỉ các trường hợp đã duyệt",
     "generateNew": "Tạo mới ({{count}})",
     "regenerateAll": "Tạo lại tất cả",
+    "runSuite": {
+      "label": "Chạy kiểm thử",
+      "description": "Thực thi bộ kiểm thử đã duyệt song song trên toàn bộ lần Chạy",
+      "noneRunnable": "Chưa có gì để thực thi — mọi trường hợp đã duyệt đều đang bị chặn hoặc là lỗi sản phẩm"
+    },
     "copy": "Sao chép",
     "copied": "Đã sao chép!",
     "codeCopied": "Đã sao chép mã vào bộ nhớ tạm",
@@ -53,7 +58,6 @@
     "saving": "Đang lưu…",
     "cancel": "Hủy",
     "regenerate": "Tạo lại",
-    "runTests": "Chạy kiểm thử",
     "run": {
       "label": "Chạy",
       "running": "Đang chạy…",
@@ -91,9 +95,6 @@
     "notGenerated": {
       "title": "Chưa có mã nguồn",
       "hint": "Trường hợp kiểm thử này đã có spec, nhưng quá trình tạo chưa sinh ra mã nguồn nào. Dùng Tạo lại để Q-Agent viết nó."
-    },
-    "footer": {
-      "description": "Thực thi bộ kiểm thử đã duyệt song song trên toàn bộ lần Chạy"
     },
     "code": {
       "expandRegion": "Mở rộng vùng",
