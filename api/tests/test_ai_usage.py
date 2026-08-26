@@ -75,7 +75,9 @@ def test_read_stats_new_shape(workspace_dir, tmp_path, monkeypatch):
     # Operator-selected model (default "claude-sonnet-5") drives model/label/ctx.
     assert s["model"] == "claude-sonnet-5"
     assert s["modelLabel"] == "Claude Sonnet 5"
-    assert s["ctxWindow"] == "200K"
+    # Sonnet 5's context window is 1M, not 200K (#715) — this asserted the wrong
+    # number, which is how the chip reported "200K ctx" for a 1M model unchallenged.
+    assert s["ctxWindow"] == "1M"
     assert s["operational"] is True
 
     # tokens = input+output+cacheRead+cacheWrite across all models in the window.

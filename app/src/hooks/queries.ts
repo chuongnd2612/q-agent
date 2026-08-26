@@ -16,6 +16,7 @@ import {
   mintHubDataToken,
   type HubSsoConfig,
 } from "@/lib/hubSso";
+import { FALLBACK_MODEL_OPTIONS } from "@/lib/models";
 import { queryKeys } from "@/lib/queryKeys";
 import type {
   AnnotationShape,
@@ -224,6 +225,20 @@ export const useConnectionRepos = (id: number | null, enabled: boolean) =>
     enabled: id != null && enabled,
     staleTime: 60_000,
   });
+
+/** The offered Claude models (#715). Deployment configuration, so it is cached for the
+ * session; falls back to a short static list so an unreachable API shows a usable
+ * dropdown rather than an empty one that reads as "no models exist". */
+export const useAiModels = () => {
+  const { data } = useQuery({
+    queryKey: ["ai", "models"] as const,
+    queryFn: () => api.aiModels(),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  });
+  return data?.length ? data : FALLBACK_MODEL_OPTIONS;
+};
 
 export const useSettings = () =>
   useQuery({ queryKey: queryKeys.settings, queryFn: api.getSettings });

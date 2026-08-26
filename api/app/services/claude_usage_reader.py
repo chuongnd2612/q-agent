@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings as app_settings
+from app.services import model_catalog
 from app.logging import logger
 from app.services.ai_usage_service import MODEL_LABELS, _current_model
 
@@ -40,11 +41,11 @@ from app.services.ai_usage_service import MODEL_LABELS, _current_model
 # default). Sonnet uses the standard (non-introductory) list price. Models absent
 # from this table contribute 0 to cost (we don't guess prices).
 _MTOK = 1_000_000
-_PRICES: dict[str, dict[str, float]] = {
-    "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cacheRead": 0.5, "cacheWrite": 6.25},
-    "claude-sonnet-5": {"input": 3.0, "output": 15.0, "cacheRead": 0.3, "cacheWrite": 3.75},
-    "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0, "cacheRead": 0.1, "cacheWrite": 1.25},
-}
+# From `model_catalog`, the single source of truth (#715). This used to be a second
+# hardcoded table: Sonnet 5 was priced at $3/$15 instead of $2/$10, so every Sonnet cost
+# the product displayed was overstated by half, and Opus 5 was missing entirely — which,
+# by the "absent contributes 0" rule below, reported the current flagship as free.
+_PRICES: dict[str, dict[str, float]] = model_catalog.prices()
 
 _SESSION_WINDOW = timedelta(hours=5)
 _CACHE_TTL_S = 60.0

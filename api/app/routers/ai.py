@@ -28,6 +28,21 @@ from app.services.claude_credentials import upsert_own, upsert_shared
 router = APIRouter(tags=["ai"])
 
 
+@router.get("/ai/models")
+def ai_models() -> list[dict[str, str]]:
+    """The Claude models this deployment offers, for the model dropdowns (#715).
+
+    Served rather than hardcoded in the SPA so there is ONE catalog. The SPA used to
+    carry its own copy, and a third table meant a third way to be wrong: it offered a
+    date-suffixed Haiku id and no Opus 5, while the backend priced Sonnet 5 at $3/$15
+    instead of $2/$10. A list that disagrees with what the server bills for is worse
+    than no list.
+    """
+    from app.services import model_catalog
+
+    return model_catalog.options()
+
+
 @router.get("/ai/activity")
 def ai_activity() -> dict:
     """Currently-running + recent Claude CLI calls (see also WS /ws/ai)."""
