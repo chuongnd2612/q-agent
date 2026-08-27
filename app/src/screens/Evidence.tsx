@@ -17,7 +17,6 @@ import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/misc";
-import { PipelineRail } from "@/components/ui/PipelineRail";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -124,10 +123,6 @@ export function Evidence() {
           {tr("evidence.subtitle", { runId })}
         </div>
         <h1 className="m-0 text-[28px] font-black tracking-tight">{tr("evidence.title")}</h1>
-      </div>
-
-      <div className="mb-4 hidden md:block">
-        <PipelineRail stage={5} />
       </div>
 
       {evidenceUploading && (

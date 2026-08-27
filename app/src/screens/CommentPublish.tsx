@@ -6,7 +6,6 @@ import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
-import { isRunComplete, PipelineRail } from "@/components/ui/PipelineRail";
 import { Pill, providerGlyph } from "@/components/ui/badges";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useParams } from "react-router-dom";
@@ -71,12 +70,6 @@ export function CommentPublish() {
             )}
           </Button>
         </div>
-      </div>
-
-      <div className="mb-4 hidden md:block">
-        {/* `complete` so a published run ticks Publish rather than showing it as
-            still in progress (#724) — this is the screen where that lands. */}
-        <PipelineRail stage={6} complete={isRunComplete(run?.status)} />
       </div>
 
       {isLoading ? (

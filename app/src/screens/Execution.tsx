@@ -14,7 +14,6 @@ import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
 import { Pill, execStyle, productDefectStyle } from "@/components/ui/badges";
 import { ProgressRing, Spinner } from "@/components/ui/misc";
-import { PipelineRail } from "@/components/ui/PipelineRail";
 import { ApiError } from "@/lib/api";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useRunPath } from "@/hooks/useRunRouteId";
@@ -194,10 +193,6 @@ export function Execution() {
           </div>
         </div>
       )}
-
-      <div className="mb-3.5 hidden md:block">
-        <PipelineRail stage={4} />
-      </div>
 
       {/* Only the prerequisite this screen's action needs (#643) — listing the
           authoring blockers here too would make both screens look broken. */}
