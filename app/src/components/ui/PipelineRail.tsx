@@ -10,8 +10,12 @@ import { cn } from "@/lib/cn";
 // (see runStatusToStage). The `processing`/"Analyze" status is the automatic
 // lead-in to Review and is NOT a user step, so it is not a stage here (it maps to
 // stage 1 = Review as the current target). Sync & Select are pre-run setup
-// (global Tickets + Create-Run flow) and are likewise not stages. Keep this list,
-// the sidebar's navConfig.PIPELINE, and MobileStepperRail in sync.
+// (the Create-Run flow) and are likewise not stages.
+//
+// SUPERSEDED by `components/runs/runStages.ts` (#730/#734): the run overlay's
+// five-stage stepper is the single progress indicator, and the per-stage rails
+// that used this were removed as duplicate chrome. The last caller is
+// `CreateLinkSync`, whose fate belongs to #732 — delete this with it.
 const STAGES = ["Review", "Link", "Automate", "Execute", "Evidence", "Publish"] as const;
 
 /** Total number of per-run pipeline stages (for "stage N of {total}"). */

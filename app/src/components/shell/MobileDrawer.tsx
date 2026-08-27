@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, LogOut, Sparkles, User, UserRound, X } from "lucide-react";
+import { LogOut, Sparkles, User, UserRound, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -12,21 +12,21 @@ import {
   type NavItem,
 } from "@/components/shell/navConfig";
 import { SidebarProjectTree } from "@/components/shell/SidebarProjectTree";
-import { runColor, runEffectiveStatus, runRateLabel } from "@/components/dashboard/runStatus";
-import { useHubDataEnabled, useRun } from "@/hooks/queries";
-import { useRunRouteId } from "@/hooks/useRunRouteId";
+import { useHubDataEnabled } from "@/hooks/queries";
 import { useLogout } from "@/hooks/useLogout";
 import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
 
 /**
- * The left slide-in navigation drawer — the mobile replacement for both desktop
- * sidebars (`GlobalSidebar` / `RunSidebar`). It always presents the global
- * WORKSPACE nav (and the ADMIN group for admins); inside a run it additionally
- * shows a run-context card + "All of Q-Agent" exit at the top (in-run stage
- * navigation itself lives in the horizontal stepper rail). Navigation is still
- * URL-driven — this is a responsive presentation of the same routes, opened via
- * `ui.drawerOpen`. See MOBILE_SPEC §1b.
+ * The left slide-in navigation drawer — the mobile presentation of the desktop
+ * `GlobalSidebar`. It presents the WORKSPACE nav, the project tree (#729) and
+ * the ADMIN group for admins.
+ *
+ * There is no in-run mode any more (#734): a run is a full-screen overlay with
+ * its own stepper, so the drawer no longer carries a run-context card or an
+ * "All of Q-Agent" exit. Navigation is still URL-driven — this is a responsive
+ * presentation of the same routes, opened via `ui.drawerOpen`. See MOBILE_SPEC
+ * §1b.
  */
 export function MobileDrawer() {
   const open = useUI((s) => s.drawerOpen);
@@ -34,8 +34,6 @@ export function MobileDrawer() {
   const navigate = useNavigate();
   const { t } = useTranslation("nav");
   const { pathname } = useLocation();
-  const runId = useRunRouteId();
-  const { data: run } = useRun(runId ?? null);
   const user = useAuth((s) => s.user);
   const isAdmin = user?.role === "admin";
   // The ADMIN section is Q-Agent administering ITSELF — users, the Claude
@@ -50,7 +48,6 @@ export function MobileDrawer() {
   const showAdmin = isAdmin && hubResolved && !hubManaged;
   const logout = useLogout();
 
-  const inRun = runId != null;
   const displayName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "";
   const initials = user
     ? `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase()
@@ -136,55 +133,6 @@ export function MobileDrawer() {
               </button>
             </div>
 
-            {/* In-run context card + exit */}
-            {inRun && (
-              <div className="mb-4">
-                <div
-                  className="mb-2 rounded-[13px] p-3"
-                  style={{
-                    background: "linear-gradient(135deg,rgba(139,92,246,.18),rgba(99,102,241,.08))",
-                    border: "1px solid rgba(139,92,246,.3)",
-                  }}
-                >
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <span className="font-mono text-[10.5px] font-bold text-[#c4b5fd]">
-                      {run?.code ?? `RUN-${runId}`}
-                    </span>
-                    {run && (
-                      <span
-                        className="rounded-full px-2 py-0.5 text-[9.5px] font-bold"
-                        style={{
-                          background: `${runColor(runEffectiveStatus(run))}2e`,
-                          color: runColor(runEffectiveStatus(run)),
-                        }}
-                      >
-                        {runRateLabel(runEffectiveStatus(run))}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[13px] font-extrabold leading-[1.25] tracking-tight">
-                    {run?.name ?? t("run.loading")}
-                  </div>
-                  {run && (
-                    <div className="mt-[5px] text-[10px] text-[#b9a8e6]">
-                      {t("run.meta", {
-                        count: run.ticketIds.length,
-                        framework: run.framework,
-                        env: run.env,
-                      })}
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={() => go("/")}
-                  className="flex w-full items-center gap-2 rounded-[10px] border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-ink-dim active:bg-white/[0.08]"
-                >
-                  <ArrowLeft size={14} strokeWidth={2} />
-                  {t("run.back")}
-                </button>
-              </div>
-            )}
-
             {/* Nav groups */}
             <div className="px-1 pb-2 text-[10px] font-semibold tracking-[0.11em] text-[#5c5c6e]">
               {t("sections.workspace")}
@@ -198,7 +146,7 @@ export function MobileDrawer() {
               {SECONDARY_NAV.map(renderItem)}
             </nav>
 
-            {showAdmin && !inRun && (
+            {showAdmin && (
               <>
                 <div className="flex items-center gap-2 px-1 pb-2 pt-4">
                   <span className="text-[10px] font-semibold tracking-[0.11em] text-[#5c5c6e]">{t("sections.admin")}</span>

@@ -2,7 +2,7 @@
  * Getting Started / User Guide — a comprehensive in-app manual for Q-Agent.
  *
  * A single scrollable page of GlassCard sections that explains what Q-Agent is,
- * its core concepts, the 8-stage run pipeline (mirroring RunSidebar's PIPELINE),
+ * its core concepts, the run pipeline (the overlay's stage model, `components/runs/runStages.ts`),
  * a first-run walkthrough, provider/credential setup, and a short FAQ. The hero
  * offers two CTAs: launch the interactive product tour, or seed + open a live
  * sample run to explore hands-on.
@@ -51,7 +51,7 @@ const CONCEPTS: Concept[] = [
   { icon: Library, key: "knowledgeBases" },
 ];
 
-/** One stage of the run pipeline — mirrors RunSidebar's PIPELINE order/labels.
+/** One stage of the run pipeline — mirrors `runStages.RUN_STAGES` order/labels.
  * `key` indexes into the `gettingStarted.pipeline.*` i18n subtree. */
 interface Stage {
   icon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;

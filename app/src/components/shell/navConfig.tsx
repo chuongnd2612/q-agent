@@ -1,5 +1,4 @@
 import {
-  BarChart3,
   Boxes,
   FolderKanban,
   GraduationCap,
@@ -7,19 +6,22 @@ import {
   Laptop,
   Settings,
   ShieldCheck,
-  SquareStack,
-  Ticket,
   Users,
   type LucideProps,
 } from "lucide-react";
 import { type ComponentType } from "react";
 
 /**
- * Shared navigation definitions for the app shell. The desktop `GlobalSidebar`,
- * the desktop `RunSidebar`, and the mobile `MobileDrawer` all render the SAME
- * routes — this module is the single source of truth for the nav groups so the
- * three presentations can never drift. (Extracted from GlobalSidebar/RunSidebar
- * when the mobile drawer was added.)
+ * Shared navigation definitions for the app shell. The desktop `GlobalSidebar`
+ * and the mobile `MobileDrawer` render the SAME routes — this module is the
+ * single source of truth for the nav groups so the two presentations can never
+ * drift.
+ *
+ * There is no in-run branch any more (#734). The sidebar used to swap into a
+ * "run workspace" mode, so this module also carried the pipeline-as-navigation
+ * (`PIPELINE`) and a pinned global mini-row (`GLOBAL_MINI`) for getting back
+ * out of it. A run is now a full-screen overlay with its own stepper
+ * (`components/runs/runStages.ts`), so both are gone along with the mode.
  */
 export interface NavItem {
   path: string;
@@ -118,28 +120,3 @@ export function activeNavPath(items: NavItem[], pathname: string): string | null
     { path: null, len: -1 },
   ).path;
 }
-
-/** The 6 user-facing per-run pipeline stages as the run's navigation. `stage` is
- * the 1-based index (see `runStatusToStage`) used for done/current styling; `seg`
- * is the run sub-route this step opens. Analyze (status "processing") is the
- * automatic lead-in to Review and has no sub-route, so it is not a stage/nav entry
- * here — the top rail folds it into stage 1 (Review). Sync & Select are pre-run
- * setup (Tickets + Create-Run flow). Keep in sync with PipelineRail.STAGES +
- * MobileStepperRail. */
-export const PIPELINE: { label: string; key: string; stage: number; seg: string | null }[] = [
-  { label: "Review", key: "review", stage: 1, seg: "review" },
-  { label: "Link", key: "link", stage: 2, seg: "sync" },
-  { label: "Automation", key: "automation", stage: 3, seg: "automation" },
-  { label: "Execution", key: "execution", stage: 4, seg: "execution" },
-  { label: "Evidence", key: "evidence", stage: 5, seg: "evidence" },
-  { label: "Publish", key: "publish", stage: 6, seg: "comment" },
-];
-
-/** Pinned global mini-row shown at the foot of the run workspace nav. */
-export const GLOBAL_MINI: NavItem[] = [
-  { path: "/", label: "Dashboard", key: "dashboard", icon: LayoutDashboard },
-  { path: "/tickets", label: "Tickets", key: "tickets", icon: Ticket },
-  { path: "/runs", label: "Runs", key: "runs", icon: SquareStack },
-  { path: "/reports", label: "Reports", key: "reports", icon: BarChart3 },
-  { path: "/settings", label: "Settings", key: "settings", icon: Settings },
-];

@@ -1,14 +1,12 @@
 import { motion } from "framer-motion";
 import { Outlet, useLocation } from "react-router-dom";
-import { Sidebar } from "@/components/shell/Sidebar";
+import { GlobalSidebar } from "@/components/shell/GlobalSidebar";
 import { TopBar } from "@/components/shell/TopBar";
 import { MobileTopBar } from "@/components/shell/MobileTopBar";
-import { MobileStepperRail } from "@/components/shell/MobileStepperRail";
 import { MobileDrawer } from "@/components/shell/MobileDrawer";
 import { CursorLight } from "@/components/effects/CursorLight";
 import { ClickRipples } from "@/components/effects/ClickRipples";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useRunRouteId } from "@/hooks/useRunRouteId";
 
 /**
  * One keyed fade-in per route. No AnimatePresence/exit + `mode="wait"`: that ran
@@ -34,19 +32,22 @@ function RouteContent() {
 
 /**
  * The persistent frame. On desktop (`md` and up): sidebar + top bar + scrollable
- * content. Below `md` the two sidebars collapse into a slide-in drawer and the
- * desktop chrome is replaced by the compact mobile top bar (+ an in-run stepper
- * rail), all inside a single 480px-capped column. See MOBILE_SPEC §2.
+ * content. Below `md` the sidebar collapses into a slide-in drawer and the
+ * desktop chrome is replaced by the compact mobile top bar, all inside a single
+ * 480px-capped column. See MOBILE_SPEC §2.
+ *
+ * There is ONE sidebar now (ADR 0015): the shell no longer swaps into a "run
+ * workspace" mode, because a run is a full-screen overlay portalled over this
+ * frame rather than a screen inside it. The `Sidebar` brancher, `RunSidebar` and
+ * the in-run `MobileStepperRail` are gone with it (#734).
  */
 export function AppLayout() {
   const isMobile = useIsMobile();
-  const runId = useRunRouteId();
 
   if (isMobile) {
     return (
       <div className="relative z-[2] mx-auto flex h-[100dvh] w-full max-w-[480px] flex-col gap-2 p-2">
         <MobileTopBar />
-        {runId != null && <MobileStepperRail runId={runId} />}
         <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-[16px]">
           <RouteContent />
         </main>
@@ -57,7 +58,7 @@ export function AppLayout() {
 
   return (
     <div className="relative z-[2] flex h-screen w-screen gap-3.5 p-3.5">
-      <Sidebar />
+      <GlobalSidebar />
       <div className="flex min-w-0 flex-1 flex-col gap-3.5">
         <TopBar />
         <main className="min-h-0 flex-1 overflow-y-auto rounded-[20px]">

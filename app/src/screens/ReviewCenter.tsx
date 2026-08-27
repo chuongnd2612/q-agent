@@ -4,7 +4,6 @@ import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { PipelineRail } from "@/components/ui/PipelineRail";
 import { approvalStyle, Pill, priorityBg, priorityColor } from "@/components/ui/badges";
 import { Select } from "@/components/ui/Dropdown";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
@@ -145,10 +144,6 @@ export function ReviewCenter() {
             </svg>
           </Button>
         </div>
-      </div>
-
-      <div className="mb-3.5 hidden md:block">
-        <PipelineRail stage={1} />
       </div>
 
       <div className="mb-4 grid grid-cols-3 gap-3 md:grid-cols-4">

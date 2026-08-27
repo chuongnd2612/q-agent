@@ -1,23 +1,11 @@
-import { Menu, X } from "lucide-react";
+import { Menu } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { AiActivityIndicator } from "@/components/shell/AiActivityIndicator";
 import { ClaudeStatsButton } from "@/components/shell/ClaudeStatsButton";
-import { useRunRouteId } from "@/hooks/useRunRouteId";
-import { useRun } from "@/hooks/queries";
 import { useUI } from "@/store/ui";
 
 /** In-run sub-route (null seg = index/overview) → key under `nav:mobile.stage`. */
-const RUN_STAGE_KEY: Record<string, string> = {
-  "": "overview",
-  review: "review",
-  sync: "sync",
-  automation: "automation",
-  execution: "execution",
-  evidence: "evidence",
-  comment: "comment",
-};
-
 /** Pick the `nav:mobile.global.<key>` bucket for a global (non-run) route. */
 function globalTitleKey(pathname: string): string {
   const map: [RegExp, string][] = [
@@ -42,29 +30,22 @@ function globalTitleKey(pathname: string): string {
 
 /**
  * The compact top bar shown below the `md` breakpoint in place of the desktop
- * sidebar + top bar: hamburger (opens the nav drawer) · centered title/subtitle
- * · a single right action. On a global screen the action is "+ new run"; inside
- * a run it becomes "✕ exit run" (back to Dashboard). See MOBILE_SPEC §1a.
+ * sidebar + top bar: hamburger (opens the nav drawer) · centered title/subtitle.
+ *
+ * No in-run variant any more (#734). It used to retitle itself to the run's
+ * current stage and swap its right action for "exit run"; a run is now a
+ * full-screen overlay with its own top bar, portalled OVER this frame, so that
+ * branch could never be seen — dead code that still had to be kept in sync with
+ * the stage list. See MOBILE_SPEC §1a.
  */
 export function MobileTopBar() {
-  const navigate = useNavigate();
   const { pathname } = useLocation();
   const { t } = useTranslation("nav");
-  const runId = useRunRouteId();
-  const { data: run } = useRun(runId ?? null);
   const openDrawer = useUI((s) => s.openDrawer);
 
-  const inRun = runId != null;
-  const seg = pathname.match(/^\/runs\/\d+(?:\/(\w+))?/)?.[1] ?? "";
   const gKey = globalTitleKey(pathname);
-  const title = inRun
-    ? t(`mobile.stage.${RUN_STAGE_KEY[seg] ?? "fallback"}`)
-    : t(`mobile.global.${gKey}.t`);
-  const subtitle = inRun
-    ? run
-      ? `${run.code} · ${run.name}`
-      : t("run.loading")
-    : t(`mobile.global.${gKey}.s`);
+  const title = t(`mobile.global.${gKey}.t`);
+  const subtitle = t(`mobile.global.${gKey}.s`);
 
   return (
     <header
@@ -86,18 +67,6 @@ export function MobileTopBar() {
       <AiActivityIndicator />
       <ClaudeStatsButton />
 
-      {/* No global "new run" action any more (#729): a run is created only from
-          inside a project, so it can never exist without one. Inside a run the
-          slot is still the exit. */}
-      {inRun && (
-        <button
-          onClick={() => navigate("/")}
-          aria-label={t("aria.exitRun")}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.05] text-[#c7c7d4] transition-colors active:bg-white/[0.12]"
-        >
-          <X size={18} strokeWidth={2.2} />
-        </button>
-      )}
     </header>
   );
 }

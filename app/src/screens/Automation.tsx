@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/Button";
-import { PipelineRail } from "@/components/ui/PipelineRail";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useRunPath } from "@/hooks/useRunRouteId";
 import {
@@ -724,10 +723,6 @@ export function Automation() {
           </div>
         )}
       </div>
-      <div className="mb-4 hidden md:block">
-        <PipelineRail stage={3} />
-      </div>
-
       {/* Only what generation itself needs (#643) — the Execution screen reports
           its own, so neither page accuses the other of being broken. */}
       <SetupBlockers only={["claudeCredential", "localAgent", "projectBaseUrl"]} />

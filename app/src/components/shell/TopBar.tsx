@@ -10,9 +10,8 @@ import { useUI } from "@/store/ui";
  *
  * - the **run-context bar** — it swapped the whole header out on a run route,
  *   which was the header half of "workspace mode"; a run is an overlay now and
- *   the shell never changes mode. (`RunContextHeader` itself is deleted by the
- *   cleanup slice, #734.)
- * - the **project pill** (`ProjectStatusButton`) — it was a project switcher,
+ *   the shell never changes mode. (`RunContextHeader` is deleted, #734.)
+ * - the **project pill** — it was a project switcher,
  *   and there is deliberately no quick switcher: you move between projects
  *   through the sidebar tree or the Projects list.
  * - the global **New Run** button — a run can only be created from inside a

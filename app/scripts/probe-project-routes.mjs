@@ -118,14 +118,21 @@ check(
   path(),
 );
 await goto("/runs/1");
+// The run ROOT then resolves to a stage — since #730 the overlay lands on the
+// resumed stage, else on how far the run has got. So the assertion is that the
+// URL ends up inside this project's run, not that it stops at the bare root.
 check(
   "legacy /runs/1 nests under its project",
-  path() === `/projects/${PROJECT_GUID}/runs/1`,
+  path().startsWith(`/projects/${PROJECT_GUID}/runs/1`),
   path(),
 );
 
 // --------------------------------------------------------- run stage routes
-for (const seg of ["review", "sync", "automation", "execution", "evidence", "comment"]) {
+// The five HUMAN stages only. `sync` (Link) is a hidden automatic stage since
+// #730 — it has no stepper entry, and addressing it directly resolves to the
+// stage the wizard is actually on, which is the intended behaviour rather than a
+// broken route.
+for (const seg of ["review", "automation", "execution", "evidence", "comment"]) {
   const target = `/projects/${PROJECT_GUID}/runs/1/${seg}`;
   await goto(target);
   check(`renders run stage /${seg}`, path() === target, path());
@@ -155,7 +162,7 @@ check(
 await goto(`/projects/00000000-0000-0000-0000-000000000000/runs/1/review`);
 check(
   "run under the wrong project is re-pointed at its own",
-  path() === `/projects/${PROJECT_GUID}/runs/1`,
+  path().startsWith(`/projects/${PROJECT_GUID}/runs/1`),
   path(),
 );
 
