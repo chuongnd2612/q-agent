@@ -432,6 +432,7 @@ def ensure_project_config(db: Session, user: User | None, key: str, hub_token: s
         "manual_auth": bool(cfg.get("manualAuth")),
         "work_item_connection_id": _local_connection_id(db, user, cfg.get("workItemConnectionId")),
         "repository_connection_id": _local_connection_id(db, user, cfg.get("repositoryConnectionId")),
+        "test_case_connection_id": _local_connection_id(db, user, cfg.get("testCaseConnectionId")),
     }
 
     # Test accounts only when the hub actually has some. Passing an empty list

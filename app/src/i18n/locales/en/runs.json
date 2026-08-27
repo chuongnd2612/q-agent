@@ -242,5 +242,19 @@
       "failed": "Failed",
       "pending": "Pending"
     }
+  },
+  "createRun": {
+    "link": {
+      "heading": "LINK & PUBLISH",
+      "linkTitle": "Create & link test cases",
+      "linkDesc": "Approved cases are created in the test case target and linked back to each ticket",
+      "dryRunTitle": "Dry run",
+      "dryRunDesc": "Create the cases locally only — the provider is never contacted",
+      "dryRunLocked": "Dry run is on for the whole workspace, so this run cannot write to the provider",
+      "dryRunChip": "Dry run",
+      "noLink": "cases created, not linked",
+      "subsetAll": "Linking all {{count}} tickets — choose a subset",
+      "subsetSome": "Linking {{count}} of {{total}} tickets"
+    }
   }
 }

@@ -208,6 +208,9 @@ def delete_connection(
     db.query(ProjectConfig).filter(ProjectConfig.repository_connection_id == connection_id).update(
         {ProjectConfig.repository_connection_id: None}, synchronize_session=False
     )
+    db.query(ProjectConfig).filter(ProjectConfig.test_case_connection_id == connection_id).update(
+        {ProjectConfig.test_case_connection_id: None}, synchronize_session=False
+    )
     name = conn.name or conn.kind
     db.delete(conn)
     db.commit()

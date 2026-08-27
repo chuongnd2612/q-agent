@@ -40,6 +40,7 @@ export function ProjectSettingsForm({
   onSave,
   renderManualLogin,
   readOnly = false,
+  hideConnections = false,
 }: {
   config: ProjectConfigOut;
   saving: boolean;
@@ -47,6 +48,11 @@ export function ProjectSettingsForm({
   renderManualLogin?: (hasBaseUrl: boolean) => ReactNode;
   /** Show the configuration, offer no way to change it (#587). */
   readOnly?: boolean;
+  /** Drop the provider-connections card. Set by the project's Connection tab
+   *  (#732), which owns the three connection roles itself — two pickers for the
+   *  same binding on one screen is two places to change one thing. The admin
+   *  shared-workspace page keeps them: it has no Connection tab. */
+  hideConnections?: boolean;
 }) {
   const { t } = useTranslation("projects");
   const { data: providers } = useProviders();
@@ -117,6 +123,7 @@ export function ProjectSettingsForm({
 
   return (
     <div className="flex flex-col gap-3.5">
+      {hideConnections ? null : (
       <GlassCard className="p-5">
         <div className="mb-1 text-[14px] font-bold">{t("settingsForm.providerConnections")}</div>
         <p className="mb-4 text-[12.5px] leading-relaxed text-ink-dim">
@@ -145,6 +152,7 @@ export function ProjectSettingsForm({
           </div>
         </div>
       </GlassCard>
+      )}
 
       <GlassCard className="p-5">
         <div className="mb-1 text-[14px] font-bold">{t("settingsForm.application")}</div>

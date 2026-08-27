@@ -37,12 +37,15 @@ export function CreateLinkSync() {
   const createAndLink = useCreateAndLink(runId);
   const generateAutomation = useGenerateAutomation(runId);
 
-  // Dry run is a WORKSPACE setting now (#712), so this screen reflects it rather than
-  // keeping a second, per-browser copy of the same decision in localStorage. Two places
-  // to set one thing is how a user ends up writing to a real provider because they
-  // switched it off in the wrong one. The server enforces it either way.
+  // Dry run is decided in TWO places that can only ever tighten each other: the
+  // workspace setting (#712) and the run's own link options, chosen in the Create
+  // Run modal (#732) now that this stage is hidden. This screen reflects the
+  // resolved answer — never a third copy of the decision — and the server applies
+  // the same OR, so what is shown is what will happen.
   const { data: settings } = useSettings();
-  const dryRun = settings?.dryRun ?? false;
+  const dryRun = (settings?.dryRun ?? false) || (run?.linkDryRun ?? false);
+  // A run created with linking off creates the cases and stops there.
+  const linkEnabled = run?.linkEnabled ?? true;
 
   // Review fires the mutation and navigates here in the same tick, so this screen
   // renders while the request is still in flight and `linkStatus` still says "idle"
@@ -141,7 +144,9 @@ export function CreateLinkSync() {
               createAndLink.mutate(
                 // The SETTING decides; the server enforces it and can only tighten
                 // what is asked for (#712), so this is what it is asking for.
-                { link: !dryRun, dryRun },
+                // The SETTING and the RUN decide; the server enforces both and can
+                // only tighten what is asked for (#712, #732).
+                { link: linkEnabled && !dryRun, dryRun },
                 { onError: (e) => toast.error(e instanceof Error ? e.message : t("createLink.toast.createLinkFailed")) },
               )
             }

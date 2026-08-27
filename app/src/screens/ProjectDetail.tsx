@@ -6,7 +6,7 @@ import { ProjectHeader } from "./projectDetail/ProjectHeader";
 import { ProjectTabsBar } from "./projectDetail/ProjectTabsBar";
 import { Overview } from "./projectDetail/Overview";
 import { KnowledgeTab } from "./projectDetail/KnowledgeTab";
-import { ProjectSettingsTab } from "./projectDetail/ProjectSettingsTab";
+import { ConnectionTab } from "./projectDetail/connection/ConnectionTab";
 import {
   DEFAULT_PROJECT_TAB,
   PROJECT_TABS,
@@ -179,10 +179,11 @@ export function ProjectKnowledgeTab() {
   );
 }
 
-/** The Connection tab. #732 rebuilds this as the three-role binding editor; for
- * now it is the existing settings tab, which already owns the two bindings the
- * backend has (work-item and repository connections, ADR 0006 §3). */
+/** The Connection tab — the project's three connection roles (ADR 0015 §3, #732):
+ * TICKET SOURCE, CODE & KNOWLEDGE and TEST CASE TARGET. The only place a
+ * project's provider is chosen; the ticket flow reads the binding made here and
+ * offers no switcher of its own. */
 export function ProjectConnectionTab() {
   const { projectKey, hubProjectId } = useProjectRoute();
-  return <ProjectSettingsTab projectKey={projectKey} hubProjectId={hubProjectId} />;
+  return <ConnectionTab projectKey={projectKey} hubProjectId={hubProjectId} />;
 }

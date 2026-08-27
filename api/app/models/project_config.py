@@ -47,6 +47,16 @@ class ProjectConfig(Base):
     repository_connection_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("provider_connections.id"), nullable=True
     )
+    # TEST CASE TARGET (ADR 0015 §3) — where approved cases are created/linked and
+    # where results are published back. The third of the project's three connection
+    # roles. Nullable and **defaults to the ticket source**: for the overwhelmingly
+    # common single-provider project the two are the same connection, and a project
+    # that has never opened the Connection tab must keep behaving exactly as before.
+    # Read through :func:`app.services.connection_service.resolve_test_case_for_project`
+    # rather than off the column, so the fallback chain lives in one place.
+    test_case_connection_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("provider_connections.id"), nullable=True
+    )
 
     # Primary application URL the generated automation targets.
     base_url: Mapped[str] = mapped_column(String(500), default="")

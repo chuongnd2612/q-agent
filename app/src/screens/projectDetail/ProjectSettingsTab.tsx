@@ -24,9 +24,13 @@ import { ManualLoginStatus } from "./ManualLogin";
 export function ProjectSettingsTab({
   projectKey,
   hubProjectId,
+  hideConnections = false,
 }: {
   projectKey: string;
   hubProjectId?: string | null;
+  /** Passed through to the form — the Connection tab renders the three role
+   *  cards itself and hides the form's duplicate pickers (#732). */
+  hideConnections?: boolean;
 }) {
   const { t } = useTranslation("projects");
   const { data: config, isLoading } = useProjectConfig(projectKey);
@@ -51,6 +55,7 @@ export function ProjectSettingsTab({
         config={config}
         saving={save.isPending}
         readOnly={readOnly}
+        hideConnections={hideConnections}
         onSave={(patch) =>
           save.mutate(patch, {
             onSuccess: () => toast.success(t("settingsTab.saved")),

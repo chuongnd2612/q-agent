@@ -222,6 +222,8 @@ def _apply_config_patch(row: ProjectConfig, patch: dict[str, Any]) -> None:
         row.work_item_connection_id = patch["work_item_connection_id"]
     if "repository_connection_id" in patch:
         row.repository_connection_id = patch["repository_connection_id"]
+    if "test_case_connection_id" in patch:
+        row.test_case_connection_id = patch["test_case_connection_id"]
     if "base_url" in patch and patch["base_url"] is not None:
         row.base_url = patch["base_url"].strip()
     if "local_repo_path" in patch and patch["local_repo_path"] is not None:
@@ -328,6 +330,7 @@ def public_config(row: ProjectConfig | None, key: str, name: str = "") -> dict[s
             "name": name or key,
             "workItemConnectionId": None,
             "repositoryConnectionId": None,
+            "testCaseConnectionId": None,
             "baseUrl": "",
             "repos": [],
             "localRepoPath": "",
@@ -342,6 +345,7 @@ def public_config(row: ProjectConfig | None, key: str, name: str = "") -> dict[s
         "name": row.name or row.key,
         "workItemConnectionId": row.work_item_connection_id,
         "repositoryConnectionId": row.repository_connection_id,
+        "testCaseConnectionId": row.test_case_connection_id,
         "baseUrl": row.base_url,
         "repos": get_repos(row),
         "localRepoPath": row.local_repo_path,

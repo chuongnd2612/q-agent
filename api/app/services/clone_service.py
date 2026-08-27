@@ -120,7 +120,7 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
     below). The Fernet-encrypted ``test_accounts`` ciphertext is copied
     verbatim (the key is process-wide — ADR 0009 §4). Provider-connection
     bindings (``connection_id``, ``work_item_connection_id``,
-    ``repository_connection_id``) are dropped rather than copied: those FKs
+    ``repository_connection_id``, ``test_case_connection_id``) are dropped rather than copied: those FKs
     point at the admin's own connections, which the destination owner cannot
     see or use.
 
@@ -213,6 +213,7 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
                 manual_auth=config.manual_auth,
                 work_item_connection_id=None,
                 repository_connection_id=None,
+                test_case_connection_id=None,
                 owner_id=dest_owner_id,
             )
         )

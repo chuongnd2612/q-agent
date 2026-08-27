@@ -3,6 +3,8 @@
   "syncedAgo": "Synced 12m ago",
   "managedByHub": "Kept up to date by EmeHub",
   "noConnection": "No connection",
+  "pulledFrom": "Pulled from {{source}} · the project's ticket source",
+  "noTicketSource": "No ticket source — set one on the project's Connection tab",
   "selectConnection": "Select connection",
   "noWorkItemConnections": "No work-item connections",
   "searchPlaceholder": "Search tickets…",

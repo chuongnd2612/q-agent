@@ -632,7 +632,14 @@ export const useHubClaudeCredential = () =>
     queryFn: async () => api.claudeCredentials.hub(await hubTokenForRead()),
   });
 
-export const useTickets = (filters: TicketFilters = {}) =>
+/** Tickets for a filter set.
+ *
+ * `enabled` exists for callers whose hooks run before they know whether they
+ * want the data — the Create Run modal reads it above its own `if (!open)`
+ * return, and without this it fetched the WHOLE workspace's tickets while closed
+ * and off any project route, which is exactly the unscoped read ADR 0015
+ * containment exists to prevent (caught by the #732 probe). */
+export const useTickets = (filters: TicketFilters = {}, enabled = true) =>
   useQuery({
     // The token is deliberately NOT part of the key: it changes every mint, and
     // keying on it would make every fetch a cache miss.
@@ -640,6 +647,7 @@ export const useTickets = (filters: TicketFilters = {}) =>
       filters as Record<string, string | number | undefined>,
     ),
     queryFn: async () => api.listTickets(filters, await hubTokenForRead()),
+    enabled,
   });
 
 /**

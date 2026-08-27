@@ -14,6 +14,7 @@ from app import crypto
 from app import db as db_module
 from app.logging import logger
 from app.models.linked import LinkedTestCase
+from app.models.project_config import ProjectConfig
 from app.models.run import Run
 from app.models.testcase import TestCase
 from app.models.ticket import Ticket
@@ -88,6 +89,37 @@ def _adapter_for(db, connection, cache: dict[int, Any]) -> Any:
     return adapter
 
 
+def _target_connection(db, run: Run, ticket: Ticket):
+    """The connection this run's approved cases are created in.
+
+    The project's TEST CASE TARGET when one is explicitly bound (ADR 0015 §3) —
+    an ADO Test Plans project can legitimately be somewhere other than the board
+    the tickets came from — otherwise the ticket's own work-item connection,
+    which is what every case creation used before the role existed.
+
+    Deliberately "explicit binding only": the migration backfills the target from
+    the ticket source, so falling through here is the same connection anyway, and
+    a project whose *config* binding drifted from a ticket's stamped
+    ``connection_id`` keeps routing by the ticket — the more specific fact.
+    """
+    if run.project_guid:
+        cfg = (
+            db.query(ProjectConfig)
+            .filter(
+                ProjectConfig.project_guid == run.project_guid,
+                ProjectConfig.test_case_connection_id.isnot(None),
+            )
+            .first()
+        )
+        if cfg is not None:
+            conn = connection_service.get_connection(
+                db, cfg.test_case_connection_id, owner_id=run.owner_id
+            )
+            if conn is not None and conn.id != ticket.connection_id:
+                return conn
+    return connection_service.resolve_work_item_for_ticket(db, ticket)
+
+
 def _worker(run_id: int, link: bool, ticket_ids: list[str], dry_run: bool = False) -> None:
     db = db_module.SessionLocal()
     try:
@@ -125,7 +157,7 @@ def _worker(run_id: int, link: bool, ticket_ids: list[str], dry_run: bool = Fals
                     elif ticket is None:
                         raise ProviderError(f"Ticket '{tid}' not found")
                     else:
-                        connection = connection_service.resolve_work_item_for_ticket(db, ticket)
+                        connection = _target_connection(db, run, ticket)
                         adapter = _adapter_for(db, connection, adapters)
                         kind = connection.kind
                     for case in group:

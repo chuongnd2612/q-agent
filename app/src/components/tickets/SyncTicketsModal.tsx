@@ -33,12 +33,17 @@ const segStyle = (on: boolean) =>
  */
 export function SyncTicketsModal({
   connectionId,
+  projectGuid,
   providerKind,
   configuredProject,
   sourceLabel,
   onClose,
 }: {
   connectionId: number | null;
+  /** The project this sync runs for (#732). Sent so the server can resolve the
+   *  TICKET SOURCE itself when the project has one but this screen hasn't loaded
+   *  its config yet, and so synced tickets are stamped with the project. */
+  projectGuid?: string | null;
   providerKind?: ProviderKind;
   /** The connection's configured default project — the Basic tab's initial pick. */
   configuredProject?: string;
@@ -84,6 +89,7 @@ export function SyncTicketsModal({
       : undefined;
     const req: SyncRequest = {
       connectionId: connectionId ?? undefined,
+      projectGuid: projectGuid ?? undefined,
       providerKind,
       project: project ?? undefined,
       // A chosen sprint/iteration is sprint-scoped; otherwise pull the project's
