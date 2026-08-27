@@ -647,6 +647,44 @@ def _ticket_source_connection_id(db: Session, project: Project, user: User | Non
     return row.work_item_connection_id if row is not None else None
 
 
+def _existing_ticket(
+    db: Session,
+    user: User | None,
+    external_id: str,
+    connection: ProviderConnection,
+    project: Project | None,
+) -> Ticket | None:
+    """The row this synced work item updates, or None to insert a new one.
+
+    Matching used to be ``(external_id, provider_kind)``. That breaks the moment
+    ``provider_kind`` becomes a cache of the connection's kind (#732): a project
+    that repoints its TICKET SOURCE from ADO to Jira would match nothing and
+    *duplicate* every ticket instead of re-stamping it. So the identity is the
+    origin, in narrowing order:
+
+    1. the same connection — the exact origin, and the only unambiguous match;
+    2. an un-stamped legacy row of the same kind — pre-ADR-0006 data;
+    3. a row already belonging to this project — the repointed-source case, and
+       the reason (1) alone is not enough.
+
+    Never a bare ``external_id``: two connections can legitimately carry the same
+    id for different work items.
+    """
+    base = owned(db.query(Ticket), Ticket, user).filter(Ticket.external_id == external_id)
+    row = base.filter(Ticket.connection_id == connection.id).first()
+    if row is not None:
+        return row
+    row = (
+        base.filter(Ticket.connection_id.is_(None), Ticket.provider_kind == connection.kind)
+        .first()
+    )
+    if row is not None:
+        return row
+    if project is not None:
+        return base.filter(Ticket.project_id == project.id).first()
+    return None
+
+
 @router.post("/sync", response_model=SyncResult)
 def sync_tickets(
     body: SyncRequest, db: Session = Depends(get_db), user: User | None = Depends(current_user)
@@ -697,11 +735,7 @@ def sync_tickets(
         external_id = str(item.get("external_id", ""))
         if not external_id:
             continue
-        ticket = (
-            owned(db.query(Ticket), Ticket, user)
-            .filter(Ticket.external_id == external_id, Ticket.provider_kind == connection.kind)
-            .first()
-        )
+        ticket = _existing_ticket(db, user, external_id, connection, project)
         if not ticket:
             ticket = stamp_owner(Ticket(external_id=external_id, provider_kind=connection.kind), user)
             db.add(ticket)
