@@ -53,24 +53,21 @@ export const TOUR_STEPS: TourStep[] = [
     body: "Hit ⌘K anytime to jump between screens, launch actions, or ask Q‑Agent a question. It's the fastest way to move around.",
     placement: "bottom",
   },
+  // The project is the container (ADR 0015), so the tour walks the tree rather
+  // than the global Tickets / Runs screens and the global "New Run" button —
+  // all three are gone (#729).
   {
-    key: "nav-tickets",
-    title: "Your synced tickets",
-    body: "Tickets sync straight from Jira and Azure DevOps. Pick the ones you want covered, and Q‑Agent drafts test cases from their acceptance criteria.",
-    route: "/tickets",
+    key: "nav-project-tree",
+    title: "Your projects",
+    body: "Everything belongs to a project: its tickets, its runs, its reports and the connection they come through. Expand a project here to jump straight to any of its six tabs — the counts are live.",
+    route: "/",
     placement: "right",
   },
   {
-    key: "topbar-newrun",
-    title: "Start a batch QA run",
-    body: "A run is a batch QA session across one or many tickets. Choose your scope, framework, and environment, then let Q‑Agent generate and execute the cases.",
-    placement: "bottom",
-  },
-  {
-    key: "nav-runs",
-    title: "All your runs",
-    body: "Every run you've started lives here — track progress, revisit results, and dive back into any workspace.",
-    route: "/runs",
+    key: "nav-projects",
+    title: "The full list",
+    body: "All projects opens the full list, where you create a new one and compare them side by side. A run always starts from inside a project, so it can never be missing its tickets' provider.",
+    route: "/",
     placement: "right",
   },
   {

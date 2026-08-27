@@ -1,4 +1,4 @@
-import { Menu, Plus, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AiActivityIndicator } from "@/components/shell/AiActivityIndicator";
@@ -53,7 +53,6 @@ export function MobileTopBar() {
   const runId = useRunRouteId();
   const { data: run } = useRun(runId ?? null);
   const openDrawer = useUI((s) => s.openDrawer);
-  const openCreateRun = useUI((s) => s.openCreateRun);
 
   const inRun = runId != null;
   const seg = pathname.match(/^\/runs\/\d+(?:\/(\w+))?/)?.[1] ?? "";
@@ -87,21 +86,16 @@ export function MobileTopBar() {
       <AiActivityIndicator />
       <ClaudeStatsButton />
 
-      {inRun ? (
+      {/* No global "new run" action any more (#729): a run is created only from
+          inside a project, so it can never exist without one. Inside a run the
+          slot is still the exit. */}
+      {inRun && (
         <button
           onClick={() => navigate("/")}
           aria-label={t("aria.exitRun")}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.05] text-[#c7c7d4] transition-colors active:bg-white/[0.12]"
         >
           <X size={18} strokeWidth={2.2} />
-        </button>
-      ) : (
-        <button
-          onClick={openCreateRun}
-          aria-label={t("aria.newRun")}
-          className="accent-gradient flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white shadow-[0_6px_16px_-5px_rgba(139,92,246,.7)] active:brightness-110"
-        >
-          <Plus size={19} strokeWidth={2.4} />
         </button>
       )}
     </header>

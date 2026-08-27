@@ -2,6 +2,7 @@
   "items": {
     "dashboard": "Dashboard",
     "projects": "Projects",
+    "allProjects": "All projects",
     "tickets": "Tickets",
     "runs": "Runs",
     "reports": "Reports",
@@ -18,7 +19,12 @@
     "admin": "ADMIN",
     "restricted": "Restricted",
     "global": "GLOBAL",
-    "pipeline": "PIPELINE"
+    "pipeline": "PIPELINE",
+    "projects": "PROJECTS"
+  },
+  "tree": {
+    "empty": "No projects yet. Create one from All projects.",
+    "activeRun": "{{code}} is running now"
   },
   "brand": {
     "tagline": "QA OPERATING SYSTEM",

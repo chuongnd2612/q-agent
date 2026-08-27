@@ -2,6 +2,7 @@
   "items": {
     "dashboard": "Bảng điều khiển",
     "projects": "Dự án",
+    "allProjects": "Tất cả dự án",
     "tickets": "Công việc",
     "runs": "Lượt chạy",
     "reports": "Báo cáo",
@@ -18,7 +19,12 @@
     "admin": "QUẢN TRỊ",
     "restricted": "Hạn chế",
     "global": "TOÀN CỤC",
-    "pipeline": "QUY TRÌNH"
+    "pipeline": "QUY TRÌNH",
+    "projects": "DỰ ÁN"
+  },
+  "tree": {
+    "empty": "Chưa có dự án nào. Hãy tạo một dự án từ Tất cả dự án.",
+    "activeRun": "{{code}} đang chạy"
   },
   "brand": {
     "tagline": "HỆ ĐIỀU HÀNH QA",
