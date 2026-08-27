@@ -188,5 +188,29 @@
     "dryRun": "Dry run",
     "dryRunHint": "Dry run is on in Settings — test cases are recorded in Q-Agent and no work item is touched.",
     "createAndLinkDry": "Create test cases (dry run)"
+  },
+  "overlay": {
+    "exit": "Exit run",
+    "stepperLabel": "Run stages",
+    "back": "Back",
+    "next": "Next",
+    "finish": "Finish run",
+    "stepOf": "Step {{current}} of {{total}}",
+    "subtitle": "{{scope}} · {{count}} ticket(s) · {{env}}",
+    "busy": {
+      "analyzing": "Analyzing tickets…",
+      "linking": "Creating & linking cases…"
+    },
+    "stage": {
+      "review": "Review",
+      "automation": "Automation",
+      "execution": "Execution",
+      "evidence": "Evidence",
+      "publish": "Publish"
+    },
+    "gate": {
+      "needsApprovedCase": "Approve at least one test case to continue",
+      "needsSuiteFinished": "Waiting for the suite to finish"
+    }
   }
 }
