@@ -160,7 +160,12 @@ export function RunOverlay({
           </button>
 
           <div className="min-w-0 flex-1 text-center text-[12px] text-ink-dim">
-            {nextHint ?? t("overlay.stepOf", { current: viewedStage + 1, total: STAGE_COUNT })}
+            {/* `viewedStage < 0` is the terminal completion stage (#731): it is
+                not step N of five, so it gets no step counter. */}
+            {nextHint ??
+              (viewedStage < 0
+                ? t("overlay.allStagesComplete")
+                : t("overlay.stepOf", { current: viewedStage + 1, total: STAGE_COUNT }))}
           </div>
 
           <button

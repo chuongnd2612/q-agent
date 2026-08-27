@@ -38,6 +38,7 @@ import { Automation } from "@/screens/Automation";
 import { Execution } from "@/screens/Execution";
 import { Evidence } from "@/screens/Evidence";
 import { CommentPublish } from "@/screens/CommentPublish";
+import { RunComplete } from "@/screens/RunComplete";
 import { Reports } from "@/screens/Reports";
 import { AuditLog } from "@/screens/AuditLog";
 import { Settings } from "@/screens/Settings";
@@ -135,6 +136,9 @@ const ROUTES = [
               { path: "execution", element: <Execution /> },
               { path: "evidence", element: <Evidence /> },
               { path: "comment", element: <CommentPublish /> },
+              // The terminal completion stage (#731). A route, not a modal, so a
+              // finished run reopens onto it.
+              { path: "done", element: <RunComplete /> },
             ],
           },
 

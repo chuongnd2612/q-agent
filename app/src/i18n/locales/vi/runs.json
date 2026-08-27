@@ -210,7 +210,37 @@
     },
     "gate": {
       "needsApprovedCase": "Duyệt ít nhất một test case để tiếp tục",
-      "needsSuiteFinished": "Đang chờ bộ test chạy xong"
+      "needsSuiteFinished": "Đang chờ bộ test chạy xong",
+      "needsPublish": "Công bố kết quả để kết thúc lượt chạy"
+    },
+    "backToProject": "Về dự án",
+    "allStagesComplete": "Đã hoàn tất tất cả giai đoạn"
+  },
+  "complete": {
+    "success": {
+      "title": "Lượt chạy đã hoàn tất và được công bố",
+      "body": "{{code}} đã hoàn tất — mọi phiếu đều đã có kết quả trên work item."
+    },
+    "attention": {
+      "title": "Lượt chạy đã xong — việc công bố cần được xử lý",
+      "body": "{{failed}}/{{total}} phiếu công bố thất bại."
+    },
+    "retryFailed": "Thử công bố lại",
+    "publishList": "Công bố theo từng phiếu",
+    "noComments": "Lượt chạy này không công bố bình luận nào.",
+    "openReports": "Mở báo cáo dự án",
+    "startAnother": "Bắt đầu lượt chạy khác",
+    "figure": {
+      "tickets": "Phiếu đã bao phủ",
+      "cases": "Case đã duyệt & liên kết",
+      "passed": "Đạt",
+      "failed": "Không đạt",
+      "passRate": "Tỉ lệ đạt"
+    },
+    "status": {
+      "published": "Đã công bố",
+      "failed": "Thất bại",
+      "pending": "Đang chờ"
     }
   }
 }

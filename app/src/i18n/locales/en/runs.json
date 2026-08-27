@@ -210,7 +210,37 @@
     },
     "gate": {
       "needsApprovedCase": "Approve at least one test case to continue",
-      "needsSuiteFinished": "Waiting for the suite to finish"
+      "needsSuiteFinished": "Waiting for the suite to finish",
+      "needsPublish": "Publish the results to finish the run"
+    },
+    "backToProject": "Back to project",
+    "allStagesComplete": "All stages complete"
+  },
+  "complete": {
+    "success": {
+      "title": "Run finished and published",
+      "body": "{{code}} is complete — every ticket has its results back on the work item."
+    },
+    "attention": {
+      "title": "Run finished — publishing needs attention",
+      "body": "{{failed}} of {{total}} tickets failed to publish."
+    },
+    "retryFailed": "Retry failed publish",
+    "publishList": "Per-ticket publish",
+    "noComments": "This run published no comments.",
+    "openReports": "Open project reports",
+    "startAnother": "Start another run",
+    "figure": {
+      "tickets": "Tickets covered",
+      "cases": "Cases approved & linked",
+      "passed": "Passed",
+      "failed": "Failed",
+      "passRate": "Pass rate"
+    },
+    "status": {
+      "published": "Published",
+      "failed": "Failed",
+      "pending": "Pending"
     }
   }
 }

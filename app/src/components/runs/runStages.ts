@@ -58,6 +58,17 @@ export const AUTO_STAGES: Record<string, { stage: RunStageKey; labelKey: string 
   sync: { stage: "automation", labelKey: "busy.linking" },
 };
 
+/**
+ * The terminal completion stage's route segment (ADR 0015 §6, #731).
+ *
+ * Deliberately NOT a member of {@link RUN_STAGES}: it is not a sixth step. The
+ * five pills all read complete on it, Back is disabled, and the run is over. It
+ * is a route rather than a modal so that exiting and reopening a finished run
+ * lands back on it — which is also what keeps "Retry failed publish" reachable
+ * later, instead of only in the seconds after the failure.
+ */
+export const DONE_SEG = "done";
+
 /** Terminal statuses (ADR 0005 §1). A terminal run has no *current* stage. */
 const TERMINAL = new Set(["done", "cancelled", "failed"]);
 
