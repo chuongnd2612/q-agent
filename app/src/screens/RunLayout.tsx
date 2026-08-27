@@ -7,9 +7,11 @@ import { useTranslation } from "react-i18next";
 import { UNASSIGNED_PROJECT_SEGMENT } from "@/screens/LegacyRedirects";
 import { RunOverlay } from "@/components/runs/RunOverlay";
 import {
+  DONE_SEG,
   RUN_STAGES,
   activeAutoStage,
   furthestStage as furthestStageOf,
+  isRunFinished,
   isTerminalStatus,
   readResumeStage,
   stageIndex,
@@ -64,9 +66,13 @@ export function RunLayout() {
       : "/projects";
 
   const viewedStage = stageIndexForSegment(stageSegment);
+  // The terminal completion stage (#731) is not a sixth step — it is its own
+  // view, with every pill complete and no way forward but out.
+  const onDoneStage = stageSegment === DONE_SEG;
   const furthest = furthestStageOf(run);
   const auto = activeAutoStage(run?.status);
 
+  const donePath = `/projects/${encodeURIComponent(projectGuid ?? "")}/runs/${id}/${DONE_SEG}`;
   const stagePath = (key: RunStageKey) => {
     const target = RUN_STAGES.find((s) => s.key === key);
     return `/projects/${encodeURIComponent(projectGuid ?? "")}/runs/${id}/${target?.seg ?? "review"}`;
@@ -77,6 +83,7 @@ export function RunLayout() {
   // so it deliberately does not live in the URL, and it has to survive a reload,
   // which rules out the in-memory store. See `runStages.ts`.
   useEffect(() => {
+    if (onDoneStage) return;
     if (valid && viewedStage != null) {
       writeResumeStage(id, RUN_STAGES[viewedStage].key);
     }
@@ -92,7 +99,7 @@ export function RunLayout() {
   // exists to honour.
   const previousAuto = useRef<RunStageKey | null>(null);
   useEffect(() => {
-    if (!run || viewedStage == null) return;
+    if (!run || viewedStage == null || onDoneStage) return;
     const was = previousAuto.current;
     const now = auto?.stage ?? null;
     previousAuto.current = now;
@@ -129,7 +136,42 @@ export function RunLayout() {
 
   // The run root with no stage in the URL — resume where the user left off,
   // falling back to how far the run itself has got.
+  // Every path where the URL names no stage: the terminal completion view, a
+  // finished run reopening onto it, and plain resume. Nested under one guard so
+  // that below it `viewedStage` is a number, with no unreachable fallback to
+  // convince the type-checker of something the control flow already knows.
   if (viewedStage == null) {
+    if (onDoneStage) {
+      return (
+        <RunSocketProvider runId={id}>
+          <RunOverlay
+            title={`${run.code} · ${run.name}`}
+            subtitle={t("overlay.subtitle", {
+              scope: run.scopeLabel,
+              env: run.env,
+              count: run.ticketIds.length,
+            })}
+            // -1: the run is over, so no pill is "current" and every one reads
+            // complete. It is not a sixth step.
+            viewedStage={-1}
+            furthestStage={RUN_STAGES.length}
+            busyLabel={null}
+            onExit={() => navigate(projectRunsPath)}
+            onBack={() => {}}
+            onNext={() => navigate(projectRunsPath)}
+            backDisabled
+            nextDisabled={false}
+            nextLabel={t("overlay.backToProject")}
+            nextHint={null}
+          >
+            <Outlet />
+          </RunOverlay>
+        </RunSocketProvider>
+      );
+    }
+    // A finished run reopens onto its completion stage — that beats resume,
+    // which is about where the user was, not where the run ended up.
+    if (isRunFinished(run.status)) return <Navigate to={donePath} replace />;
     const resumed = readResumeStage(id);
     const landing = resumed ?? RUN_STAGES[furthest]?.key ?? "review";
     return <Navigate to={stagePath(landing)} replace />;
@@ -150,6 +192,12 @@ export function RunLayout() {
   }
 
   const isLastStage = viewedStage === RUN_STAGES.length - 1;
+  // Publish's Next is the door to the completion stage, and it only opens once
+  // the run has actually finished — the alternative is a "finished" screen for a
+  // run that never published anything.
+  if (isLastStage && !isRunFinished(run.status)) {
+    blockedReason = t("overlay.gate.needsPublish");
+  }
   const nextDisabled = blockedReason != null;
 
   const goBack = () => {
@@ -158,7 +206,7 @@ export function RunLayout() {
   const goNext = () => {
     if (nextDisabled) return;
     if (isLastStage) {
-      navigate(projectRunsPath);
+      navigate(donePath);
       return;
     }
     navigate(stagePath(RUN_STAGES[viewedStage + 1].key));
