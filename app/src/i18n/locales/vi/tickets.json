@@ -3,6 +3,8 @@
   "syncedAgo": "Đã đồng bộ 12 phút trước",
   "managedByHub": "Được EmeHub cập nhật tự động",
   "noConnection": "Không có kết nối",
+  "pulledFrom": "Lấy từ {{source}} · nguồn ticket của dự án",
+  "noTicketSource": "Chưa có nguồn ticket — hãy chọn tại tab Kết nối của dự án",
   "selectConnection": "Chọn kết nối",
   "noWorkItemConnections": "Không có kết nối work-item",
   "searchPlaceholder": "Tìm kiếm công việc…",

@@ -242,5 +242,19 @@
       "failed": "Thất bại",
       "pending": "Đang chờ"
     }
+  },
+  "createRun": {
+    "link": {
+      "heading": "LIÊN KẾT & CÔNG BỐ",
+      "linkTitle": "Tạo và liên kết test case",
+      "linkDesc": "Test case đã duyệt được tạo tại đích test case và liên kết ngược về từng ticket",
+      "dryRunTitle": "Chạy thử",
+      "dryRunDesc": "Chỉ tạo test case cục bộ — không gọi tới nhà cung cấp",
+      "dryRunLocked": "Chế độ chạy thử đang bật cho toàn bộ workspace, nên lần chạy này không thể ghi lên nhà cung cấp",
+      "dryRunChip": "Chạy thử",
+      "noLink": "chỉ tạo test case, không liên kết",
+      "subsetAll": "Liên kết toàn bộ {{count}} ticket — chọn một phần",
+      "subsetSome": "Liên kết {{count}}/{{total}} ticket"
+    }
   }
 }

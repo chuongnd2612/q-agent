@@ -16,10 +16,10 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { DropdownShell, MultiSelect, Select } from "@/components/ui/Dropdown";
+import { MultiSelect, Select } from "@/components/ui/Dropdown";
 import { StatusBadge, priorityColor, providerGlyph } from "@/components/ui/badges";
 import { EmptyState, ErrorState } from "@/components/ui/misc";
-import { PROVIDER_META, PROVIDER_ORDER } from "@/components/settings/providerMeta";
+import { PROVIDER_META } from "@/components/settings/providerMeta";
 import { SyncTicketsModal } from "@/components/tickets/SyncTicketsModal";
 import { QueryBuilder, describeQuery } from "@/components/tickets/query/QueryBuilder";
 import {
@@ -40,6 +40,7 @@ import {
   useConnectionWorkItemMetadata,
   useDeleteTicket,
   useDeleteTickets,
+  useProjectConfig,
   useProviders,
   useTicketFilterOptions,
   useTickets,
@@ -48,7 +49,7 @@ import { toast } from "@/lib/toast";
 import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
 import { useProjectRoute } from "@/screens/ProjectDetail";
-import type { ConnectionOut, ProviderKind, TicketFilters, TicketOut } from "@/types/api";
+import type { TicketFilters, TicketOut } from "@/types/api";
 
 // Last-resort priority values, used only when no ticket is loaded yet. They are a
 // guess about the provider's vocabulary — Azure DevOps spells priorities `1`..`4`,
@@ -68,83 +69,10 @@ function initials(name: string): string {
     .toUpperCase();
 }
 
-/** Primary left-most filter-bar pill: provider glyph + "Provider · connection".
- * Dropdown lists every work-item connection, grouped by provider. */
-function ConnectionSelect({
-  groups,
-  value,
-  onChange,
-}: {
-  groups: { kind: ProviderKind; connections: ConnectionOut[] }[];
-  value: number | null;
-  onChange: (id: number) => void;
-}) {
-  const { t } = useTranslation("tickets");
-  const selected = groups.flatMap((g) => g.connections).find((c) => c.id === value) ?? null;
-  const meta = selected ? PROVIDER_META[selected.kind] : null;
-
-  const label = selected && meta ? (
-    <span className="flex min-w-0 items-center gap-2">
-      <span
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] text-[10.5px] font-black"
-        style={{ background: meta.color, color: meta.glyphColor }}
-      >
-        {meta.glyph}
-      </span>
-      <span className="truncate">
-        {meta.name} &middot; {selected.name}
-      </span>
-    </span>
-  ) : (
-    t("selectConnection")
-  );
-
-  return (
-    <DropdownShell active={!!selected} label={label} minWidth={240}>
-      {(close) => (
-        <>
-          {groups.length === 0 && (
-            <div className="px-3 py-4 text-center text-[12px] text-ink-dim">
-              {t("noWorkItemConnections")}
-            </div>
-          )}
-          {groups.map((g) => (
-            <div key={g.kind} className="mb-1 last:mb-0">
-              <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-bold uppercase tracking-wide text-ink-dim">
-                {PROVIDER_META[g.kind].name}
-              </div>
-              {g.connections.map((c) => {
-                const on = c.id === value;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => {
-                      onChange(c.id);
-                      close();
-                    }}
-                    className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-white/[0.06] data-[on=true]:bg-[rgba(139,92,246,.16)]"
-                    data-on={on}
-                  >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      {on && <Check size={13} className="text-violet" strokeWidth={3} />}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </>
-      )}
-    </DropdownShell>
-  );
-}
-
 export function Tickets() {
   const { t } = useTranslation("tickets");
   // This screen is reachable only as a project tab now (ADR 0015 slice 2).
-  const { projectGuid } = useProjectRoute();
+  const { projectGuid, projectKey } = useProjectRoute();
   const ticketHref = (externalId: string) =>
     `/projects/${encodeURIComponent(projectGuid ?? "")}/tickets/${encodeURIComponent(externalId)}`;
   const { t: tCommon } = useTranslation("common");
@@ -170,13 +98,14 @@ export function Tickets() {
   const setTicketEpic = useUI((s) => s.setTicketEpic);
   const ticketPage = useUI((s) => s.ticketPage);
   const setTicketPage = useUI((s) => s.setTicketPage);
-  const ticketConnectionId = useUI((s) => s.ticketConnectionId);
-  const setTicketConnectionId = useUI((s) => s.setTicketConnectionId);
-
-  // Connection scoping the ticket list, metadata, sprints + sync (ADR 0006).
-  // Options are every connection with the work-item capability (ado/jira);
-  // default to the first connected one, else the first available.
+  // The connection scoping this list, its facets, its sprints and its sync is the
+  // **project's TICKET SOURCE** (ADR 0015 §3, #732). There is no switcher here any
+  // more: provider is a property of the project, and a switcher on a global list
+  // is exactly how the same list could show tickets from a provider that had
+  // nothing to do with the project the user thought they were in. Change it on the
+  // project's Connection tab, which is the one place it is decided.
   const { data: providers } = useProviders();
+  const { data: projectConfig } = useProjectConfig(projectKey);
   const workItemConnections = useMemo(
     () =>
       (providers ?? [])
@@ -184,22 +113,7 @@ export function Tickets() {
         .filter((c) => c.categories.includes("work_item")),
     [providers],
   );
-  const connectionGroups = useMemo(
-    () =>
-      PROVIDER_ORDER.map((kind) => ({
-        kind,
-        connections: workItemConnections.filter((c) => c.kind === kind),
-      })).filter((g) => g.connections.length > 0),
-    [workItemConnections],
-  );
-  const defaultConnId =
-    workItemConnections.find((c) => c.connected)?.id ?? workItemConnections[0]?.id ?? null;
-  useEffect(() => {
-    if (ticketConnectionId == null && defaultConnId != null) {
-      setTicketConnectionId(defaultConnId);
-    }
-  }, [ticketConnectionId, defaultConnId, setTicketConnectionId]);
-  const connectionId = ticketConnectionId ?? defaultConnId;
+  const connectionId = projectConfig?.workItemConnectionId ?? null;
   const selectedConn = workItemConnections.find((c) => c.id === connectionId) ?? null;
   const isJira = selectedConn?.kind === "jira";
   const isAdo = selectedConn?.kind === "ado";
@@ -236,13 +150,13 @@ export function Tickets() {
   };
   const compiled = appliedQuery ? compileQuery(appliedQuery) : null;
   const filters: TicketFilters = {
-    connectionId: connectionId ?? undefined,
-    providerKind: selectedConn?.kind,
     // Project containment (ADR 0015 slice 2). Set OUTSIDE the compiled-query
     // spread on purpose: it is the tab's scope, not one of the user's filters,
     // so an applied builder query must not be able to widen it back to the
-    // workspace. #732 removes the provider switcher above it, at which point
-    // this is the only thing deciding which rows can appear.
+    // workspace. With the provider switcher gone (#732) this is the ONLY thing
+    // deciding which rows can appear — deliberately not `connectionId` as well:
+    // the project criterion already covers its ticket source, and re-filtering on
+    // the current binding would hide rows synced before it was repointed.
     project: projectGuid ?? undefined,
     ...(compiled ?? flatFilters),
     // The search box keeps driving `q` unless the query names `title`, in which
@@ -345,8 +259,11 @@ export function Tickets() {
               carrying weight: the Sync control is gone, and without a sentence
               saying EmeHub keeps the list current its absence is a mystery. */}
           <div className="mb-[5px] text-[13px] font-medium text-ink-dim">
-            {(selectedConn ? `${PROVIDER_META[selectedConn.kind].name} · ${selectedConn.name}` : t("noConnection")) +
-              ` · ${hubManaged ? t("managedByHub") : t("syncedAgo")}`}
+            {(selectedConn
+              ? t("pulledFrom", {
+                  source: `${PROVIDER_META[selectedConn.kind].name} · ${selectedConn.name}`,
+                })
+              : t("noTicketSource")) + ` · ${hubManaged ? t("managedByHub") : t("syncedAgo")}`}
           </div>
           <h1 className="m-0 text-[24px] font-black tracking-tight md:text-[28px]">{t("title")}</h1>
         </div>
@@ -358,8 +275,6 @@ export function Tickets() {
             group uses `md:contents` so on desktop they flatten back into the
             single wrapping row (unchanged) with the actions pinned right. */}
         <div className="flex flex-col gap-[9px] md:flex-row md:flex-wrap md:items-center">
-          <ConnectionSelect groups={connectionGroups} value={connectionId} onChange={setTicketConnectionId} />
-
           <div className="flex h-9 w-full items-center gap-2 rounded-[11px] border border-white/[0.08] bg-white/[0.04] px-3 md:max-w-[320px] md:min-w-[180px] md:flex-1">
             <Search size={14} color="#7a7a8c" strokeWidth={2} />
             <input
@@ -579,6 +494,7 @@ export function Tickets() {
       {syncOpen && (
         <SyncTicketsModal
           connectionId={connectionId}
+          projectGuid={projectGuid}
           providerKind={selectedConn?.kind}
           configuredProject={selectedConn?.config.project}
           sourceLabel={syncSourceLabel}
