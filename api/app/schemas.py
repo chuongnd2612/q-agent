@@ -176,6 +176,8 @@ class ProjectConfigOut(ApiModel):
     # Per-project provider bindings (ADR 0006).
     work_item_connection_id: int | None = None
     repository_connection_id: int | None = None
+    # TEST CASE TARGET (ADR 0015 §3) — null means "same as the ticket source".
+    test_case_connection_id: int | None = None
     base_url: str = ""
     repos: list[ProjectRepo] = Field(default_factory=list)
     # Legacy single-repo fields (kept for backward compatibility).
@@ -191,6 +193,8 @@ class ProjectConfigOut(ApiModel):
 class ProjectConfigUpdate(ApiModel):
     work_item_connection_id: int | None = None
     repository_connection_id: int | None = None
+    # TEST CASE TARGET (ADR 0015 §3) — null means "same as the ticket source".
+    test_case_connection_id: int | None = None
     base_url: str | None = None
     repos: list[ProjectRepo] | None = None
     local_repo_path: str | None = None
@@ -587,6 +591,8 @@ class SharedProjectOut(ApiModel):
     repos: list[ProjectRepo] = Field(default_factory=list)
     work_item_connection_id: int | None = None
     repository_connection_id: int | None = None
+    # TEST CASE TARGET (ADR 0015 §3) — null means "same as the ticket source".
+    test_case_connection_id: int | None = None
     knowledge: list[SharedProjectKnowledgeOut] = Field(default_factory=list)
     already_cloned: bool = False
 
@@ -602,6 +608,8 @@ class SharedProjectCreate(ApiModel):
     # Connections used only to build shared knowledge — dropped on clone (ADR 0009 §4).
     work_item_connection_id: int | None = None
     repository_connection_id: int | None = None
+    # TEST CASE TARGET (ADR 0015 §3) — null means "same as the ticket source".
+    test_case_connection_id: int | None = None
     environments: list[EnvironmentCfg] = Field(default_factory=list)
     test_accounts: list[TestAccountIn] = Field(default_factory=list)
     extra: dict = Field(default_factory=dict)
@@ -693,6 +701,12 @@ class SyncRequest(ApiModel):
     # connection of ``provider_kind`` when omitted.
     connection_id: int | None = None
     provider_kind: str | None = None
+    # The project the sync is running *for* (#732, ADR 0015 §3). Under containment
+    # the Tickets tab is only ever reached through a project, so the project — not
+    # a switcher on the list — decides which connection the tickets come from, and
+    # therefore what ``ticket.provider_kind`` is stamped with. Resolution order is
+    # explicit ``connection_id`` → this project's TICKET SOURCE → first-of-kind.
+    project_guid: str | None = None
     # Optional project override — when set, the adapter fetches from this project
     # instead of the connection's configured default (Sync dialog Project dropdown).
     project: str | None = None
@@ -946,6 +960,12 @@ class RunOut(ApiModel):
     # legacy rows whose project could not be resolved, which the UI shows under
     # the "unassigned" bucket rather than hiding.
     project_guid: str | None = None
+    # Link options chosen in the Create Run modal (#732). Surfaced so the UI can
+    # tell the user what this run will do at the Link stage — the stage itself is
+    # hidden, so this payload is the only place that decision is visible.
+    link_enabled: bool = True
+    link_dry_run: bool = False
+    link_ticket_ids: list[str] = Field(default_factory=list)
     ticket_ids: list[str] = Field(default_factory=list)
     # Aggregates for the runs list (attached in the router; default 0/None so
     # mutation responses that don't compute them still serialize).
@@ -975,6 +995,14 @@ class RunCreate(ApiModel):
     retry_policy: int = 2
     sprint: str | None = None
     sprint_path: str | None = None
+    # Link options (#732, ADR 0015 §5). The `sync` stage is hidden, so *link or
+    # not*, *which subset* and *dry run* are decided here, where the run's scope
+    # is already being chosen, and stored on the run. Defaults reproduce the
+    # pre-#732 behaviour exactly, so an older client that sends none of them
+    # creates a run that behaves as it always did.
+    link: bool = True
+    dry_run: bool = False
+    link_ticket_ids: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------- Automation

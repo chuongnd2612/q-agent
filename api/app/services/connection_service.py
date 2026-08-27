@@ -46,6 +46,7 @@ __all__ = [
     "first_of_kind",
     "get_connection",
     "resolve_repository_for_project",
+    "resolve_test_case_for_project",
     "resolve_work_item_for_ticket",
 ]
 
@@ -165,6 +166,39 @@ def resolve_repository_for_project(
     raise ProviderError("Repository provider is not configured")
 
 
+# ------------------------------------------------------- test-case routing
+def resolve_test_case_for_project(
+    db: Session, project_key: str | None, owner_id: int | None = None
+) -> ProviderConnection:
+    """Resolve the connection approved test cases are created/linked in.
+
+    The project's third connection role (ADR 0015 §3, ``TEST CASE TARGET``).
+    Order: the project's ``test_case_connection_id`` → its
+    ``work_item_connection_id`` (the ticket source, which is what every consumer
+    implicitly used before the role existed) → the first work-item-capable
+    connection → :class:`ProviderError`.
+
+    The middle step is the whole point: an unset target is not an error, it means
+    "the same place the tickets came from", so a project that never opens the
+    Connection tab behaves exactly as it did.
+    """
+    if project_key:
+        cfg = (
+            db.query(ProjectConfig)
+            .filter(ProjectConfig.key == project_key, ProjectConfig.owner_id == owner_id)
+            .first()
+        ) or db.query(ProjectConfig).filter(ProjectConfig.key == project_key).first()
+        if cfg is not None:
+            for candidate in (cfg.test_case_connection_id, cfg.work_item_connection_id):
+                conn = get_connection(db, candidate, owner_id=owner_id)
+                if conn is not None:
+                    return conn
+    conn = _first_with_capability(db, WORK_ITEM, owner_id=owner_id)
+    if conn is not None:
+        return conn
+    raise ProviderError("Test-case target provider is not configured")
+
+
 # ---------------------------------------------------------------- backfill
 def backfill_from_providers(db: Session) -> None:
     """One-time migration from legacy ``providers`` to ``provider_connections``.
@@ -197,6 +231,11 @@ def backfill_from_providers(db: Session) -> None:
             cfg.work_item_connection_id = work_item.id
         if cfg.repository_connection_id is None and repository is not None:
             cfg.repository_connection_id = repository.id
+        # TEST CASE TARGET defaults to the ticket source (ADR 0015 §3), mirroring
+        # migration f6b3d9c14e27 so a fresh `create_all` database and a migrated
+        # one agree.
+        if cfg.test_case_connection_id is None and cfg.work_item_connection_id is not None:
+            cfg.test_case_connection_id = cfg.work_item_connection_id
 
     for ticket in db.query(Ticket).filter(Ticket.connection_id.is_(None)).all():
         conn = first_of_kind(db, ticket.provider_kind)

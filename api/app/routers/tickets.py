@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
@@ -52,6 +53,8 @@ from app.deps_auth import current_user
 from app.deps_hub import hub_token as hub_token_header
 from app.logging import logger
 from app.models.linked import LinkedTestCase
+from app.models.project import Project
+from app.models.project_config import ProjectConfig
 from app.models.provider_connection import ProviderConnection
 from app.models.ticket import Ticket
 from app.models.user import User
@@ -608,6 +611,42 @@ def provider_test_cases(external_id: str, db: Session = Depends(get_db)) -> list
     ]
 
 
+def _project_for_guid(db: Session, guid: str | None, user: User | None) -> Project | None:
+    """The project a sync is running for, or None when the caller named none.
+
+    Scoped to the caller (#93): a GUID that is not theirs resolves to None and the
+    sync falls back to the request's own connection, rather than borrowing someone
+    else's binding.
+    """
+    if not guid:
+        return None
+    query = db.query(Project).filter(Project.guid == guid)
+    if user is not None:
+        query = query.filter((Project.owner_id == user.id) | (Project.owner_id.is_(None)))
+    return query.first()
+
+
+def _ticket_source_connection_id(db: Session, project: Project, user: User | None) -> int | None:
+    """The project's bound TICKET SOURCE connection id, if it has one.
+
+    Matches the config on either identity — the GUID (#585) or the legacy name key
+    — because ``project_guid`` is still a nullable bridge column on
+    ``project_config`` and a project configured before it was added has only the
+    name.
+    """
+    query = db.query(ProjectConfig).filter(
+        (ProjectConfig.project_guid == project.guid)
+        | (func.lower(ProjectConfig.key) == (project.name or "").lower()),
+        ProjectConfig.work_item_connection_id.isnot(None),
+    )
+    if user is not None:
+        query = query.filter(
+            (ProjectConfig.owner_id == user.id) | (ProjectConfig.owner_id.is_(None))
+        )
+    row = query.order_by(ProjectConfig.owner_id.is_(None)).first()
+    return row.work_item_connection_id if row is not None else None
+
+
 @router.post("/sync", response_model=SyncResult)
 def sync_tickets(
     body: SyncRequest, db: Session = Depends(get_db), user: User | None = Depends(current_user)
@@ -621,7 +660,15 @@ def sync_tickets(
     private per-user data): a user only ever syncs via, and into, their own data.
     """
     owner_id = user.id if user else None
+    project = _project_for_guid(db, body.project_guid, user)
     connection = connection_service.get_connection(db, body.connection_id, owner_id=owner_id)
+    if connection is None and project is not None:
+        # The project's TICKET SOURCE (#732, ADR 0015 §3). Provider is a property of
+        # the project, not a switch on the list, so this — not the caller — is what
+        # decides which connection the tickets (and their `provider_kind`) come from.
+        connection = connection_service.get_connection(
+            db, _ticket_source_connection_id(db, project, user), owner_id=owner_id
+        )
     if connection is None and body.provider_kind:
         connection = connection_service.first_of_kind(db, body.provider_kind, owner_id=owner_id)
     if connection is None:
@@ -659,6 +706,17 @@ def sync_tickets(
             ticket = stamp_owner(Ticket(external_id=external_id, provider_kind=connection.kind), user)
             db.add(ticket)
         ticket.connection_id = connection.id  # stamp the work-item origin
+        # `provider_kind` stays (it has ~104 call sites and adapter resolution keys
+        # off it — ADR 0015 §3 rejects deleting it) but it is now a **denormalised
+        # cache of the connection's kind**, rewritten on every sync rather than an
+        # independent property of the ticket. Re-stamped even for an existing row so
+        # a project that repoints its TICKET SOURCE cannot leave stale kinds behind.
+        ticket.provider_kind = connection.kind
+        if project is not None:
+            # Containment (ADR 0015 §1): a ticket synced through a project belongs to
+            # it, so the ticket list can filter on a column instead of inferring the
+            # project from the connection every time.
+            ticket.project_id = project.id
 
         ticket.title = item.get("title", ticket.title if ticket.id else "")
         ticket.work_item_type = item.get("work_item_type", "User Story")

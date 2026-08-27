@@ -65,6 +65,18 @@ class Run(Base):
     project_guid: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True, default=None
     )
+    # Link options, chosen in the Create Run modal (#732, ADR 0015 §5). Hiding the
+    # `sync` stage removed the screen that owned them, so they move to where the
+    # run's scope is already being decided rather than disappearing.
+    #
+    # Both are read as **tightening** constraints by
+    # ``POST /runs/{id}/testcases/create-link`` — the run can turn linking off and
+    # can turn a dry run on, never the reverse — which is the same precedence #712
+    # gave the workspace ``dryRun`` setting, applied one level down.
+    link_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    link_dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Subset of the run's tickets to create/link cases for; empty = all of them.
+    link_ticket_ids: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = timestamp_column()
     # Lifecycle metadata (ADR 0005) — set exclusively via app.services.run_status.
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

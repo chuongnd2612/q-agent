@@ -176,15 +176,26 @@ def create_and_link(
     )
     if not approved:
         raise HTTPException(status_code=400, detail="No approved test cases to create")
-    # The SETTING decides, and it can only ever tighten what the request asked for
-    # (#712). A dry run someone switched on to protect a live board must not be
-    # undone by a client that forgot to send the flag — which is precisely the failure
-    # a per-request flag invites. A request may still opt into a dry run on its own.
-    dry_run = bool(body.dry_run) or bool(settings_store.load_settings().get("dryRun"))
-    link_service.start_create_link(run_id, body.link, body.ticket_ids, dry_run)
+    # Three sources, one precedence rule: each can only ever **tighten** what the
+    # one before it asked for (#712, extended to the run in #732). A dry run
+    # someone switched on to protect a live board must not be undone by a client
+    # that forgot to send the flag, and the same is true of a run created with
+    # "don't link" — which is exactly why the Create Run modal's choice lives on
+    # the row rather than being re-sent by whichever screen fires this.
+    dry_run = (
+        bool(body.dry_run)
+        or bool(run.link_dry_run)
+        or bool(settings_store.load_settings().get("dryRun"))
+    )
+    link = bool(body.link) and bool(run.link_enabled)
+    # The run's subset is the fallback, not an intersection: a caller that names
+    # tickets is being specific about this pass, and ANDing two subsets can yield
+    # an empty one neither of them asked for.
+    ticket_ids = list(body.ticket_ids) or list(run.link_ticket_ids or [])
+    link_service.start_create_link(run_id, link, ticket_ids, dry_run)
     audit_service.record(
         category="sync", actor_type="ai",
-        action="Created & linked test cases" if body.link else "Created test cases",
+        action="Created & linked test cases" if link else "Created test cases",
         target=run.code, meta=f"{approved} approved cases"
         + (" · dry run (the provider was not contacted)" if dry_run else ""),
     )

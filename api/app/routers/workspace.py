@@ -92,6 +92,7 @@ def list_shared_projects(
                 "repos": project_config_service.get_repos(cfg),
                 "workItemConnectionId": cfg.work_item_connection_id if cfg else None,
                 "repositoryConnectionId": cfg.repository_connection_id if cfg else None,
+                "testCaseConnectionId": cfg.test_case_connection_id if cfg else None,
                 "knowledge": knowledge_out,
                 "alreadyCloned": clone_service.dest_already_has_project(db, key, dest_owner_id),
             }

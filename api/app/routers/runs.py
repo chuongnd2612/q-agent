@@ -364,6 +364,15 @@ def create_run(
         retry_policy=body.retry_policy,
         status="processing",
         project_guid=project_guid,
+        # Link options (#732, ADR 0015 §5) — chosen in the Create Run modal now
+        # that the `sync` stage is hidden. Stored, not acted on here: the Link
+        # stage reads them when it runs.
+        link_enabled=bool(body.link),
+        link_dry_run=bool(body.dry_run),
+        # Only ids that are actually in this run's scope. A subset naming a ticket
+        # the run does not contain is not a smaller selection, it is a typo, and
+        # silently carrying it would make the Link stage skip everything.
+        link_ticket_ids=[tid for tid in (body.link_ticket_ids or []) if tid in set(ticket_ids)],
     )
     stamp_owner(run, user)
     db.add(run)
