@@ -107,7 +107,10 @@ export function SidebarProjectTree({
               aria-expanded={open}
               onClick={() => setToggled((s) => ({ ...s, [key]: !open }))}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-[11px] border-none px-2.5 py-2 text-left font-semibold",
+                // Tight gaps and padding: the rail is 248px and the row has to
+                // hold a chevron, a provider glyph, the name and a run badge
+                // before the name starts truncating.
+                "flex w-full items-center gap-2 rounded-[11px] border-none px-2 py-2 text-left font-semibold",
                 mobile ? "text-[13.5px]" : "text-[13px]",
                 current ? "text-white" : "text-[#c3c3d0] hover:bg-white/[0.06]",
               )}
@@ -145,7 +148,7 @@ export function SidebarProjectTree({
                 <span
                   data-testid="sidebar-active-run"
                   title={t("nav:tree.activeRun", { code: active.code })}
-                  className="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-[2px] font-mono text-[9px] font-semibold"
+                  className="flex shrink-0 items-center gap-[3px] rounded-full px-[5px] py-[2px] font-mono text-[9px] font-semibold"
                   style={{ background: "rgba(251,191,36,.14)", color: "#fbbf24" }}
                 >
                   <span className="relative flex h-1 w-1 shrink-0">
