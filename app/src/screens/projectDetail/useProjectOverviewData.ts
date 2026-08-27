@@ -1,10 +1,8 @@
 import { useTranslation } from "react-i18next";
 import {
-  ALL_TICKETS_PAGE_SIZE,
+  projectCountsKey,
+  useProjectCounts,
   useProjectRepos,
-  useProjects,
-  useRuns,
-  useTickets,
 } from "@/hooks/queries";
 import { knowledgeStatusStyle, providerLabel } from "@/data/projects";
 import { providerGlyph } from "@/components/ui/badges";
@@ -24,11 +22,12 @@ import type { ProjectMeta } from "./types";
  */
 export function useProjectOverviewData(key: string) {
   const { t } = useTranslation("projects");
-  const { data: projects } = useProjects();
   const { data: repos } = useProjectRepos(key);
-  const { data: ticketsPage } = useTickets({ pageSize: ALL_TICKETS_PAGE_SIZE });
-  const tickets = ticketsPage?.items;
-  const { data: runs } = useRuns();
+  // The single source for per-project figures (ADR 0015 §8, #733). This hook used
+  // to fetch the WHOLE workspace's tickets and count the ones whose providerKind
+  // matched — a second counting path, an unscoped read, and a count that was
+  // wrong the moment two projects shared a provider. All three go away together.
+  const { byProject, projects } = useProjectCounts();
 
   // GUID first — that is the identity. Falling back to the name keeps a
   // pre-#587 bookmark working; it is a *display* match, and the reason it can no
@@ -36,6 +35,7 @@ export function useProjectOverviewData(key: string) {
   const project =
     projects?.find((p) => p.guid === key) ?? projects?.find((p) => p.name === key);
   const providerKind: ProviderKind = project?.providerKind ?? "ado";
+  const counts = project ? byProject.get(projectCountsKey(project)) : undefined;
   const repoList = repos ?? [];
   const indexedRepos = repoList.filter((r) => r.status === "indexed");
   const meta: ProjectMeta = {
@@ -44,8 +44,8 @@ export function useProjectOverviewData(key: string) {
     framework: "Playwright",
     provider: providerLabel[providerKind],
     providerKind,
-    tickets: (tickets ?? []).filter((t) => t.providerKind === providerKind).length,
-    runs: (runs ?? []).filter((r) => r.status !== "done").length,
+    tickets: counts?.tickets ?? 0,
+    runs: counts?.runs ?? 0,
     rate: "—",
   };
 

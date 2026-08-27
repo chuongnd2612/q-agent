@@ -82,10 +82,14 @@ export function CreateRunModal() {
   // a cheap invariant behind it — it is no longer the mechanism, but a picker is a
   // UI promise and the invariant is the enforcement.
   const projectGuid = useModalProjectGuid();
-  const { data: ticketsPage } = useTickets({
-    project: projectGuid ?? undefined,
-    pageSize: ALL_TICKETS_PAGE_SIZE,
-  });
+  // Only fetched when the modal is actually open AND inside a project: hooks run
+  // above the `if (!open)` return below, so without the guard a closed modal
+  // sitting on the dashboard issued an UNSCOPED `/api/tickets` for the whole
+  // workspace — the exact read containment exists to prevent.
+  const { data: ticketsPage } = useTickets(
+    { project: projectGuid ?? undefined, pageSize: ALL_TICKETS_PAGE_SIZE },
+    open && !!projectGuid,
+  );
   const tickets = ticketsPage?.items;
   const user = useAuth((s) => s.user);
   const userName = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() : "";
