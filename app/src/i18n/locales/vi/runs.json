@@ -188,5 +188,29 @@
     "dryRun": "Chạy thử",
     "dryRunHint": "Chế độ chạy thử đang bật trong Cài đặt — test case chỉ được lưu trong Q-Agent, không đụng tới work item nào.",
     "createAndLinkDry": "Tạo test case (chạy thử)"
+  },
+  "overlay": {
+    "exit": "Thoát lượt chạy",
+    "stepperLabel": "Các giai đoạn của lượt chạy",
+    "back": "Quay lại",
+    "next": "Tiếp tục",
+    "finish": "Kết thúc lượt chạy",
+    "stepOf": "Bước {{current}}/{{total}}",
+    "subtitle": "{{scope}} · {{count}} phiếu · {{env}}",
+    "busy": {
+      "analyzing": "Đang phân tích phiếu…",
+      "linking": "Đang tạo & liên kết test case…"
+    },
+    "stage": {
+      "review": "Rà soát",
+      "automation": "Tự động hóa",
+      "execution": "Thực thi",
+      "evidence": "Bằng chứng",
+      "publish": "Công bố"
+    },
+    "gate": {
+      "needsApprovedCase": "Duyệt ít nhất một test case để tiếp tục",
+      "needsSuiteFinished": "Đang chờ bộ test chạy xong"
+    }
   }
 }

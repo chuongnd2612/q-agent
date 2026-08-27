@@ -32,7 +32,6 @@ import {
 import { Tickets } from "@/screens/Tickets";
 import { TicketDetail } from "@/screens/TicketDetail";
 import { Runs } from "@/screens/Runs";
-import { RunDetail } from "@/screens/RunDetail";
 import { ReviewCenter } from "@/screens/ReviewCenter";
 import { CreateLinkSync } from "@/screens/CreateLinkSync";
 import { Automation } from "@/screens/Automation";
@@ -126,7 +125,10 @@ const ROUTES = [
             path: "projects/:projectGuid/runs/:runId",
             element: <RunLayout />,
             children: [
-              { index: true, element: <RunDetail /> },
+              // No index element: the run root carries no stage, and `RunLayout`
+              // resolves it — resume where the user left off, else how far the
+              // run itself has got (ADR 0015 §4). `RunDetail` is superseded by
+              // the overlay and is left for #734 to delete.
               { path: "review", element: <ReviewCenter /> },
               { path: "sync", element: <CreateLinkSync /> },
               { path: "automation", element: <Automation /> },
