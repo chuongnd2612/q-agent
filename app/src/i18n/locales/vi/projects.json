@@ -100,6 +100,46 @@
     "saved": "Đã lưu cài đặt dự án",
     "saveError": "Lưu thất bại"
   },
+  "connectionTab": {
+    "intro": {
+      "title": "Mọi ticket, test case và lần chạy trong dự án này đều theo các kết nối bên dưới",
+      "body": "Nguồn ticket chỉ được đặt một lần, tại đây. Không màn hình nào cho phép đổi nhà cung cấp giữa chừng."
+    },
+    "roles": {
+      "ticketSource": {
+        "label": "Nguồn ticket",
+        "purpose": "Nơi duy nhất cung cấp ticket cho dự án này"
+      },
+      "codeKnowledge": {
+        "label": "Mã nguồn & tri thức",
+        "purpose": "Repository và pull request cung cấp dữ liệu cho Tri thức dự án và tự động hoá"
+      },
+      "testCase": {
+        "label": "Đích test case",
+        "purpose": "Nơi tạo, liên kết test case đã duyệt và công bố kết quả"
+      }
+    },
+    "state": {
+      "connected": "Đã kết nối",
+      "notConnected": "Chưa kết nối",
+      "none": "Chưa gán"
+    },
+    "test": {
+      "ok": "Kết nối thành công",
+      "failed": "Kết nối thất bại"
+    },
+    "unbound": "Chưa gán kết nối",
+    "inherited": "Giống nguồn ticket",
+    "boundTo": "Kết nối đang dùng",
+    "choose": "Chọn một kết nối",
+    "noEligible": "Không có kết nối phù hợp — thêm trong Cài đặt",
+    "testConnection": "Kiểm tra kết nối",
+    "editCredentials": "Sửa thông tin đăng nhập",
+    "lastSync": "Đồng bộ lần cuối {{time}}",
+    "saving": "Đang lưu…",
+    "bound": "Đã cập nhật kết nối",
+    "toggle": "Hiện chi tiết kết nối"
+  },
   "hubManaged": {
     "title": "Được quản lý bởi EmeHub",
     "body": "EmeHub sở hữu cấu hình của dự án này. Q-Agent chỉ hiển thị ở chế độ chỉ đọc — hãy mở dự án trong EmeHub để thay đổi.",

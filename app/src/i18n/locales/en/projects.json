@@ -100,6 +100,46 @@
     "saved": "Project settings saved",
     "saveError": "Save failed"
   },
+  "connectionTab": {
+    "intro": {
+      "title": "Every ticket, case and run in this project follows these connections",
+      "body": "The ticket source is set once, here. No screen lets you switch provider mid-flow."
+    },
+    "roles": {
+      "ticketSource": {
+        "label": "Ticket source",
+        "purpose": "The only place this project's tickets come from"
+      },
+      "codeKnowledge": {
+        "label": "Code & knowledge",
+        "purpose": "Repository and pull requests feeding Project Knowledge and automation"
+      },
+      "testCase": {
+        "label": "Test case target",
+        "purpose": "Where approved cases are created, linked and results published"
+      }
+    },
+    "state": {
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "none": "Not bound"
+    },
+    "test": {
+      "ok": "Connection OK",
+      "failed": "Connection failed"
+    },
+    "unbound": "No connection bound",
+    "inherited": "Same as the ticket source",
+    "boundTo": "Bound connection",
+    "choose": "Choose a connection",
+    "noEligible": "No eligible connections — add one in Settings",
+    "testConnection": "Test connection",
+    "editCredentials": "Edit credentials",
+    "lastSync": "Last sync {{time}}",
+    "saving": "Saving…",
+    "bound": "Connection updated",
+    "toggle": "Show connection details"
+  },
   "hubManaged": {
     "title": "Managed by EmeHub",
     "body": "EmeHub owns this project's configuration. Q-Agent shows it read-only — open the project in EmeHub to change it.",

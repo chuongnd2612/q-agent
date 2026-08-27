@@ -165,6 +165,10 @@ export interface ProjectConfigOut {
   workItemConnectionId: number | null;
   /** The repository connection this project's code lives on (ADR 0006). */
   repositoryConnectionId: number | null;
+  /** Where approved cases are created/linked and results published (ADR 0015 §3).
+   * `null` means "the same connection as the ticket source" — the implicit
+   * behaviour every consumer had before the role existed. */
+  testCaseConnectionId: number | null;
 }
 export interface ProjectConfigUpdate {
   baseUrl?: string;
@@ -177,6 +181,7 @@ export interface ProjectConfigUpdate {
   manualAuth?: boolean;
   workItemConnectionId?: number | null;
   repositoryConnectionId?: number | null;
+  testCaseConnectionId?: number | null;
 }
 
 /** Saved manual-login session state for a project (GET/DELETE /projects/{key}/auth). */
@@ -488,6 +493,9 @@ export interface SyncRequest {
    * backend to the project binding, then first-of-kind. */
   connectionId?: number;
   providerKind?: ProviderKind;
+  /** The project this sync runs for (#732). Its TICKET SOURCE binding decides the
+   * connection when `connectionId` is omitted — provider follows the project. */
+  projectGuid?: string | null;
   /** Project override — sync from this project instead of the connection's
    * configured default. */
   project?: string | null;
@@ -692,6 +700,11 @@ export interface RunOut {
    * `null` only for legacy rows whose project could not be resolved — those are
    * reachable via `?project=unassigned`. */
   projectGuid: string | null;
+  /** Link options chosen in the Create Run modal (#732). The Link stage is hidden
+   * (ADR 0015 §4), so this is the only place the decision is visible. */
+  linkEnabled: boolean;
+  linkDryRun: boolean;
+  linkTicketIds: string[];
   ticketIds: string[];
   /** Number of test cases in the run. */
   caseCount: number;
@@ -719,6 +732,11 @@ export interface RunCreate {
   retryPolicy?: number;
   sprint?: string | null;
   sprintPath?: string | null;
+  /** Link options (#732, ADR 0015 §5) — they used to live on the `sync` screen,
+   * which is hidden now, so the run's scope step owns them. */
+  link?: boolean;
+  dryRun?: boolean;
+  linkTicketIds?: string[];
 }
 
 export type SpecStatus =
