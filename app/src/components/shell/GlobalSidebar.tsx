@@ -14,8 +14,10 @@ import {
   PRIMARY_NAV,
   SECONDARY_NAV,
   activeNavPath,
+  navTourId,
   type NavItem,
 } from "@/components/shell/navConfig";
+import { SidebarProjectTree } from "@/components/shell/SidebarProjectTree";
 import { useHubDataEnabled, useHubWebUrl } from "@/hooks/queries";
 
 /** The global (non-run) sidebar: brand header, two global nav groups, account
@@ -72,7 +74,7 @@ export function GlobalSidebar() {
     return (
       <button
         key={n.path}
-        data-tour={`nav-${n.label.toLowerCase().replace(/\s+/g, "-")}`}
+        data-tour={navTourId(n)}
         onClick={() => navigate(n.path)}
         className={cn(
           "flex w-full items-center gap-3 rounded-xl border-none px-3 py-[9px] text-left text-[13.5px] font-semibold transition-colors",
@@ -239,6 +241,9 @@ export function GlobalSidebar() {
 
       <nav className="-mx-1 flex flex-col gap-0.5 overflow-y-auto px-1">
         {PRIMARY_NAV.map(renderItem)}
+        {/* The project tree sits between the two groups, exactly as in the v2
+            design: Dashboard · projects · All projects / Settings (ADR 0015). */}
+        <SidebarProjectTree />
         <hr className="mx-1.5 my-2 border-0 border-t border-white/[0.06]" />
         {SECONDARY_NAV.map(renderItem)}
         {showAdmin && (

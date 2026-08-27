@@ -27,21 +27,46 @@ export interface NavItem {
   label: string;
   /** i18n key into the `nav` namespace (`items.<key>`); see ADR 0011. */
   key: string;
+  /** Explicit `data-tour` id. Without one the id is derived from `label`, so
+   *  renaming a label silently breaks the tour step that targets it — which is
+   *  exactly what "Projects" → "All projects" would have done (#729). */
+  tourId?: string;
   icon: ComponentType<{ size?: number; strokeWidth?: number }>;
 }
 
-/** Global-only navigation. Run-scoped screens (Review / Automation / … ) never
- * appear here — they exist only inside a run's workspace (see RunSidebar /
- * MobileDrawer in-run mode), which is what prevents opening them without a run. */
+/** The `data-tour` id for a nav item: explicit when given, else derived from the
+ *  English source label. */
+export const navTourId = (n: NavItem): string =>
+  n.tourId ?? `nav-${n.label.toLowerCase().replace(/\s+/g, "-")}`;
+
+/**
+ * Global-only navigation, rendered ABOVE the project tree.
+ *
+ * Under ADR 0015 the project is the container, so nothing ticket- or run-shaped
+ * exists at workspace level any more: the global **Tickets / Runs / Reports**
+ * entries are gone (#729) and those screens are reached as a project's own tabs,
+ * via the sidebar project tree (`SidebarProjectTree`) or the Projects list. The
+ * cross-project "what is running right now" question they used to answer moved
+ * to the Dashboard's comparison table (#733) — removing the lists without that
+ * would have been a regression.
+ *
+ * Run-scoped screens (Review / Automation / …) never appear here either, which
+ * is what prevents opening one without a run.
+ */
 export const PRIMARY_NAV: NavItem[] = [
   { path: "/", label: "Dashboard", key: "dashboard", icon: LayoutDashboard },
-  { path: "/projects", label: "Projects", key: "projects", icon: FolderKanban },
-  { path: "/tickets", label: "Tickets", key: "tickets", icon: Ticket },
-  { path: "/runs", label: "Runs", key: "runs", icon: SquareStack },
 ];
 
+/** The "system" group, rendered BELOW the project tree. */
 export const SECONDARY_NAV: NavItem[] = [
-  { path: "/reports", label: "Reports", key: "reports", icon: BarChart3 },
+  {
+    path: "/projects",
+    label: "All projects",
+    key: "allProjects",
+    // Was labelled "Projects"; the product tour targets it by its old id.
+    tourId: "nav-projects",
+    icon: FolderKanban,
+  },
   { path: "/getting-started", label: "Getting Started", key: "gettingStarted", icon: GraduationCap },
   { path: "/local-agent", label: "Local Agent", key: "localAgent", icon: Laptop },
   { path: "/settings", label: "Settings", key: "settings", icon: Settings },

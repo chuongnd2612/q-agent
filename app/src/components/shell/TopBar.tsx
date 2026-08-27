@@ -1,21 +1,26 @@
-import { Plus, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AiActivityIndicator } from "@/components/shell/AiActivityIndicator";
 import { ClaudeStatsButton } from "@/components/shell/ClaudeStatsButton";
 import { LanguageSwitcher } from "@/components/shell/LanguageSwitcher";
-import { ProjectStatusButton } from "@/components/shell/ProjectStatusButton";
-import { RunContextHeader } from "@/components/shell/RunContextHeader";
-import { useRunRouteId } from "@/hooks/useRunRouteId";
 import { useUI } from "@/store/ui";
 
+/**
+ * The global header. Under ADR 0015 (#729) it lost three things:
+ *
+ * - the **run-context bar** — it swapped the whole header out on a run route,
+ *   which was the header half of "workspace mode"; a run is an overlay now and
+ *   the shell never changes mode. (`RunContextHeader` itself is deleted by the
+ *   cleanup slice, #734.)
+ * - the **project pill** (`ProjectStatusButton`) — it was a project switcher,
+ *   and there is deliberately no quick switcher: you move between projects
+ *   through the sidebar tree or the Projects list.
+ * - the global **New Run** button — a run can only be created from inside a
+ *   project, so it cannot exist without a project and a provider.
+ */
 export function TopBar() {
   const openPalette = useUI((s) => s.openPalette);
-  const openCreateRun = useUI((s) => s.openCreateRun);
-  const runId = useRunRouteId();
   const { t } = useTranslation("nav");
-
-  // On a run-scoped screen the global bar is replaced by the run-context header.
-  if (runId != null) return <RunContextHeader runId={runId} />;
 
   return (
     <header className="glass-strong flex h-[56px] shrink-0 items-center gap-3.5 rounded-[18px] px-[18px]">
@@ -34,15 +39,7 @@ export function TopBar() {
       <div className="ml-auto flex items-center gap-2">
         <LanguageSwitcher />
         <AiActivityIndicator />
-        <ProjectStatusButton />
         <ClaudeStatsButton />
-        <button
-          data-tour="topbar-newrun"
-          onClick={openCreateRun}
-          className="accent-gradient flex h-[38px] items-center gap-2 rounded-xl px-4 text-[13px] font-semibold text-white shadow-[0_8px_22px_-8px_rgba(139,92,246,.8)] hover:brightness-110"
-        >
-          <Plus size={15} strokeWidth={2.4} /> {t("topbar.newRun")}
-        </button>
       </div>
     </header>
   );

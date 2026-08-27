@@ -11,6 +11,7 @@ import {
   activeNavPath,
   type NavItem,
 } from "@/components/shell/navConfig";
+import { SidebarProjectTree } from "@/components/shell/SidebarProjectTree";
 import { runColor, runEffectiveStatus, runRateLabel } from "@/components/dashboard/runStatus";
 import { useHubDataEnabled, useRun } from "@/hooks/queries";
 import { useRunRouteId } from "@/hooks/useRunRouteId";
@@ -190,6 +191,9 @@ export function MobileDrawer() {
             </div>
             <nav className="flex flex-col gap-0.5">
               {PRIMARY_NAV.map(renderItem)}
+              {/* Same tree component as the desktop rail, so the two
+                  presentations of the nav cannot drift (#729). */}
+              <SidebarProjectTree variant="mobile" onNavigate={closeDrawer} />
               <hr className="mx-1 my-2 border-0 border-t border-white/[0.06]" />
               {SECONDARY_NAV.map(renderItem)}
             </nav>
