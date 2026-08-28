@@ -6,6 +6,7 @@ from app.models.run import Run, RunTicket
 from app.models.testcase import TestCase
 from app.services import ai_service
 from app.services.claude_cli import ClaudeError
+from app.services.skills import TEST_CASE_REVIEWER
 
 CANNED_ANALYSIS = {
     "businessRules": ["Reset link must be single-use"],
@@ -156,11 +157,66 @@ def test_pipeline_surfaces_claude_error(db_session, seed_ticket, monkeypatch):
     assert run_ticket.gen_status == "error"
     assert "CLI not authenticated" in run_ticket.analysis_error
 
-    # Run still finishes (moves to review) even though one ticket errored.
+    # This test used to assert `run.status == "review"`, which is the bug in #758:
+    # every ticket failed, so the run had produced nothing and yet presented as
+    # "In review · needs you". `failed_stage="processing"` is what ADR 0005's
+    # retry dispatch resumes by re-running generation.
     db_session.refresh(run)
-    assert run.status == "review"
+    assert run.status == "failed"
+    assert run.failed_stage == "processing"
 
     assert db_session.query(TestCase).filter(TestCase.run_id == run.id).count() == 0
+
+
+def test_pipeline_partial_failure_still_reaches_review(db_session, seed_ticket, monkeypatch):
+    """One ticket errors, one succeeds — the run is genuinely reviewable (#758).
+
+    The counterpart to the test above, and the reason the decision is "ALL
+    tickets failed" rather than "any ticket failed": there is real output to
+    review, so failing the whole run would throw it away.
+    """
+    from app.models.ticket import Ticket
+
+    second = Ticket(
+        external_id="SUR-2000",
+        provider_kind="ado",
+        title="Second work item",
+        acceptance_criteria=["Given something, then something"],
+    )
+    db_session.add(second)
+    db_session.commit()
+
+    run = _make_run(db_session, seed_ticket.external_id)
+    db_session.add(RunTicket(run_id=run.id, ticket_external_id=second.external_id, position=1))
+    db_session.commit()
+
+    def _boom_for_second(*_args, **kwargs):
+        # `run_json` is called twice per ticket (generate, then review) and both
+        # calls carry the ticket in their `label`, so that is the discriminator —
+        # not call order, which would break the moment the pipeline's call count
+        # per ticket changes.
+        label = str(kwargs.get("label", ""))
+        if second.external_id in label:
+            raise ClaudeError("rate limited")
+        if kwargs.get("skill") == TEST_CASE_REVIEWER:
+            return CANNED_REVIEW_EMPTY
+        return {"analysis": CANNED_ANALYSIS, "cases": CANNED_CASES}
+
+    monkeypatch.setattr(ai_service, "run_json", _boom_for_second)
+
+    ai_service.run_generation_pipeline(run.id, blocking=True)
+
+    statuses = {
+        rt.ticket_external_id: rt.gen_status
+        for rt in db_session.query(RunTicket).filter(RunTicket.run_id == run.id).all()
+    }
+    assert statuses[second.external_id] == "error"
+    assert statuses[seed_ticket.external_id] == "done"
+
+    db_session.refresh(run)
+    assert run.status == "review"
+    # And the surviving ticket's cases were kept, which is the whole point.
+    assert db_session.query(TestCase).filter(TestCase.run_id == run.id).count() > 0
 
 
 def test_pipeline_missing_ticket_sets_error(db_session):

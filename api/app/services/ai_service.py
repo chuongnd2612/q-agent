@@ -463,6 +463,36 @@ def _run_pipeline(run_id: int) -> None:
                     logger.info("Run {} cancelled during parallel generation", run.code)
                     return
 
+            # A run whose generation failed for EVERY ticket has not reached
+            # "needs your review" (#758). It used to advance to `review`
+            # regardless, so an expired Claude credential produced a run labelled
+            # "In review · needs you" whose Review Center said the AI had not
+            # generated anything yet — true of the output, wrong about the cause,
+            # and a dead end for the user.
+            #
+            # `failed_stage="processing"` is deliberate: ADR 0005's retry
+            # dispatch already resumes that stage by re-running generation, so
+            # "fix the credential, press Retry" becomes the obvious path.
+            #
+            # A PARTIAL failure still goes to `review` — there is real work to
+            # review — and the per-ticket `analysis_error` carries the rest.
+            db.expire_all()
+            errored = [rt for rt in run_tickets if rt.gen_status == "error"]
+            if errored and len(errored) == len(run_tickets):
+                first = errored[0].analysis_error or "generation failed"
+                logger.error(
+                    "AI pipeline: all {} ticket(s) failed for run {}: {}",
+                    len(errored), run.code, first,
+                )
+                run.failed_stage = "processing"
+                set_run_status(db, run, "failed")
+                audit_service.record(
+                    category="ai", actor_type="ai", action="Test generation failed",
+                    target=f"{run.code} · all {len(errored)} ticket(s)",
+                    status="error", meta=str(first)[:400], run_code=run.code,
+                )
+                return
+
             if not set_run_status(db, run, "review"):
                 return  # already terminal (e.g. cancelled) — don't overwrite it
 

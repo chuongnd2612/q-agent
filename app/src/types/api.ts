@@ -669,9 +669,14 @@ export type RunResult = "not_run" | "passed" | "failed" | "mixed";
 export interface RunTicketOut {
   ticketExternalId: string;
   position: number;
+  /** "queued" | "analyzing" | "generating" | "done" | "error". */
   genStatus: string;
   repo: string;
   analysis: Record<string, unknown>;
+  /** Why this ticket's analyze+generate failed, verbatim from the Claude CLI or
+   * the provider (#758). Empty when it did not fail. Shown unedited — the CLI's
+   * own text is the only thing that tells the user whether a retry can help. */
+  analysisError: string;
 }
 
 export interface RunRepoOption {

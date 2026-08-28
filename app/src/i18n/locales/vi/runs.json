@@ -211,10 +211,22 @@
     "gate": {
       "needsApprovedCase": "Duyệt ít nhất một test case để tiếp tục",
       "needsSuiteFinished": "Đang chờ bộ test chạy xong",
-      "needsPublish": "Công bố kết quả để kết thúc lượt chạy"
+      "needsPublish": "Công bố kết quả để kết thúc lượt chạy",
+      "runFailed": "Lượt chạy này đã thất bại — khắc phục nguyên nhân rồi thử lại"
     },
     "backToProject": "Về dự án",
-    "allStagesComplete": "Đã hoàn tất tất cả giai đoạn"
+    "allStagesComplete": "Đã hoàn tất tất cả giai đoạn",
+    "failedAt": "Thất bại ở {{stage}}",
+    "stageName": {
+      "processing": "Phân tích",
+      "review": "Rà soát",
+      "sync": "Liên kết",
+      "automation": "Tự động hóa",
+      "executing": "Thực thi",
+      "evidence": "Bằng chứng",
+      "comment": "Công bố",
+      "unknown": "một giai đoạn trước đó"
+    }
   },
   "complete": {
     "success": {
@@ -256,5 +268,15 @@
       "subsetAll": "Liên kết toàn bộ {{count}} ticket — chọn một phần",
       "subsetSome": "Liên kết {{count}}/{{total}} ticket"
     }
+  },
+  "genFailure": {
+    "allTitle": "Tạo test case thất bại",
+    "allBody": "AI đã chạy và thất bại với mọi phiếu trong lượt chạy này, nên không có test case nào được tạo. Thông báo từ nhà cung cấp ở bên dưới.",
+    "someTitle": "Tạo test case thất bại một phần",
+    "someBody": "{{failed}}/{{total}} phiếu thất bại. Các phiếu còn lại đã tạo bình thường và được liệt kê bên dưới.",
+    "retry": "Thử tạo lại",
+    "retryStarted": "Đang tạo lại test case…",
+    "retryFailed": "Không thể bắt đầu quá trình tạo",
+    "noDetail": "Không có thông báo nào được ghi lại cho phiếu này."
   }
 }

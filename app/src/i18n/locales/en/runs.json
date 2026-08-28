@@ -211,10 +211,22 @@
     "gate": {
       "needsApprovedCase": "Approve at least one test case to continue",
       "needsSuiteFinished": "Waiting for the suite to finish",
-      "needsPublish": "Publish the results to finish the run"
+      "needsPublish": "Publish the results to finish the run",
+      "runFailed": "This run failed — fix the cause and retry"
     },
     "backToProject": "Back to project",
-    "allStagesComplete": "All stages complete"
+    "allStagesComplete": "All stages complete",
+    "failedAt": "Failed at {{stage}}",
+    "stageName": {
+      "processing": "Analyze",
+      "review": "Review",
+      "sync": "Link",
+      "automation": "Automation",
+      "executing": "Execution",
+      "evidence": "Evidence",
+      "comment": "Publish",
+      "unknown": "an earlier stage"
+    }
   },
   "complete": {
     "success": {
@@ -256,5 +268,15 @@
       "subsetAll": "Linking all {{count}} tickets — choose a subset",
       "subsetSome": "Linking {{count}} of {{total}} tickets"
     }
+  },
+  "genFailure": {
+    "allTitle": "Test-case generation failed",
+    "allBody": "The AI ran and failed on every ticket in this run, so no test cases were produced. The provider's message is below.",
+    "someTitle": "Test-case generation partly failed",
+    "someBody": "{{failed}} of {{total}} tickets failed. The rest generated normally and are listed below.",
+    "retry": "Retry generation",
+    "retryStarted": "Regenerating test cases…",
+    "retryFailed": "Could not start generation",
+    "noDetail": "No message was recorded for this ticket."
   }
 }

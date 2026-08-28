@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Check, Loader2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Loader2, X } from "lucide-react";
 import { type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -36,6 +36,7 @@ export function RunOverlay({
   viewedStage,
   furthestStage,
   busyLabel,
+  failureLabel,
   onExit,
   onBack,
   onNext,
@@ -53,6 +54,13 @@ export function RunOverlay({
   furthestStage: number;
   /** Label for the spinner chip while a hidden automatic stage works. */
   busyLabel: string | null;
+  /** Label for the FAILURE chip when the run failed (#758).
+   *
+   * The hidden automatic stages have no stepper entry, so the chip beside the run
+   * name is the only channel they have — and it had a spinner but no error
+   * counterpart, which is how a run that died in Analyze reached the user as a
+   * silent empty Review Center. */
+  failureLabel: string | null;
   onExit: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -105,6 +113,20 @@ export function RunOverlay({
                   </motion.span>
                 )}
               </AnimatePresence>
+              {failureLabel && (
+                <span
+                  data-testid="run-failure-chip"
+                  className="flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                  style={{
+                    background: "rgba(251,113,133,.14)",
+                    boxShadow: "inset 0 0 0 1px rgba(251,113,133,.32)",
+                    color: "#fb7185",
+                  }}
+                >
+                  <AlertTriangle size={11} strokeWidth={2.6} />
+                  {failureLabel}
+                </span>
+              )}
             </div>
             <div className="mt-0.5 truncate text-[12px] text-ink-dim">{subtitle}</div>
           </div>
