@@ -620,6 +620,37 @@ async function hubTokenForRead(): Promise<string | null> {
 }
 
 /**
+ * Options for a query whose value **another application owns** (#761).
+ *
+ * The global default is `refetchOnWindowFocus: false` (`app/QueryProvider.tsx`),
+ * which is right for data Q-Agent owns: nothing changes it behind the user's
+ * back, so refetching on every focus is noise. EmeHub-owned values are the
+ * opposite case — EmeHub is the source of truth for identity and shared
+ * configuration (its ADR 0001), so by definition they change in another tab, in
+ * another app, and switching back to this tab is *exactly* the gesture the user
+ * makes after changing one.
+ *
+ * Without this, nothing could invalidate such a query: focus refetch was off,
+ * there was no interval, and the only `invalidateQueries` calls for credentials
+ * fire on Q-Agent's OWN mutations and target a different key. `ClaudeStatsButton`
+ * is mounted for the whole session, so the query always has an observer and never
+ * gets a fresh mount to trigger `refetchOnMount` either. The chip kept showing a
+ * credential the hub had already stopped resolving, until a hard reload.
+ *
+ * Deliberately NOT applied to every `hubTokenForRead()`-backed query: the other
+ * hub reads are lists (tickets, projects) where a refetch on every focus is a
+ * request storm for data that did not change. Applied where the value is small,
+ * cheap and genuinely volatile from outside.
+ */
+const hubOwnedQueryOptions = {
+  refetchOnWindowFocus: true,
+  refetchOnReconnect: true,
+  // Short enough that reopening the popover re-reads, long enough that a focus
+  // storm does not. The read is one cheap hub call.
+  staleTime: 5_000,
+} as const;
+
+/**
  * The credential EmeHub would resolve for this user (#512).
  *
  * Mints a hub token per read like every other hub-backed query. Always resolves —
@@ -630,6 +661,7 @@ export const useHubClaudeCredential = () =>
   useQuery({
     queryKey: ["claude-credentials", "hub"] as const,
     queryFn: async () => api.claudeCredentials.hub(await hubTokenForRead()),
+    ...hubOwnedQueryOptions,
   });
 
 /** Tickets for a filter set.
