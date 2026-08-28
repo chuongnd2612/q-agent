@@ -924,6 +924,20 @@ class RunTicketOut(ApiModel):
     gen_status: str = "queued"
     repo: str = ""
     analysis: dict = Field(default_factory=dict)
+    #: Why this ticket's analyze+generate failed, verbatim from the provider or
+    #: the Claude CLI (#758). Empty when it did not fail.
+    #:
+    #: The backend has always recorded this (`gen_status="error"` +
+    #: `analysis_error`), but it was missing from this schema — so a run whose
+    #: generation failed reached the UI indistinguishable from one that had
+    #: simply not produced anything yet, and Review Center said "the AI hasn't
+    #: generated any test cases yet" about an AI that had tried and failed.
+    #:
+    #: Passed through unedited on purpose: the CLI's own text ("credentials
+    #: expired", "rate limited", "no such model") is the only thing that tells
+    #: the user whether a retry can help. A friendlier paraphrase would drop
+    #: exactly the part that matters.
+    analysis_error: str = ""
 
 
 class RunRepoOptionOut(ApiModel):

@@ -12,7 +12,6 @@ import {
   activeAutoStage,
   furthestStage as furthestStageOf,
   isRunFinished,
-  isTerminalStatus,
   readResumeStage,
   stageIndex,
   stageIndexForSegment,
@@ -156,6 +155,7 @@ export function RunLayout() {
             viewedStage={-1}
             furthestStage={RUN_STAGES.length}
             busyLabel={null}
+            failureLabel={null}
             onExit={() => navigate(projectRunsPath)}
             onBack={() => {}}
             onNext={() => navigate(projectRunsPath)}
@@ -185,7 +185,12 @@ export function RunLayout() {
   // Only the two gates the design names. Everything else is walk-through: a gate
   // the user cannot satisfy and was never told about is worse than no gate.
   let blockedReason: string | null = null;
-  if (currentKey === "review" && approvedCases === 0) {
+  if (run.status === "failed") {
+    // Naming the failure beats the generic gate hint. "Approve at least one test
+    // case to continue" on a run whose generation never ran is advice the user
+    // cannot act on, and it hides the thing they can.
+    blockedReason = t("overlay.gate.runFailed");
+  } else if (currentKey === "review" && approvedCases === 0) {
     blockedReason = t("overlay.gate.needsApprovedCase");
   } else if (currentKey === "execution" && !suiteFinished) {
     blockedReason = t("overlay.gate.needsSuiteFinished");
@@ -222,8 +227,24 @@ export function RunLayout() {
           count: run.ticketIds.length,
         })}
         viewedStage={viewedStage}
-        furthestStage={isTerminalStatus(run.status) ? RUN_STAGES.length : furthest}
+        // Only a `done` run has every stage behind it. `failed` and `cancelled`
+        // are terminal too, but ticking all five pills for them says the run
+        // completed the pipeline — which is exactly the false reassurance #758
+        // is about. A failed run ticks the stages it actually passed.
+        furthestStage={isRunFinished(run.status) ? RUN_STAGES.length : furthest}
         busyLabel={auto ? t(`overlay.${auto.labelKey}`) : null}
+        // A failed run says so beside its name (#758). The stage it died at
+        // matters: for a hidden automatic stage there is no stepper entry to
+        // carry the state, so without this the run reads as "nothing happened".
+        failureLabel={
+          run.status === "failed"
+            ? t("overlay.failedAt", {
+                stage: t(`overlay.stageName.${run.failedStage ?? "unknown"}`, {
+                  defaultValue: run.failedStage ?? "",
+                }),
+              })
+            : null
+        }
         onExit={() => navigate(projectRunsPath)}
         onBack={goBack}
         onNext={goNext}

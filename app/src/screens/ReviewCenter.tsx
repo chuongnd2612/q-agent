@@ -10,6 +10,10 @@ import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useRunPath } from "@/hooks/useRunRouteId";
 import {
+  RunGenerationFailure,
+  failedRunTickets,
+} from "@/components/runs/RunGenerationFailure";
+import {
   useCaseMutations,
   useCreateAndLink,
   useRun,
@@ -189,7 +193,16 @@ export function ReviewCenter() {
         />
       )}
 
-      {!isLoading && !isError && tickets.length === 0 && (
+      {/* Why there is nothing here (#758). "The AI hasn't generated any test cases
+          yet" was shown for a failed generation too — true of the output, wrong
+          about the cause, and a dead end. The panel replaces the empty state
+          when generation errored, and sits above the list on a partial failure
+          so the surviving cases are still reviewable. */}
+      {!isLoading && !isError && failedRunTickets(run).length > 0 && (
+        <RunGenerationFailure run={run} runId={runId} />
+      )}
+
+      {!isLoading && !isError && tickets.length === 0 && failedRunTickets(run).length === 0 && (
         <EmptyState
           icon={<Sparkles size={30} className="text-violet" />}
           title={t("review.empty.title")}
