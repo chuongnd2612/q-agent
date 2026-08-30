@@ -22,6 +22,7 @@ import {
   useTestClaudeCredentials,
   useUploadOwnClaudeCredentials,
 } from "@/hooks/queries";
+import { claudeAccountLabel } from "@/lib/claudeAccount";
 import { cn } from "@/lib/cn";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type {
@@ -113,7 +114,7 @@ const EMPTY_WINDOW: UsageWindow = {
 };
 
 /**
- * Top-bar Claude usage chip (`● ⭐ Sonnet 5 ▾`) + a portalled dropdown panel of
+ * Top-bar Claude account chip (`● ⭐ Personal ▾`) + a portalled dropdown panel of
  * usage stats read from `GET /ai/stats`. Present in both the global TopBar and the
  * run-context header. Follows the project's floating-overlay rule: the panel is
  * portalled to `document.body`, fixed-positioned anchored below-right of the chip
@@ -134,7 +135,11 @@ export function ClaudeStatsButton() {
 
   // Loading = the model setting hasn't arrived yet on first page load.
   const loading = isPending && !stats;
-  const label = stats ? shortModel(stats.modelLabel) : "Claude";
+  // The chip names the ACCOUNT a run would authenticate with, not the model
+  // (#763). The model is still one click away, in the panel's header. Derived
+  // through `claudeAccountLabel` so the chip and the panel's CREDENTIAL badge
+  // are literally the same computation.
+  const label = claudeAccountLabel(hubData, hubCred, credStatus);
   const operational = stats?.operational ?? false;
   // Three-state health: down (no CLI) → red, warn (CLI up but the credential is
   // expired/invalid) → amber, ok → green. The old dot only reflected the binary.
@@ -186,7 +191,7 @@ export function ClaudeStatsButton() {
             </span>
             <Star size={12} strokeWidth={2} style={{ color: "#fbbf24" }} fill="#fbbf24" />
             {/* On mobile the chip is compact (dot + star only) to fit the top bar;
-                the model label + chevron show from `md` up. */}
+                the account label + chevron show from `md` up. */}
             <span className="hidden md:inline">{label}</span>
             <ChevronDown size={12} strokeWidth={2} className="hidden md:block" />
           </>
@@ -357,7 +362,8 @@ function StatsPanel({
   if (!isMobile && !pos) return null;
 
   const credMode = credStatus?.mode ?? "none";
-  const credBadge = credMode === "own" ? "Personal" : credMode === "shared" ? "Shared" : "Not set";
+  // Same helper as the chip above — one source for the three words (#763).
+  const credBadge = claudeAccountLabel(hubData, hubCred, credStatus);
   const credName =
     credMode === "own"
       ? "Your personal credentials"
