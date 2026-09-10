@@ -1065,6 +1065,125 @@ class AutomationExportRequest(ApiModel):
     message: str | None = None
 
 
+# ------------------------------------ Project-keyed automation browsing (#768)
+#
+# The run overlay's `GET /runs/{id}/automation` embeds every file's full `code`,
+# which is right for one already-loaded screen and wrong for a browser. These
+# split that payload into a metadata tree plus lazy per-file content, so opening
+# the project Automation tab costs kilobytes instead of megabytes.
+
+
+class AutomationRepoOut(ApiModel):
+    """One automation repo a project has accumulated — a repo-selector entry.
+
+    ``repo_label`` exists because ``repo`` is ``""`` for a project with a single
+    repo and the selector still has to render something.
+
+    Deliberately carries **no** ``head_commit``: resolving one shells out to
+    ``git rev-parse`` per repo (~30-80ms on Windows), which would add subprocess
+    time to what is otherwise a two-query request, on every tab visit. The
+    selected repo's commit is served by :class:`AutomationTreeOut` instead, which
+    is also the only place it is displayed.
+    """
+
+    id: int
+    repo: str = ""
+    repo_label: str = "default"
+    slug: str = ""
+    base_version: str = ""
+    file_count: int = 0
+    spec_count: int = 0
+    #: Newest mirrored file's timestamp, falling back to the repo row's own
+    #: ``updated_at`` when the repo has been scaffolded but holds no files yet.
+    updated_at: datetime
+
+
+class AutomationTreeFileOut(ApiModel):
+    """One row of the file tree. **No ``code`` field — that is the point.**
+
+    ``size`` is the byte length of *the mirror's* copy (``AutomationFile.code``),
+    which is what the viewer will show — not whatever happens to be on disk.
+    """
+
+    path: str
+    kind: str
+    size: int
+    updated_at: datetime
+
+
+class AutomationTreeOut(ApiModel):
+    """The selected repo's file tree: metadata only, ordered by ``path``."""
+
+    project_id: int
+    repo: str = ""
+    slug: str = ""
+    base_version: str = ""
+    #: Resolved here and nowhere else: one git spawn, for the one selected repo,
+    #: on a request already doing real work.
+    head_commit: str = ""
+    file_count: int = 0
+    updated_at: datetime
+    files: list[AutomationTreeFileOut] = Field(default_factory=list)
+
+
+class SpecProvenanceEntryOut(ApiModel):
+    """One ``AutomationSpec`` row that claims a file path, with its lineage (#769).
+
+    ``stale`` marks an entry that no longer produced the bytes on screen: ADR 0014
+    lets a later run overwrite the file while the earlier spec row keeps its own
+    copy of the code.
+    """
+
+    spec_id: int
+    spec_status: str = ""
+    block_reason: str | None = None
+    test_case_id: int
+    case_code: str = ""
+    case_title: str = ""
+    ticket_external_id: str = ""
+    run_id: int
+    run_code: str = ""
+    run_name: str = ""
+    run_status: str = ""
+    run_created_at: datetime
+    run_finished_at: datetime | None = None
+    stale: bool = False
+
+
+class SpecProvenanceOut(ApiModel):
+    """Where a spec file came from (#769).
+
+    ``latest`` is authoritative — it produced the code being shown — and
+    ``history`` holds the earlier rows that were overwritten, kept explicit rather
+    than hidden: hiding them misrepresents lineage, flattening them
+    misrepresents which one is current.
+    """
+
+    kind: str = "spec"
+    overwritten: bool = False
+    latest: SpecProvenanceEntryOut
+    history: list[SpecProvenanceEntryOut] = Field(default_factory=list)
+
+
+class AutomationFileOut(ApiModel):
+    """One file's full content, fetched lazily when the user opens it (#768).
+
+    ``provenance`` is ``None`` for a **non-spec** file (page/component/fixture/…)
+    by design: those are edited across many runs, so "the run that made it" is not
+    a fact that exists, and inferring one would render a guess as fact. It is also
+    ``None`` for specs until #769 populates it — the field is typed and serialized
+    here so that slice only has to fill it in.
+    """
+
+    path: str
+    kind: str
+    code: str = ""
+    size: int
+    updated_at: datetime
+    sha256: str = ""
+    provenance: SpecProvenanceOut | None = None
+
+
 class SpecChatRequest(ApiModel):
     """A reviewer's chat instruction to edit the selected spec (AI chat panel).
 
