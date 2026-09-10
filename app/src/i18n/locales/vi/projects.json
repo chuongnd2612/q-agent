@@ -249,6 +249,30 @@
     "treeFailedBody": "Kho vẫn ở đó, nhưng không đọc được danh sách tệp của nó.",
     "fileFailedTitle": "Không tải được tệp này",
     "fileFailedBody": "Tệp có trong cây tệp, nhưng không đọc được nội dung.",
-    "retry": "Thử lại"
+    "retry": "Thử lại",
+    "provenance": {
+      "title": "Được sinh ra bởi",
+      "specStatus": {
+        "draft": "Bản nháp",
+        "blocked": "Bị chặn",
+        "running": "Đang chạy",
+        "passed": "Đạt",
+        "failed": "Không đạt",
+        "product_defect": "Lỗi sản phẩm"
+      },
+      "blockReason": "Bị chặn: {{reason}}",
+      "openRun": "Mở bước Tự động hóa của lượt chạy này cho ca kiểm thử này",
+      "runStarted": "bắt đầu {{when}}",
+      "runFinished": "kết thúc {{when}}",
+      "historyToggle_one": "{{count}} lượt chạy trước đó cũng đã ghi tệp này",
+      "historyToggle_other": "{{count}} lượt chạy trước đó cũng đã ghi tệp này",
+      "historyNote": "Một lượt chạy sau đã ghi đè đường dẫn này. Mỗi lượt chạy trước vẫn giữ bản kịch bản mà nó sinh ra, nên các dòng đó vẫn được lưu lại — chỉ là chúng không còn là mã đang nằm trên ổ đĩa.",
+      "superseded": "Đã bị thay thế bởi {{runCode}} — bản kịch bản lưu của lượt chạy này không phải là mã đang nằm trên ổ đĩa.",
+      "sharedTitle": "Tài sản dùng chung — được tái sử dụng và mở rộng qua nhiều lượt chạy. Q-Agent không ghi lại lượt chạy nào đã sửa nó lần cuối.",
+      "syncedAt": "Đồng bộ bản sao lần cuối {{when}}",
+      "copySha": "Sao chép sha256 đầy đủ",
+      "shaCopied": "Đã sao chép sha256",
+      "gitNote": "Lịch sử git của kho có câu trả lời theo từng commit; việc đưa nó ra qua HTTP (git log --follow) là một việc tiếp theo, không thuộc phạm vi màn hình này."
+    }
   }
 }
