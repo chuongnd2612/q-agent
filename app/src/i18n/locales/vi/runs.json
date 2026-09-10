@@ -241,6 +241,7 @@
     "publishList": "Công bố theo từng phiếu",
     "noComments": "Lượt chạy này không công bố bình luận nào.",
     "openReports": "Mở báo cáo dự án",
+    "openAutomation": "Mở tự động hóa dự án",
     "startAnother": "Bắt đầu lượt chạy khác",
     "figure": {
       "tickets": "Phiếu đã bao phủ",

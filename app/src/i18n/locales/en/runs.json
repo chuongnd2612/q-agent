@@ -241,6 +241,7 @@
     "publishList": "Per-ticket publish",
     "noComments": "This run published no comments.",
     "openReports": "Open project reports",
+    "openAutomation": "Open project automation",
     "startAnother": "Start another run",
     "figure": {
       "tickets": "Tickets covered",
