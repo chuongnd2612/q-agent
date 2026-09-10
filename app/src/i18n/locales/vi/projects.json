@@ -229,6 +229,26 @@
   "automation": {
     "emptyTitle": "Chưa có kho tự động hóa",
     "emptyBody": "Q-Agent sẽ tạo kho này ngay khi một lượt chạy sinh ra kịch bản kiểm thử đầu tiên cho dự án.",
-    "viewRuns": "Xem lượt chạy"
+    "viewRuns": "Xem lượt chạy",
+    "scaffoldOnlyTitle": "Đã tạo bộ khung nhưng chưa có tệp nào được sinh ra",
+    "scaffoldOnlyBody": "Kho đã tồn tại và bộ khung đã được commit, nhưng chưa lượt chạy nào sinh nội dung vào đây. Bạn vẫn có thể tải bộ khung về.",
+    "selectFileTitle": "Chọn một tệp để đọc",
+    "selectFileBody": "Chưa có gì được tải cho đến khi bạn mở tệp — cây tệp chỉ chứa đường dẫn, mã của từng tệp được tải khi bạn chọn.",
+    "defaultRepo": "mặc định",
+    "repoSelectorLabel": "Kho tự động hóa",
+    "repoFileCount_one": "{{count}} tệp",
+    "repoFileCount_other": "{{count}} tệp",
+    "repoSpecCount_one": "{{count}} kịch bản",
+    "repoSpecCount_other": "{{count}} kịch bản",
+    "repoUpdated": "cập nhật {{when}}",
+    "repoNote": "Bản sao của riêng bạn, thuộc một kho được dùng chung giữa các dự án của bạn: kho tự động hóa là riêng theo người dùng, và mỗi kho được định danh theo dự án bên nhà cung cấp cùng tên kho — nên nó cũng có thể chứa tệp do lượt chạy của dự án khác tạo ra.",
+    "noSpecsNote": "Kho này chưa có kịch bản kiểm thử nào được sinh ra — nhưng các page object, fixture và dữ liệu bên dưới vẫn là thành quả đã tích lũy được.",
+    "loadFailedTitle": "Không tải được kho tự động hóa của dự án",
+    "loadFailedBody": "Yêu cầu lấy danh sách kho tự động hóa của dự án đã thất bại. Không có gì trên ổ đĩa bị thay đổi.",
+    "treeFailedTitle": "Không tải được cây tệp",
+    "treeFailedBody": "Kho vẫn ở đó, nhưng không đọc được danh sách tệp của nó.",
+    "fileFailedTitle": "Không tải được tệp này",
+    "fileFailedBody": "Tệp có trong cây tệp, nhưng không đọc được nội dung.",
+    "retry": "Thử lại"
   }
 }

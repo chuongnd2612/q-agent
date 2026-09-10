@@ -229,6 +229,26 @@
   "automation": {
     "emptyTitle": "No automation repo yet",
     "emptyBody": "Q-Agent creates one the first time a run generates specs for this project.",
-    "viewRuns": "View runs"
+    "viewRuns": "View runs",
+    "scaffoldOnlyTitle": "Scaffolded but no generated files yet",
+    "scaffoldOnlyBody": "The repo exists and its skeleton is committed, but no run has generated anything into it. You can still download the scaffold.",
+    "selectFileTitle": "Pick a file to read it",
+    "selectFileBody": "Nothing is loaded until you open it — the tree carries paths only, and each file's code is fetched when you select it.",
+    "defaultRepo": "default",
+    "repoSelectorLabel": "Automation repo",
+    "repoFileCount_one": "{{count}} file",
+    "repoFileCount_other": "{{count}} files",
+    "repoSpecCount_one": "{{count}} spec",
+    "repoSpecCount_other": "{{count}} specs",
+    "repoUpdated": "updated {{when}}",
+    "repoNote": "Your clone of a repo shared across your projects: automation repos are per-user, and one repo is keyed by provider project and repo name — so it may also hold files that other projects' runs created.",
+    "noSpecsNote": "No generated specs in this repo yet — the page objects, fixtures and data below are still real, accumulated work.",
+    "loadFailedTitle": "Couldn't load this project's automation repos",
+    "loadFailedBody": "The request for this project's automation repos failed. Nothing has changed on disk.",
+    "treeFailedTitle": "Couldn't load the file tree",
+    "treeFailedBody": "The repo is there, but its file list could not be read.",
+    "fileFailedTitle": "Couldn't load this file",
+    "fileFailedBody": "The file is listed in the tree, but its contents could not be read.",
+    "retry": "Try again"
   }
 }
