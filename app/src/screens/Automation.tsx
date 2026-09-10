@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useRunPath } from "@/hooks/useRunRouteId";
@@ -748,8 +749,14 @@ export function Automation() {
 
       {/* Export the project: ZIP now (v1), git remote in v2 (#686).
           Only for a project-backed run: a legacy spec has no
-          `projectId`, so there is no git repo to push and the panel is hidden. */}
-      <ExportProjectPanel runId={runId} projectId={exportableProjectId} />
+          `projectId`, so there is no git repo to push and the panel is hidden.
+          The panel takes the download action, not the ids (#770) — the project
+          Automation tab renders the same panel against its own endpoint. */}
+      {exportableProjectId != null && (
+        <ExportProjectPanel
+          download={() => api.exportAutomationProjectZip(runId, exportableProjectId)}
+        />
+      )}
 
       {thinking && <ThinkingBanner runCode={run?.code} thinkStep={thinkStep} />}
 

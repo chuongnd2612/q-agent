@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
 import { Spinner } from "@/components/ui/misc";
-import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
 
 /**
@@ -26,25 +25,29 @@ import { toast } from "@/lib/toast";
  * remote is not on offer, so a readiness check could only produce a warning about a
  * prerequisite for neither. Collapsed by default (#536) — an export is an
  * occasional, deliberate act. Nothing here goes into Zustand.
+ *
+ * The **download itself is a prop** (#770): the same ZIP is reachable two ways —
+ * `/runs/{id}/automation/export/zip` from the run overlay and
+ * `/projects/{guid}/automation/repos/{id}/export/zip` from the project Automation
+ * tab — so the panel takes the action rather than the identifiers. Threading an
+ * optional `projectGuid` alongside `runId` would have made two mutually exclusive
+ * halves of one prop set, with nothing in the types saying so.
  */
 export function ExportProjectPanel({
-  runId,
-  projectId,
+  download,
 }: {
-  runId: number;
-  /** The automation project to export; `null` for a legacy run (panel hidden). */
-  projectId: number | null;
+  /** Fetch the archive. Resolves with the blob and the server's filename; the
+   *  panel owns the save + the toast, the caller owns *which* ZIP. */
+  download: () => Promise<{ blob: Blob; filename: string }>;
 }) {
   const { t } = useTranslation("pipeline");
   const [busy, setBusy] = useState(false);
-
-  if (projectId == null) return null;
 
   const downloadZip = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const { blob, filename } = await api.exportAutomationProjectZip(runId, projectId);
+      const { blob, filename } = await download();
       // The viewer's own browser saves it; the object URL is revoked immediately
       // after the click so the blob is not held for the life of the page.
       const url = URL.createObjectURL(blob);

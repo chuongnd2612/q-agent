@@ -23,6 +23,8 @@ Thumbs.db
 # scratch / test artifacts
 scratch/
 *.local
+# Runtime-probe screenshots + request logs (app/scripts/probe-*.mjs).
+app/probe-out/
 
 # python / backend
 api/.venv/
