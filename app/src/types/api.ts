@@ -766,13 +766,103 @@ export type ProjectFileKind =
   | "config"
   | "spec";
 
+/** The identity of a file in the automation project: where it lives and which
+ * layer it belongs to. Split out of {@link ProjectFile} (#767) because the
+ * project-scoped Automation tab browses a **metadata tree** that carries no
+ * `code` — every presentational helper that only reads `path`/`kind`
+ * (`groupProjectFiles`, `ProjectFileTree`) is typed against this instead, so the
+ * tree renders both shapes without forking. */
+export interface ProjectFileMeta {
+  path: string;
+  kind: string;
+}
+
 /** One file of the persistent automation project shipped alongside a spec.
  * `path` is project-relative (e.g. `pages/LoginPage.ts`). Read-only in the UI —
  * editing support files must route through the quality gate (#543). */
-export interface ProjectFile {
-  path: string;
-  kind: string;
+export interface ProjectFile extends ProjectFileMeta {
   code: string;
+}
+
+/** One row of the project Automation tab's file tree (#768). Deliberately has no
+ * `code`: `GET .../repos/{id}/files` returns ~25KB of metadata for a 200-file
+ * project instead of megabytes, and the content is fetched lazily per file. */
+export interface AutomationTreeFile extends ProjectFileMeta {
+  /** Byte length of **the mirror's** copy of the file (`AutomationFile.code`),
+   *  which is what the viewer shows — not whatever is on disk. */
+  size: number;
+  updatedAt: string;
+}
+
+/** One automation repo a project has accumulated, as listed by the repo selector
+ * (#768). `repoLabel` is `repo || "default"` — `repo` is `""` for a single-repo
+ * project and the selector must still render something. No `headCommit` here: it
+ * costs a `git rev-parse` spawn per repo, and only the selected repo shows one. */
+export interface AutomationRepoOut {
+  id: number;
+  repo: string;
+  repoLabel: string;
+  slug: string;
+  baseVersion: string;
+  fileCount: number;
+  specCount: number;
+  updatedAt: string;
+}
+
+/** The selected repo's file tree (#768) — metadata only, ordered by path. */
+export interface AutomationTreeOut {
+  projectId: number;
+  repo: string;
+  slug: string;
+  baseVersion: string;
+  headCommit: string;
+  fileCount: number;
+  updatedAt: string;
+  files: AutomationTreeFile[];
+}
+
+/** One `AutomationSpec` row that claims a file path — the run, ticket and case
+ * that produced it, and how it ended (#769). `stale` marks an entry that no
+ * longer produced the bytes on screen: ADR 0014 lets a later run overwrite the
+ * file while the earlier spec row keeps its own copy of the code. */
+export interface SpecProvenanceEntry {
+  specId: number;
+  specStatus: string;
+  blockReason: string | null;
+  testCaseId: number;
+  caseCode: string;
+  caseTitle: string;
+  ticketExternalId: string;
+  runId: number;
+  runCode: string;
+  runName: string;
+  runStatus: string;
+  runCreatedAt: string;
+  runFinishedAt: string | null;
+  stale: boolean;
+}
+
+/** Where a spec file came from (#769). `latest` is authoritative — it produced
+ * the code being shown — and `history` holds the earlier rows that were
+ * overwritten, shown explicitly rather than hidden (hiding them misrepresents
+ * lineage; showing them flat misrepresents which one is current). */
+export interface SpecProvenance {
+  kind: "spec";
+  overwritten: boolean;
+  latest: SpecProvenanceEntry;
+  history: SpecProvenanceEntry[];
+}
+
+/** One file's full content in the project Automation tab (#768/#769).
+ *
+ * `provenance` is `null` for a **non-spec** file (page/component/fixture/…) by
+ * design: those are edited across many runs, so "the run that made it" is not a
+ * fact that exists, and inferring one would render a guess as fact. */
+export interface AutomationFileOut extends ProjectFile {
+  size: number;
+  updatedAt: string;
+  sha256: string;
+  provenance: SpecProvenance | null;
 }
 
 export interface AutomationSpecOut {

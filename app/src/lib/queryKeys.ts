@@ -22,6 +22,15 @@ export const queryKeys = {
   projectConfig: (key: string) => ["projects", key, "config"] as const,
   projectAuth: (key: string) => ["projects", key, "auth"] as const,
   projectRepos: (key: string) => ["projects", key, "repos"] as const,
+  /** The project's automation repos, tree and per-file content (#765). Keyed on
+   *  the GUID — the identifier these endpoints take — under the same `projects`
+   *  prefix as every other project-scoped query. */
+  automationRepos: (projectGuid: string) =>
+    ["projects", projectGuid, "automation", "repos"] as const,
+  automationTree: (projectGuid: string, projectId: number) =>
+    ["projects", projectGuid, "automation", "repos", projectId, "files"] as const,
+  automationFile: (projectGuid: string, projectId: number, path: string) =>
+    ["projects", projectGuid, "automation", "repos", projectId, "file", path] as const,
   repoKnowledge: (key: string, repo: string) =>
     ["projects", key, "repos", repo, "knowledge"] as const,
   tickets: (filters?: Record<string, string | number | undefined>) =>

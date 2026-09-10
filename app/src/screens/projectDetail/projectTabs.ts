@@ -1,5 +1,5 @@
 /**
- * The project's six tabs (ADR 0015 slice 2).
+ * The project's seven tabs (ADR 0015 slice 2).
  *
  * Each tab is a **path segment**, not a `?tab=` query param, and the type lives
  * here rather than in `store/ui.ts`: the tab is navigation, and navigation never
@@ -22,6 +22,7 @@ export const PROJECT_TABS = [
   { id: "knowledge", labelKey: "tabs.knowledge" },
   { id: "connection", labelKey: "tabs.connection" },
   { id: "reports", labelKey: "tabs.reports" },
+  { id: "automation", labelKey: "tabs.automation" },
 ] as const;
 
 export type ProjectTab = (typeof PROJECT_TABS)[number]["id"];

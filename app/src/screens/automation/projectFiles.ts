@@ -1,4 +1,4 @@
-import type { ProjectFile } from "@/types/api";
+import type { ProjectFile, ProjectFileMeta } from "@/types/api";
 
 /**
  * The order the automation project's layers are shown in, mirroring #537 doc
@@ -21,7 +21,16 @@ export function kindLabelKey(kind: string): string {
   return (PROJECT_FILE_KINDS as readonly string[]).includes(kind) ? kind : "other";
 }
 
-export type ProjectFileGroup = { kind: string; files: ProjectFile[] };
+/** One `kind` group of the file list.
+ *
+ * Generic over the file shape (#767) so the same grouping serves the run
+ * overlay's {@link ProjectFile} (which carries `code`) and the project
+ * Automation tab's metadata-only tree rows. `T` **defaults to `ProjectFile`**,
+ * so every pre-existing call site keeps its exact old typing unchanged. */
+export type ProjectFileGroup<T extends ProjectFileMeta = ProjectFile> = {
+  kind: string;
+  files: T[];
+};
 
 /**
  * Group the project's files by `kind` in {@link PROJECT_FILE_KINDS} order,
@@ -30,8 +39,10 @@ export type ProjectFileGroup = { kind: string; files: ProjectFile[] };
  *
  * Files inside a group are sorted by path so the list is stable across refetches.
  */
-export function groupProjectFiles(files: ProjectFile[]): ProjectFileGroup[] {
-  const byKind = new Map<string, ProjectFile[]>();
+export function groupProjectFiles<T extends ProjectFileMeta = ProjectFile>(
+  files: T[],
+): ProjectFileGroup<T>[] {
+  const byKind = new Map<string, T[]>();
   for (const f of files) {
     const key = kindLabelKey(f.kind) === "other" ? "other" : f.kind;
     const bucket = byKind.get(key);
@@ -48,8 +59,12 @@ export function groupProjectFiles(files: ProjectFile[]): ProjectFileGroup[] {
 }
 
 /** One ticket's specs inside the Specs group; `ticket` is "" when the file does
- *  not live under a ticket directory. */
-export type SpecTicketGroup = { ticket: string; files: ProjectFile[] };
+ *  not live under a ticket directory. Generic on the same terms as
+ *  {@link ProjectFileGroup}. */
+export type SpecTicketGroup<T extends ProjectFileMeta = ProjectFile> = {
+  ticket: string;
+  files: T[];
+};
 
 /**
  * The ticket directory a spec lives in, or "" when it has none.
@@ -76,8 +91,10 @@ export function ticketOf(path: string): string {
  * along and only visible on hover. Files with no ticket come last under "", so
  * they render without a header rather than inventing one.
  */
-export function groupSpecsByTicket(files: ProjectFile[]): SpecTicketGroup[] {
-  const byTicket = new Map<string, ProjectFile[]>();
+export function groupSpecsByTicket<T extends ProjectFileMeta = ProjectFile>(
+  files: T[],
+): SpecTicketGroup<T>[] {
+  const byTicket = new Map<string, T[]>();
   for (const f of files) {
     const ticket = ticketOf(f.path);
     const bucket = byTicket.get(ticket);

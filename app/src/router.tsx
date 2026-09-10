@@ -22,6 +22,7 @@ import {
 } from "@/screens/LegacyRedirects";
 import { GettingStarted } from "@/screens/GettingStarted";
 import { Projects } from "@/screens/Projects";
+import { ProjectAutomationTab } from "@/screens/projectAutomation/ProjectAutomationTab";
 import {
   ProjectConnectionTab,
   ProjectDetail,
@@ -99,7 +100,7 @@ const ROUTES = [
           // still lands here and resolves — `ProjectDetail` rewrites it to the
           // canonical GUID URL rather than 404ing.
           //
-          // The project is the CONTAINER (ADR 0015): its six tabs are path
+          // The project is the CONTAINER (ADR 0015): its seven tabs are path
           // segments below it, and the tickets/runs/reports lists are the
           // project's own rows rather than the global lists they used to
           // navigate out to (#693).
@@ -115,6 +116,7 @@ const ROUTES = [
               { path: "knowledge", element: <ProjectKnowledgeTab /> },
               { path: "connection", element: <ProjectConnectionTab /> },
               { path: "reports", element: <Reports /> },
+              { path: "automation", element: <ProjectAutomationTab /> },
             ],
           },
           // Run stages are a SIBLING of the project layout, not a child of it:

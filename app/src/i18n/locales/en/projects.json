@@ -46,6 +46,7 @@
     "runs": "Runs",
     "connection": "Connection",
     "reports": "Reports",
+    "automation": "Automation",
     "settings": "Settings"
   },
   "overview": {
@@ -224,5 +225,10 @@
     "removeRepository": "Remove repository",
     "cloneUrlPlaceholder": "clone URL (https://…) — used when no local path is set",
     "localPathPlaceholder": "local path (optional)"
+  },
+  "automation": {
+    "emptyTitle": "No automation repo yet",
+    "emptyBody": "Q-Agent creates one the first time a run generates specs for this project.",
+    "viewRuns": "View runs"
   }
 }

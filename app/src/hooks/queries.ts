@@ -1223,6 +1223,53 @@ export const useExportAutomationProject = (runId: number | string) => {
   });
 };
 
+// ------------------------------------------- project automation repos (#765)
+//
+// The project-scoped twin of the run overlay's automation reads: same repos,
+// addressed by project GUID so they can be browsed outside a run. Metadata and
+// content are separate queries because the tree is walked and only a handful of
+// its files are ever opened.
+
+/** Every automation repo this project has accumulated (the tab's repo selector). */
+export const useAutomationRepos = (projectGuid: string | null) =>
+  useQuery({
+    queryKey: queryKeys.automationRepos(projectGuid ?? ""),
+    queryFn: () => api.listAutomationRepos(projectGuid as string),
+    enabled: !!projectGuid,
+  });
+
+/** One repo's file tree — metadata only, no `code`. */
+export const useAutomationTree = (
+  projectGuid: string | null,
+  projectId: number | null,
+) =>
+  useQuery({
+    queryKey: queryKeys.automationTree(projectGuid ?? "", projectId ?? 0),
+    queryFn: () => api.getAutomationTree(projectGuid as string, projectId as number),
+    enabled: !!projectGuid && projectId != null,
+  });
+
+/**
+ * One file's content + provenance, fetched lazily when a tree row is opened.
+ *
+ * `enabled: !!path` is what makes it lazy — nothing is fetched until a file is
+ * selected. The long `staleTime` is deliberate: a mirrored file only changes when
+ * a run rewrites it, so re-opening a file the user just closed must not re-hit
+ * the network. The tab's own refresh invalidates the key when that matters.
+ */
+export const useAutomationFile = (
+  projectGuid: string | null,
+  projectId: number | null,
+  path: string | null,
+) =>
+  useQuery({
+    queryKey: queryKeys.automationFile(projectGuid ?? "", projectId ?? 0, path ?? ""),
+    queryFn: () =>
+      api.getAutomationFile(projectGuid as string, projectId as number, path as string),
+    enabled: !!projectGuid && projectId != null && !!path,
+    staleTime: 5 * 60_000,
+  });
+
 // The last self-heal trail for a case (per-attempt error + diff + outcome).
 export const useHealReport = (caseId: number, enabled: boolean) =>
   useQuery({
