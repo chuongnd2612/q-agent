@@ -24,8 +24,11 @@ import type {
   ClaudeCredentialsUpload,
   AutomationExportPreflight,
   AutomationExportResult,
+  AutomationFileOut,
+  AutomationRepoOut,
   AutomationSpecOut,
   AutomationStatus,
+  AutomationTreeOut,
   BackendLogOut,
   BackendLogStats,
   CloneResultOut,
@@ -989,6 +992,32 @@ export const api = {
       message?: string;
     },
   ) => post<AutomationExportResult>(`/runs/${runId}/automation/export`, body),
+
+  // project automation repos (#765) — the same repos the run overlay shows, read
+  // by PROJECT GUID instead of by run, so a user can browse what a project has
+  // accumulated without being inside a run. Metadata and content are separate
+  // calls: the tree is browsed, the code is opened one file at a time.
+  listAutomationRepos: (projectGuid: string) =>
+    get<AutomationRepoOut[]>(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos`,
+    ),
+  getAutomationTree: (projectGuid: string, projectId: number) =>
+    get<AutomationTreeOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/files`,
+    ),
+  /** One file's content. `path` is a QUERY param, not a path segment: automation
+   * paths always contain `/`, and a catch-all segment would both collide with the
+   * sibling `files`/`export` routes and mangle the percent-encoded slashes. */
+  getAutomationFile: (projectGuid: string, projectId: number, path: string) =>
+    get<AutomationFileOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/file?path=${encodeURIComponent(path)}`,
+    ),
+  /** Project-keyed twin of {@link exportAutomationProjectZip} — same ZIP, reached
+   *  from the project tab rather than from a run. */
+  exportProjectAutomationZip: (projectGuid: string, projectId: number) =>
+    getFile(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/export/zip`,
+    ),
 
   exploreStatus: (projectKey: string, repo: string) =>
     get<ExploreStatus>(

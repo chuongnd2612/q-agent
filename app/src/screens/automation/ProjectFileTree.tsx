@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { CollapsibleSection } from "@/components/settings/CollapsibleSection";
 import { PathTooltip } from "./PathTooltip";
-import type { ProjectFile } from "@/types/api";
+import type { ProjectFileMeta } from "@/types/api";
 import {
   baseName,
   groupSpecsByTicket,
@@ -36,7 +36,7 @@ export function ProjectFileTree({
   selectedPath,
   onSelect,
 }: {
-  groups: ProjectFileGroup[];
+  groups: ProjectFileGroup<ProjectFileMeta>[];
   /** Path of the editable spec — the default selection. */
   specPath: string;
   /** Currently open file; equals `specPath` when the editor is showing the spec. */
@@ -111,7 +111,7 @@ function FileRow({
   editable,
   onSelect,
 }: {
-  file: ProjectFile;
+  file: ProjectFileMeta;
   active: boolean;
   editable: boolean;
   onSelect: (path: string) => void;

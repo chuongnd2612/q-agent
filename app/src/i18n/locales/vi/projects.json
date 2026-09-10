@@ -46,6 +46,7 @@
     "runs": "Lượt chạy",
     "connection": "Kết nối",
     "reports": "Báo cáo",
+    "automation": "Tự động hóa",
     "settings": "Cài đặt"
   },
   "overview": {
@@ -224,5 +225,10 @@
     "removeRepository": "Xóa kho mã",
     "cloneUrlPlaceholder": "URL sao chép (https://…) — dùng khi chưa đặt đường dẫn cục bộ",
     "localPathPlaceholder": "đường dẫn cục bộ (tùy chọn)"
+  },
+  "automation": {
+    "emptyTitle": "Chưa có kho tự động hóa",
+    "emptyBody": "Q-Agent sẽ tạo kho này ngay khi một lượt chạy sinh ra kịch bản kiểm thử đầu tiên cho dự án.",
+    "viewRuns": "Xem lượt chạy"
   }
 }
