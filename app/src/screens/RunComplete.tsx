@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, BarChart3, Check, Loader2, RotateCw, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, BarChart3, Check, FileCode2, Loader2, RotateCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
@@ -161,6 +161,15 @@ export function RunComplete() {
         >
           <BarChart3 size={15} strokeWidth={2.2} />
           {t("complete.openReports")}
+        </Button>
+        <Button
+          variant="glass"
+          data-testid="run-complete-automation"
+          onClick={() => navigate(`${projectPath}/automation`)}
+          className="w-full md:w-auto"
+        >
+          <FileCode2 size={15} strokeWidth={2.2} />
+          {t("complete.openAutomation")}
         </Button>
         <Button
           variant="glass"
