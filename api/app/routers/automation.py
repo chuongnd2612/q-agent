@@ -302,7 +302,11 @@ def _resolve_automation_project(
     if not project_key:
         return None
     project = automation_project_service.ensure_project(
-        db, run.owner_id, project_key, (context.get("repo") or "").strip()
+        db,
+        run.owner_id,
+        project_key,
+        (context.get("repo") or "").strip(),
+        project_guid=run.project_guid,
     )
     deps = automation_project_service.ensure_deps(project)
     if deps == "unavailable":

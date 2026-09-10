@@ -39,7 +39,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -184,8 +184,39 @@ def project_dir(project: AutomationProject) -> Path:
     return scoped_automation_dir(project.owner_id) / project.slug
 
 
+def _resolve_project_guid(
+    db: Session, owner_id: int | None, project_key: str, project_guid: str | None
+) -> str | None:
+    """The owning project's GUID for ``project_key``, or the one already known (#766).
+
+    ``project_config_service`` is imported here rather than at module scope on
+    purpose: it pulls in ``connection_service``, and this module deliberately
+    depends on nothing beyond ``repo_service`` / ``workspace_scope``.
+
+    Args:
+        db: Active session.
+        owner_id: Owning user's id, or ``None`` for the shared namespace.
+        project_key: The provider project key (e.g. ``"SUR"``).
+        project_guid: A GUID the caller already has (typically ``Run.project_guid``).
+            Returned untouched when set, so the caller's value costs no query.
+
+    Returns:
+        The resolved GUID, or ``None`` when the key maps to no project — a
+        legitimate outcome for a project that is only indexed, never an error.
+    """
+    if project_guid:
+        return project_guid
+    from app.services import project_config_service
+
+    return project_config_service.project_guid_for_key(db, project_key, owner_id=owner_id)
+
+
 def ensure_project(
-    db: Session, owner_id: int | None, project_key: str, repo: str = ""
+    db: Session,
+    owner_id: int | None,
+    project_key: str,
+    repo: str = "",
+    project_guid: str | None = None,
 ) -> AutomationProject:
     """Get-or-create the automation project for ``(owner_id, project_key, repo)``.
 
@@ -200,9 +231,20 @@ def ensure_project(
         project_key: The provider project key (e.g. ``"SUR"``).
         repo: The repo this asset library belongs to; ``""`` for the project's
             only/default repo.
+        project_guid: The owning project's GUID (#766), denormalized onto the row
+            exactly like ``Run.project_guid`` so a project-scoped listing has a
+            column to filter on. Resolved from ``project_key`` when not passed.
 
     Returns:
         The persisted :class:`AutomationProject`, with its tree on disk.
+
+    Note:
+        A row whose ``project_guid`` is still NULL — created before #766, or
+        created before its project config existed — is **healed** here, otherwise
+        it would stay invisible to the project-scoped tab forever. Resolution only
+        happens while the value is missing: ``ensure_project`` sits on the hot
+        generation path under ``project_lock``, so the steady state must add zero
+        queries. An unresolvable key leaves NULL rather than raising.
     """
     project_key = (project_key or "").strip()
     repo = (repo or "").strip()
@@ -214,12 +256,14 @@ def ensure_project(
                 AutomationProject.repo == repo,
             )
         )
+        created = project is None
         if project is None:
             project = AutomationProject(
                 owner_id=owner_id,
                 project_key=project_key,
                 repo=repo,
                 slug=_relative_slug(project_key, repo),
+                project_guid=_resolve_project_guid(db, owner_id, project_key, project_guid),
             )
             project.root_path = str(project_dir(project))
             db.add(project)
@@ -239,6 +283,15 @@ def ensure_project(
             else:
                 db.refresh(project)
 
+        # Heal a row that predates #766 (or predates its own project config). Skipped
+        # when this call just created the row, which already resolved once.
+        if project.project_guid is None and not created:
+            healed = _resolve_project_guid(db, owner_id, project_key, project_guid)
+            if healed is not None:
+                project.project_guid = healed
+                project.updated_at = utcnow()
+                db.commit()
+
         # Idempotent on-disk materialization (a no-op for an existing tree).
         root = project_dir(project)
         materialize_scaffold(project)
@@ -251,6 +304,72 @@ def ensure_project(
             project.updated_at = utcnow()
             db.commit()
         return project
+
+
+def projects_for_guid(
+    db: Session, project_guid: str, owner_id: int | None
+) -> list[AutomationProject]:
+    """Every automation project belonging to one owning project, ordered by repo (#766).
+
+    A project has one automation project **per repo**, so this returns a list.
+
+    Two legs, both required — neither is a temporary bridge:
+
+    (a) ``project_guid`` on the row itself. Stamped by :func:`ensure_project`
+        since #766, and the *only* thing that can find a repo that has been
+        scaffolded but has no specs yet.
+    (b) The rows any of this project's runs actually wrote a spec into
+        (``automation_specs`` -> ``test_cases`` -> ``runs.project_guid``). This
+        is ground truth for every row that predates the stamping, whose
+        ``project_guid`` is NULL or, for a shared repo, cannot be a single value
+        at all.
+
+    ``AutomationProject.project_key`` is the **provider** project key, not the
+    q-agent project's name — a project named ``demo`` legitimately has an
+    automation row keyed ``surency`` — so matching on the name resolves nothing
+    and must not be attempted here.
+
+    Args:
+        db: Active session.
+        project_guid: The owning project's GUID — the identity the
+            ``/projects/:projectGuid`` route travels on (ADR 0013).
+        owner_id: The caller's user id, or ``None`` for the shared namespace.
+            Always matched exactly: another user's rows are never returned.
+
+    Returns:
+        The distinct matching rows, ordered by ``repo`` so the default (``""``)
+        repo sorts first. Empty when the project has no automation project yet.
+
+    Note:
+        One automation repo can be shared by several q-agent projects — the row
+        is keyed on ``(owner_id, provider project_key, repo)``, so two projects
+        whose runs target the same provider project and repo write into it. Such
+        a row is returned for **every** project that wrote to it, which is why
+        this is a per-call query rather than a scalar column read.
+    """
+    from app.models.run import Run
+    from app.models.testcase import AutomationSpec, TestCase
+
+    spec_backed = (
+        select(AutomationSpec.project_id)
+        .join(TestCase, TestCase.id == AutomationSpec.test_case_id)
+        .join(Run, Run.id == TestCase.run_id)
+        .where(AutomationSpec.project_id.is_not(None), Run.project_guid == project_guid)
+    )
+    return list(
+        db.scalars(
+            select(AutomationProject)
+            .where(
+                AutomationProject.owner_id == owner_id,
+                or_(
+                    AutomationProject.project_guid == project_guid,
+                    AutomationProject.id.in_(spec_backed),
+                ),
+            )
+            .distinct()
+            .order_by(AutomationProject.repo)
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
