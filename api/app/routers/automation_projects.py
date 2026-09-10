@@ -45,16 +45,20 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps_auth import current_user
 from app.models.automation_project import AutomationFile, AutomationProject
+from app.models.run import Run
+from app.models.testcase import AutomationSpec, TestCase
 from app.models.user import User
 from app.schemas import (
     AutomationFileOut,
     AutomationRepoOut,
     AutomationTreeFileOut,
     AutomationTreeOut,
+    SpecProvenanceEntryOut,
+    SpecProvenanceOut,
 )
 from app.services import audit_service, automation_export_service
 from app.services import automation_project_service as aps
-from app.services.ownership import check_owned_or_404
+from app.services.ownership import check_owned_or_404, owned
 
 router = APIRouter(prefix="/projects/{project_guid}/automation", tags=["automation"])
 
@@ -144,6 +148,121 @@ def _validated_path(path: str) -> str:
             status_code=400, detail="Automation file paths may not contain '..' segments."
         )
     return value
+
+
+def _provenance_entry(
+    spec: AutomationSpec, case: TestCase, run: Run, *, stale: bool
+) -> SpecProvenanceEntryOut:
+    """One ``(spec, case, run)`` triple as the wire shape the client types expect.
+
+    ``history`` entries get the **same** full shape as ``latest`` — the only
+    difference is ``stale`` — because the frontend renders them with the same
+    component (#767). A narrower object for history would force the client to
+    branch on which list a row came from, and would make "show the run that
+    actually produced this" impossible for the overwritten rows, which is the one
+    thing history exists to answer.
+
+    ``block_reason`` is stored as ``""`` rather than NULL, so it is normalized to
+    ``None`` here: "no reason" and "the empty reason" are the same fact, and the
+    client's optional field is what says so.
+
+    Args:
+        spec: The ``AutomationSpec`` row claiming the file path.
+        case: The test case the spec was generated for.
+        run: The run that generated it.
+        stale: True when a **later** run overwrote the file, so this row's own
+            ``code`` is no longer what is on screen (ADR 0014's overwrite rule).
+
+    Returns:
+        A populated :class:`SpecProvenanceEntryOut`.
+    """
+    return SpecProvenanceEntryOut(
+        spec_id=spec.id,
+        spec_status=spec.status or "",
+        block_reason=spec.block_reason or None,
+        test_case_id=case.id,
+        case_code=case.code or "",
+        case_title=case.title or "",
+        ticket_external_id=case.ticket_external_id or "",
+        run_id=run.id,
+        run_code=run.code or "",
+        run_name=run.name or "",
+        run_status=run.status or "",
+        run_created_at=run.created_at,
+        run_finished_at=run.finished_at,
+        stale=stale,
+    )
+
+
+def _spec_provenance(
+    db: Session, project: AutomationProject, path: str, user: User | None
+) -> SpecProvenanceOut | None:
+    """Which run / ticket / case produced the spec at ``path`` — or ``None``.
+
+    **The join key is ``AutomationSpec.filename``, not ``.path``.**
+    ``_project_spec_relpath`` (``routers/automation.py``) documents that
+    ``filename`` holds the *project-relative POSIX* path for a project-backed
+    spec (``tests/SUR-1428/SUR-1428-TC-01.spec.ts``) — the identical shape to
+    ``AutomationFile.path``. ``AutomationSpec.path`` is the **absolute on-disk**
+    path and goes stale the moment the workspace directory moves, so joining on it
+    would silently return no provenance on any relocated install.
+
+    ``project_id == project.id`` is what keeps the legacy, per-run specs out.
+    Those rows predate #538, carry ``project_id IS NULL`` and a **bare basename**
+    ``filename`` (``SUR-1428-TC-01.spec.ts``), so a query that omitted the
+    ``project_id`` predicate could match a basename from an entirely unrelated
+    project and attribute this project's file to that project's run.
+
+    Several rows can legitimately claim one path: ADR 0014 lets run #2 rewrite the
+    file while run #1's ``AutomationSpec`` keeps its own copy of the older code.
+    The newest run is therefore returned as ``latest`` — it produced the bytes the
+    viewer is showing — and the rest as explicit ``history`` with ``stale: true``.
+    Neither hiding them (which misrepresents lineage) nor flattening them (which
+    misrepresents which one is current) would be honest.
+
+    **Non-spec files return ``None`` on purpose**, and that is a decision rather
+    than a gap: pages, components and fixtures are edited across many runs, so
+    "the run that made it" is not a fact that exists. Inferring one from
+    ``updated_at`` proximity would render a guess as fact — the #178 failure mode.
+
+    Args:
+        db: Active session.
+        project: The already-resolved, already-ownership-checked repo.
+        path: The validated project-relative POSIX path being read.
+        user: The caller, or ``None`` under the #91 ownership bridge.
+
+    Returns:
+        A :class:`SpecProvenanceOut`, or ``None`` when no ``AutomationSpec`` row
+        in this repo claims ``path`` (a shared asset, or a file written before the
+        spec row existed).
+    """
+    stmt = (
+        select(AutomationSpec, TestCase, Run)
+        .join(TestCase, AutomationSpec.test_case_id == TestCase.id)
+        .join(Run, TestCase.run_id == Run.id)
+        .where(
+            AutomationSpec.project_id == project.id,
+            AutomationSpec.filename == path,
+        )
+        # Newest run first. `AutomationSpec.id` breaks the tie deterministically —
+        # `created_at` has second-level granularity in practice, and two runs
+        # created inside the same second would otherwise order arbitrarily,
+        # making which entry is `latest` a coin flip between requests.
+        .order_by(Run.created_at.desc(), AutomationSpec.id.desc())
+    )
+    # Defence in depth: `_project_or_404` already proved the *repo* is the
+    # caller's, but the runs reached through this join are separate owned rows.
+    rows = db.execute(owned(stmt, Run, user)).all()
+    if not rows:
+        return None
+    latest = _provenance_entry(*rows[0], stale=False)
+    history = [_provenance_entry(*row, stale=True) for row in rows[1:]]
+    return SpecProvenanceOut(
+        kind="spec",
+        overwritten=bool(history),
+        latest=latest,
+        history=history,
+    )
 
 
 @router.get("/repos", response_model=list[AutomationRepoOut])
@@ -277,9 +396,10 @@ def get_project_automation_file(
     Malformed paths are refused by :func:`_validated_path` before the query runs;
     a well-formed path with no mirror row is a plain 404.
 
-    ``provenance`` is ``None`` in this slice — #769 populates it for spec files —
-    but the field is already typed and on the wire, so the client contract does
-    not move when it arrives.
+    ``provenance`` is populated by :func:`_spec_provenance` (#769) and **only for
+    ``kind == "spec"``**. The join is skipped entirely for a shared asset, which
+    is both the cheap and the honest thing to do: a page or fixture is edited
+    across many runs, so there is no single run that "made it".
     """
     project = _project_or_404(db, project_guid, project_id, user)
     relative = _validated_path(path)
@@ -298,7 +418,7 @@ def get_project_automation_file(
         size=len(code.encode("utf-8")),
         updated_at=row.updated_at,
         sha256=row.sha256 or "",
-        provenance=None,
+        provenance=(_spec_provenance(db, project, relative, user) if row.kind == "spec" else None),
     )
 
 

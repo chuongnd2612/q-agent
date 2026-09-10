@@ -1170,9 +1170,10 @@ class AutomationFileOut(ApiModel):
 
     ``provenance`` is ``None`` for a **non-spec** file (page/component/fixture/…)
     by design: those are edited across many runs, so "the run that made it" is not
-    a fact that exists, and inferring one would render a guess as fact. It is also
-    ``None`` for specs until #769 populates it — the field is typed and serialized
-    here so that slice only has to fill it in.
+    a fact that exists, and inferring one would render a guess as fact. It is
+    populated (#769) for ``kind == "spec"`` whenever an ``AutomationSpec`` row in
+    the same repo claims the path — and stays ``None`` for a spec file no spec row
+    claims, e.g. one mirrored before the row existed.
     """
 
     path: str

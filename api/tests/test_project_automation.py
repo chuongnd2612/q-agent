@@ -1,10 +1,11 @@
-"""Project-keyed automation read endpoints (#768).
+"""Project-keyed automation read endpoints (#768) and spec provenance (#769).
 
 Covers ``routers/automation_projects.py``: the repo selector's aggregates, the
-code-free file tree, lazy per-file content, path validation and the ZIP export —
-all reached by **project GUID** rather than by run.
+code-free file tree, lazy per-file content, path validation, the ZIP export and
+the run/ticket/case provenance on a spec — all reached by **project GUID** rather
+than by run.
 
-Three things this file is deliberately careful about:
+Four things this file is deliberately careful about:
 
 * **It asserts which resolution leg ran**, not just the status code.
   ``projects_for_guid`` is a two-leg union, and a test that seeds both legs would
@@ -15,6 +16,11 @@ Three things this file is deliberately careful about:
 * **It asserts the tree carries no ``code`` key.** That negative is the entire
   point of the slice — a tree that quietly regrew ``code`` would still pass every
   positive assertion.
+* **The "provenance is null" cases are guarded against a dead join.** A join that
+  matched nothing would return ``None`` for *everything*, so every null case
+  changes exactly **one** thing from the resolving case: the mirror row's ``kind``,
+  the spec's ``project_id``, its ``filename``, or which repo it points at — and
+  the shared-asset test asserts the resolving request in the same body.
 * **Ownership is exercised with a real user.** The suite runs with
   ``auth_required=False``, so ``current_user`` resolves to ``None`` and the #91
   ownership bridge lets everything through; the ownership tests override the
@@ -27,6 +33,7 @@ import hashlib
 import io
 import shutil
 import zipfile
+from datetime import datetime, timezone
 
 import pytest
 
@@ -145,6 +152,80 @@ def _spec_written_by_a_run(
     return run
 
 
+def _spec_row(
+    db_session,
+    project,
+    *,
+    filename: str,
+    project_guid: str | None = GUID,
+    project_id: int | None = -1,
+    owner_id: int | None = OWNER_ID,
+    run_code: str = "RUN-0031",
+    run_name: str = "Sprint 42 regression",
+    run_status: str = "done",
+    created_at=None,
+    finished_at=None,
+    ticket: str = "SUR-1428",
+    case_code: str = "TC-01",
+    case_title: str = "Login with valid credentials",
+    spec_status: str = "passed",
+    block_reason: str = "",
+):
+    """A ``run -> case -> spec`` chain claiming ``filename`` — the provenance join.
+
+    ``filename`` is the parameter that matters: for a project-backed spec it holds
+    the **project-relative POSIX** path (``tests/SUR-1428/SUR-1428-TC-01.spec.ts``),
+    which is what ``AutomationFile.path`` looks like too. Passing a bare basename
+    plus ``project_id=None`` reproduces a legacy, pre-#538 row.
+
+    ``created_at`` is set explicitly because ordering is on ``Run.created_at`` and
+    the default clock has second-level granularity — two rows inserted in the same
+    second would otherwise make "which one is ``latest``" a coin flip.
+
+    Args:
+        project_id: The ``AutomationProject`` id to stamp on the spec. The
+            sentinel ``-1`` means "this project"; pass ``None`` for a legacy row.
+    """
+    from app.models.run import Run
+    from app.models.testcase import AutomationSpec, TestCase
+
+    run = Run(
+        code=run_code,
+        name=run_name,
+        status=run_status,
+        owner_id=owner_id,
+        project_guid=project_guid,
+        finished_at=finished_at,
+        **({"created_at": created_at} if created_at is not None else {}),
+    )
+    db_session.add(run)
+    db_session.flush()
+    case = TestCase(
+        run_id=run.id,
+        ticket_external_id=ticket,
+        code=case_code,
+        title=case_title,
+        approval="approved",
+        automation="Playwright",
+    )
+    db_session.add(case)
+    db_session.flush()
+    spec = AutomationSpec(
+        test_case_id=case.id,
+        filename=filename,
+        code=SPEC_CODE,
+        status=spec_status,
+        block_reason=block_reason,
+        # The absolute on-disk path, deliberately *wrong* for the join: a handler
+        # that joined on `.path` instead of `.filename` would find nothing here.
+        path=f"/somewhere/else/{filename}",
+        project_id=project.id if project_id == -1 else project_id,
+    )
+    db_session.add(spec)
+    db_session.commit()
+    return run, case, spec
+
+
 def _as_me(app, db_session, email: str = "me@test"):
     """Override ``current_user`` with a real user so ownership is enforced."""
     from app.deps_auth import current_user
@@ -232,7 +313,7 @@ def test_repos_orders_by_repo_so_the_default_repo_is_first(client, db_session):
 
 
 def test_repos_is_empty_not_404_for_a_project_with_no_automation(client, db_session):
-    """"No automation yet" is a state, not an error — the tab renders an empty view."""
+    """ "No automation yet" is a state, not an error — the tab renders an empty view."""
     _repo(db_session, project_guid=OTHER_GUID)
 
     response = client.get(f"/projects/{GUID}/automation/repos")
@@ -314,9 +395,10 @@ def test_tree_carries_no_code_key(client, db_session):
         assert "code" not in entry, entry
     # And the payload as a whole is free of it, not merely each row.
     assert "code" not in body
-    assert PAGE_CODE.strip() not in client.get(
-        f"/projects/{GUID}/automation/repos/{project.id}/files"
-    ).text
+    assert (
+        PAGE_CODE.strip()
+        not in client.get(f"/projects/{GUID}/automation/repos/{project.id}/files").text
+    )
 
 
 def test_tree_reports_mirror_byte_size_and_orders_by_path(client, db_session):
@@ -388,7 +470,7 @@ def test_tree_404s_not_403_for_another_users_repo(app, client, db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_file_serves_the_mirror_content_with_null_provenance(client, db_session):
+def test_file_serves_the_mirror_content_and_omits_provenance_with_no_spec_row(client, db_session):
     project = _repo(db_session)
     row = _file(db_session, project, "tests/SUR-1/a.spec.ts", kind="spec", code=SPEC_CODE)
 
@@ -404,7 +486,8 @@ def test_file_serves_the_mirror_content_with_null_provenance(client, db_session)
     assert body["kind"] == "spec"
     assert body["size"] == len(SPEC_CODE.encode("utf-8"))
     assert body["sha256"] == row.sha256
-    # Typed and on the wire already; #769 populates it for spec files.
+    # A spec *file* with no `AutomationSpec` row claiming it — nothing to attribute
+    # it to, so the field stays null rather than inventing a run (#769).
     assert body["provenance"] is None
 
 
@@ -498,6 +581,291 @@ def test_file_404s_not_403_for_another_users_repo(app, client, db_session):
     assert response.status_code == 404
     assert response.json()["detail"] == "AutomationProject not found"
     assert "Secret" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# /repos/{id}/file — provenance (#769)
+# ---------------------------------------------------------------------------
+
+SPEC_PATH = "tests/SUR-1428/SUR-1428-TC-01.spec.ts"
+
+
+def _file_body(client, project, path: str = SPEC_PATH, guid: str = GUID):
+    response = client.get(
+        f"/projects/{guid}/automation/repos/{project.id}/file", params={"path": path}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_provenance_names_the_run_ticket_and_case_that_produced_the_spec(client, db_session):
+    """The whole point of the slice: one spec, one run, fully attributed.
+
+    Every field is asserted individually rather than by comparing the object — an
+    additive change to the entry shape must not fail a test about attribution.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    run, case, spec = _spec_row(
+        db_session,
+        project,
+        filename=SPEC_PATH,
+        created_at=datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 3, 1, 9, 30, tzinfo=timezone.utc),
+    )
+
+    provenance = _file_body(client, project)["provenance"]
+
+    assert provenance is not None, "a project-backed spec must carry provenance"
+    assert provenance["kind"] == "spec"
+    assert provenance["overwritten"] is False
+    assert provenance["history"] == []
+    latest = provenance["latest"]
+    assert latest["specId"] == spec.id
+    assert latest["specStatus"] == "passed"
+    assert latest["blockReason"] is None
+    assert latest["testCaseId"] == case.id
+    assert latest["caseCode"] == "TC-01"
+    assert latest["caseTitle"] == "Login with valid credentials"
+    assert latest["ticketExternalId"] == "SUR-1428"
+    assert latest["runId"] == run.id
+    assert latest["runCode"] == "RUN-0031"
+    assert latest["runName"] == "Sprint 42 regression"
+    assert latest["runStatus"] == "done"
+    assert latest["runCreatedAt"].startswith("2026-03-01T09:00")
+    assert latest["runFinishedAt"].startswith("2026-03-01T09:30")
+    assert latest["stale"] is False
+
+
+def test_provenance_joins_on_filename_not_the_absolute_on_disk_path(client, db_session):
+    """The join key, pinned. ``AutomationSpec.path`` is absolute and goes stale.
+
+    The fixture writes a deliberately unrelated ``/somewhere/else/…`` into
+    ``.path``, so a handler joining on that column resolves nothing and this test
+    is the one that fails.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _run, _case, spec = _spec_row(db_session, project, filename=SPEC_PATH)
+
+    provenance = _file_body(client, project)["provenance"]
+
+    assert spec.filename == SPEC_PATH
+    assert spec.path != SPEC_PATH, "the fixture must not make .path a viable join key"
+    assert provenance["latest"]["specId"] == spec.id
+
+
+def test_provenance_marks_the_overwritten_run_as_history(client, db_session):
+    """Two runs on one ticket wrote the same file — ADR 0014's overwrite rule.
+
+    ``latest`` is the newer run (it produced the bytes on screen); the older row
+    keeps its own stale copy of the code and is reported as ``history``, with the
+    **full** entry shape so the client renders it with the same component.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _old_run, old_case, old_spec = _spec_row(
+        db_session,
+        project,
+        filename=SPEC_PATH,
+        run_code="RUN-0017",
+        run_name="Sprint 41 regression",
+        spec_status="failed",
+        block_reason="placeholder selector",
+        created_at=datetime(2026, 2, 1, 9, 0, tzinfo=timezone.utc),
+    )
+    new_run, _new_case, new_spec = _spec_row(
+        db_session,
+        project,
+        filename=SPEC_PATH,
+        run_code="RUN-0031",
+        created_at=datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc),
+    )
+
+    provenance = _file_body(client, project)["provenance"]
+
+    assert provenance["overwritten"] is True
+    assert provenance["latest"]["runId"] == new_run.id
+    assert provenance["latest"]["specId"] == new_spec.id
+    assert provenance["latest"]["runCode"] == "RUN-0031"
+    assert provenance["latest"]["stale"] is False
+
+    assert len(provenance["history"]) == 1
+    stale = provenance["history"][0]
+    assert stale["stale"] is True
+    assert stale["specId"] == old_spec.id
+    assert stale["runCode"] == "RUN-0017"
+    assert stale["specStatus"] == "failed"
+    assert stale["blockReason"] == "placeholder selector"
+    # The full entry shape, identical to `latest` — #767's types render both with
+    # one component, so a narrower history object would break the client.
+    assert set(stale) == set(provenance["latest"])
+    assert stale["testCaseId"] == old_case.id
+    assert stale["caseTitle"] == "Login with valid credentials"
+    assert stale["runName"] == "Sprint 41 regression"
+    assert stale["runCreatedAt"].startswith("2026-02-01T09:00")
+
+
+def test_provenance_orders_three_claimants_newest_first(client, db_session):
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    for day, code in ((1, "RUN-0001"), (3, "RUN-0003"), (2, "RUN-0002")):
+        _spec_row(
+            db_session,
+            project,
+            filename=SPEC_PATH,
+            run_code=code,
+            created_at=datetime(2026, 4, day, 9, 0, tzinfo=timezone.utc),
+        )
+
+    provenance = _file_body(client, project)["provenance"]
+
+    assert provenance["latest"]["runCode"] == "RUN-0003"
+    assert [entry["runCode"] for entry in provenance["history"]] == ["RUN-0002", "RUN-0001"]
+    assert all(entry["stale"] is True for entry in provenance["history"])
+
+
+def test_provenance_is_null_for_a_shared_asset(client, db_session):
+    """A page is edited across many runs, so "the run that made it" is not a fact.
+
+    Seeded next to a spec whose run *would* match if the handler fell back to
+    ``updated_at`` proximity — inferring one there is the #178 failure mode.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "pages/LoginPage.ts", kind="page")
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(db_session, project, filename=SPEC_PATH)
+
+    page = _file_body(client, project, path="pages/LoginPage.ts")
+    spec = _file_body(client, project)
+
+    assert page["kind"] == "page"
+    assert page["provenance"] is None
+    # Negative control: the same request against the spec in the same repo *does*
+    # carry provenance, so the null above is the non-spec rule and not a dead join.
+    assert spec["provenance"] is not None
+
+
+@pytest.mark.parametrize("kind", ["component", "fixture", "util"])
+def test_provenance_is_null_for_every_non_spec_kind(client, db_session, kind):
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind=kind, code=SPEC_CODE)
+    _spec_row(db_session, project, filename=SPEC_PATH)
+
+    body = _file_body(client, project)
+
+    # Same path, same spec row, *only* the mirror row's `kind` differs — the
+    # predicate really is `kind == "spec"` and nothing else.
+    assert body["kind"] == kind
+    assert body["provenance"] is None
+
+
+def test_a_legacy_bare_basename_spec_never_leaks_into_this_projects_provenance(client, db_session):
+    """Pre-#538 rows carry ``project_id IS NULL`` and a bare basename filename.
+
+    Both predicates have to hold: the basename cannot match this project's
+    ``tests/<TICKET>/…`` path, and the ``project_id`` filter refuses the row even
+    if some other project's file were named identically.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(
+        db_session,
+        project,
+        filename="SUR-1428-TC-01.spec.ts",
+        project_id=None,
+        run_code="RUN-LEGACY",
+        run_name="A run from before #538",
+    )
+
+    body = _file_body(client, project)
+
+    assert body["provenance"] is None, "a legacy per-run spec must not be attributed here"
+    assert (
+        "RUN-LEGACY"
+        not in client.get(
+            f"/projects/{GUID}/automation/repos/{project.id}/file", params={"path": SPEC_PATH}
+        ).text
+    )
+
+
+def test_a_legacy_spec_whose_basename_equals_the_path_still_needs_project_id(client, db_session):
+    """The ``project_id`` predicate alone, isolated.
+
+    A legacy row is given the *full* project-relative filename, so the
+    ``filename`` match succeeds and only ``project_id == project.id`` can refuse
+    it. Without that predicate a legacy row from an unrelated project would be
+    rendered as this file's origin.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(
+        db_session,
+        project,
+        filename=SPEC_PATH,
+        project_id=None,
+        project_guid=OTHER_GUID,
+        run_code="RUN-OTHER",
+    )
+
+    assert _file_body(client, project)["provenance"] is None
+
+
+def test_provenance_ignores_a_spec_row_belonging_to_another_repo(client, db_session):
+    """Same path, same GUID, different ``AutomationProject`` — no cross-attribution."""
+    mine = _repo(db_session, repo="web")
+    other = _repo(db_session, repo="admin")
+    _file(db_session, mine, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(db_session, other, filename=SPEC_PATH, run_code="RUN-ADMIN")
+
+    assert _file_body(client, mine)["provenance"] is None
+
+
+def test_provenance_omits_another_users_run(app, client, db_session):
+    """Defence in depth: the ``Run`` leg is scoped by ``owned()`` too.
+
+    The repo is mine, so ``_project_or_404`` lets the read through; the run that
+    wrote the spec is someone else's, and only the ``owned()`` wrapper on the join
+    keeps their run name out of my response.
+    """
+    me = _as_me(app, db_session)
+    project = _repo(db_session, owner_id=me.id)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(
+        db_session,
+        project,
+        filename=SPEC_PATH,
+        owner_id=me.id + 1000,
+        run_code="RUN-THEIRS",
+        run_name="Someone else's regression",
+    )
+
+    response = client.get(
+        f"/projects/{GUID}/automation/repos/{project.id}/file", params={"path": SPEC_PATH}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provenance"] is None
+    assert "RUN-THEIRS" not in response.text
+    assert "Someone else" not in response.text
+
+
+def test_the_tree_grew_no_has_provenance_flag(client, db_session):
+    """Explicitly *not* added: it would cost an N-row join per tree request.
+
+    The predicate the client needs is exactly ``kind === "spec"``, which the tree
+    already carries.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, SPEC_PATH, kind="spec", code=SPEC_CODE)
+    _spec_row(db_session, project, filename=SPEC_PATH)
+
+    body = client.get(f"/projects/{GUID}/automation/repos/{project.id}/files").json()
+
+    assert body["files"], "the tree must still list the spec"
+    for entry in body["files"]:
+        assert "hasProvenance" not in entry, entry
+        assert "provenance" not in entry, entry
 
 
 # ---------------------------------------------------------------------------
