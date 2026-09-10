@@ -18,6 +18,7 @@ import {
   NoRepoEmpty,
   ScaffoldOnlyEmpty,
 } from "./ProjectAutomationEmpty";
+import { ProvenancePanel } from "./ProvenancePanel";
 import { RepoSelector } from "./RepoSelector";
 
 /**
@@ -196,19 +197,13 @@ export function ProjectAutomationTab() {
           </div>
 
           <div className="flex min-w-0 flex-col gap-3.5">
-            {/* ---- SLICE #772 RENDER SLOT: ProvenancePanel ------------------
-                Slice G fills exactly this spot, above ProjectFilePanel, with:
-
-                  <ProvenancePanel
-                    provenance={file.data.provenance}   // SpecProvenance | null
-                    path={file.data.path}
-                  />
-
-                from `@/screens/projectAutomation/ProvenancePanel`. Nothing else
-                in this file needs to change: `file.data.provenance` is already
-                on the response (`AutomationFileOut`) and is `null` for a
-                non-spec file by design. Left empty on purpose — a panel that
-                renders "no provenance" for every page object would be noise. */}
+            {/* Where the open file came from (#772). Takes the whole
+                `AutomationFileOut` rather than `provenance` + `path`: the
+                non-spec branch renders `updatedAt` and `sha256`, which are on
+                the same response, so a narrower signature would only have had
+                to be widened again. Rendered only once the file has loaded —
+                there is nothing to attribute before then. */}
+            {file.data && <ProvenancePanel file={file.data} />}
 
             {file.isError ? (
               <ErrorState
