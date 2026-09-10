@@ -898,3 +898,157 @@ def test_run_npm_returns_false_on_a_nonzero_exit(monkeypatch, tmp_path):
 
     monkeypatch.setattr(aps.subprocess, "run", fake_run)
     assert aps._run_npm(["install"], tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
+# project_guid — write, heal, read (#766)
+# ---------------------------------------------------------------------------
+
+
+def _make_project(db, name: str, owner_id: int | None) -> str:
+    """Insert a ``projects`` row and return its guid."""
+    from app.models.project import Project
+
+    project = Project(
+        provider_kind="ado",
+        external_id=f"ext-{name}-{owner_id}",
+        name=name,
+        owner_id=owner_id,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return project.guid
+
+
+def _make_automation_project(db, owner_id: int | None, key: str, repo: str, guid: str | None):
+    """Insert an ``automation_projects`` row directly, bypassing on-disk scaffolding."""
+    from app.models.automation_project import AutomationProject
+
+    row = AutomationProject(
+        owner_id=owner_id,
+        project_key=key,
+        repo=repo,
+        slug=f"{key}/{repo or 'default'}",
+        project_guid=guid,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_ensure_project_stamps_the_owning_project_guid_on_create(db_session):
+    guid = _make_project(db_session, "SUR", 7)
+
+    project = aps.ensure_project(db_session, 7, "SUR", "web")
+
+    assert project.project_guid == guid
+
+
+def test_ensure_project_prefers_the_caller_supplied_guid_over_resolving(db_session):
+    """``Run.project_guid`` is authoritative — the run and its project agree by construction."""
+    _make_project(db_session, "SUR", 7)
+
+    project = aps.ensure_project(db_session, 7, "SUR", "web", project_guid="from-the-run")
+
+    assert project.project_guid == "from-the-run"
+
+
+def test_ensure_project_heals_a_row_whose_project_guid_is_still_null(db_session):
+    """An install whose project config landed after its first run must not stay invisible."""
+    project = aps.ensure_project(db_session, 7, "SUR", "web")
+    assert project.project_guid is None
+
+    guid = _make_project(db_session, "SUR", 7)
+    healed = aps.ensure_project(db_session, 7, "SUR", "web")
+
+    assert healed.id == project.id
+    assert healed.project_guid == guid
+
+
+def test_ensure_project_leaves_project_guid_null_for_an_unresolvable_key(db_session):
+    project = aps.ensure_project(db_session, 7, "NOBODY-KNOWS-THIS", "web")
+
+    assert project.project_guid is None
+
+
+def _write_spec_from_a_run(db, automation_project, guid: str | None, code: str):
+    """A run belonging to ``guid`` that generated one spec into ``automation_project``."""
+    from app.models.run import Run
+    from app.models.testcase import AutomationSpec, TestCase
+
+    run = Run(code=code, name="r", scope="selected", scope_label="Selected", project_guid=guid)
+    db.add(run)
+    db.commit()
+    case = TestCase(run_id=run.id, ticket_external_id="T-1", code="TC-01", title="t")
+    db.add(case)
+    db.commit()
+    db.add(AutomationSpec(
+        test_case_id=case.id, filename="s.spec.ts", project_id=automation_project.id
+    ))
+    db.commit()
+
+
+def test_projects_for_guid_finds_a_stamped_repo_that_has_no_specs_yet(db_session):
+    """Leg (a): a bare scaffold is invisible to the spec join, so the column has to carry it."""
+    guid = _make_project(db_session, "SUR", 7)
+    scaffold = _make_automation_project(db_session, 7, "surency", "web", guid)
+
+    assert [row.id for row in aps.projects_for_guid(db_session, guid, 7)] == [scaffold.id]
+
+
+def test_projects_for_guid_finds_an_unstamped_repo_through_the_spec_join(db_session):
+    """Leg (b): every pre-existing row is NULL, and its key is the PROVIDER key.
+
+    Nothing about ``project_key`` ("surency") points at the project ("demo") —
+    only what the runs wrote does.
+    """
+    guid = _make_project(db_session, "demo", 7)
+    legacy = _make_automation_project(db_session, 7, "surency", "admin-hub", None)
+    _write_spec_from_a_run(db_session, legacy, guid, "RUN-1")
+
+    assert [row.id for row in aps.projects_for_guid(db_session, guid, 7)] == [legacy.id]
+
+
+def test_projects_for_guid_returns_a_shared_repo_for_both_of_its_projects(db_session):
+    """One provider repo, runs from two q-agent projects — the live many-to-many case."""
+    demo = _make_project(db_session, "demo", 7)
+    surency = _make_project(db_session, "surency", 7)
+    shared = _make_automation_project(db_session, 7, "surency", "admin-hub", None)
+    _write_spec_from_a_run(db_session, shared, demo, "RUN-1")
+    _write_spec_from_a_run(db_session, shared, surency, "RUN-2")
+
+    assert [row.id for row in aps.projects_for_guid(db_session, demo, 7)] == [shared.id]
+    assert [row.id for row in aps.projects_for_guid(db_session, surency, 7)] == [shared.id]
+
+
+def test_projects_for_guid_returns_each_row_once_and_ordered_by_repo(db_session):
+    """A row matching BOTH legs, and several runs into one repo, must not duplicate it."""
+    guid = _make_project(db_session, "demo", 7)
+    stamped = _make_automation_project(db_session, 7, "surency", "web", guid)
+    legacy = _make_automation_project(db_session, 7, "surency", "admin", None)
+    _write_spec_from_a_run(db_session, stamped, guid, "RUN-1")
+    _write_spec_from_a_run(db_session, legacy, guid, "RUN-2")
+    _write_spec_from_a_run(db_session, legacy, guid, "RUN-3")
+
+    assert [row.id for row in aps.projects_for_guid(db_session, guid, 7)] == [legacy.id, stamped.id]
+
+
+def test_projects_for_guid_ignores_a_repo_no_run_of_this_project_wrote_into(db_session):
+    guid = _make_project(db_session, "demo", 7)
+    other = _make_project(db_session, "other", 7)
+    theirs = _make_automation_project(db_session, 7, "surency", "admin-hub", None)
+    _write_spec_from_a_run(db_session, theirs, other, "RUN-1")
+
+    assert aps.projects_for_guid(db_session, guid, 7) == []
+
+
+def test_projects_for_guid_never_returns_another_owners_row(db_session):
+    guid = _make_project(db_session, "demo", 7)
+    mine = _make_automation_project(db_session, 7, "surency", "web", guid)
+    _make_automation_project(db_session, 8, "surency", "web", guid)
+    theirs = _make_automation_project(db_session, 8, "surency", "admin", None)
+    _write_spec_from_a_run(db_session, theirs, guid, "RUN-1")
+
+    assert [row.id for row in aps.projects_for_guid(db_session, guid, 7)] == [mine.id]
