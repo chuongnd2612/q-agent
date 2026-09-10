@@ -22,6 +22,7 @@ from app.routers import (
     audit,
     auth,
     automation,
+    automation_projects,
     comments,
     evidence,
     execution,
@@ -413,6 +414,10 @@ def create_app() -> FastAPI:
         runs,
         review,
         automation,
+        # Project-keyed automation browsing (#768). Prefixed
+        # `/projects/{project_guid}/automation`, so it shares no path shape with
+        # `projects` (keyed on the project *name*) or `automation` (run-keyed).
+        automation_projects,
         execution,
         evidence,
         reports,
