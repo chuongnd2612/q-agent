@@ -81,15 +81,15 @@ export function DropdownShell({
         )}
         style={
           active
-            ? { background: "rgba(139,92,246,.2)", borderColor: "rgba(139,92,246,.35)", color: "#fff" }
-            : { background: "rgba(255,255,255,.05)", borderColor: "rgba(255,255,255,.09)", color: "#dcdce4" }
+            ? { background: "var(--pt)", borderColor: "var(--pb)", color: "var(--psText)" }
+            : { background: "var(--card2)", borderColor: "var(--bd2)", color: "var(--txt2)" }
         }
       >
         <span className={cn("truncate", fullWidth ? "flex-1 text-left" : "max-w-[180px]")}>{label}</span>
         {active && onClear ? (
           <X
             size={13}
-            className="text-ink-dim hover:text-white"
+            className="text-ink-dim hover:text-ink"
             onClick={(e) => {
               e.stopPropagation();
               onClear();
@@ -107,10 +107,12 @@ export function DropdownShell({
             ref={panelRef}
             onPointerMove={tilt.onPointerMove}
             onPointerLeave={tilt.onPointerLeave}
-            className="fixed z-[1000] max-h-[320px] overflow-y-auto rounded-[14px] border border-white/[0.12] p-1.5 shadow-[0_30px_70px_-20px_rgba(0,0,0,.8)]"
+            className="fixed z-[1000] max-h-[320px] overflow-y-auto rounded-[14px] border border-bd2 bg-pop p-1.5 shadow-pop"
             // tilt.style owns the transform (perspective + rotate/scale); the
-            // positioning + opaque glass background sit alongside it.
-            style={{ ...tilt.style, top: pos.top, left: pos.left, minWidth: pos.width, background: "rgb(24,24,32)" }}
+            // positioning sits alongside it. The surface is `bg-pop` — opaque by
+            // design, never glass: a blurred menu over the animated shell is the
+            // compositing trap CLAUDE.md warns about.
+            style={{ ...tilt.style, top: pos.top, left: pos.left, minWidth: pos.width }}
           >
             {children(() => setOpen(false))}
           </motion.div>,
@@ -164,11 +166,11 @@ export function Select({
                   onChange(on ? null : o.value);
                   close();
                 }}
-                className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-white/[0.06] data-[on=true]:bg-[rgba(139,92,246,.16)]"
+                className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-card3 data-[on=true]:bg-pt"
                 data-on={on}
               >
                 <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                  {on && <Check size={13} className="text-violet" strokeWidth={3} />}
+                  {on && <Check size={13} className="text-ps-text" strokeWidth={3} />}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{o.label}</span>
                 {o.hint && <span className="shrink-0 text-[11px] text-ink-dim">{o.hint}</span>}
@@ -227,16 +229,16 @@ export function MultiSelect({
                 key={o.value}
                 type="button"
                 onClick={() => toggle(o.value)}
-                className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-white/[0.06]"
+                className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-card3"
               >
                 <span
                   className="flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-[5px] border"
                   style={{
-                    background: on ? "linear-gradient(135deg,#8b5cf6,#6366f1)" : "rgba(255,255,255,.04)",
-                    borderColor: on ? "transparent" : "rgba(255,255,255,.16)",
+                    background: on ? "var(--pg)" : "var(--card2)",
+                    borderColor: on ? "transparent" : "var(--bd2)",
                   }}
                 >
-                  {on && <Check size={11} color="#fff" strokeWidth={3.2} />}
+                  {on && <Check size={11} color="var(--pOn)" strokeWidth={3.2} />}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{o.label}</span>
               </button>

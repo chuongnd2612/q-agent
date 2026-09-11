@@ -76,20 +76,18 @@ export function PipelineRail({
                   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
                 )}
                 style={{
-                  background: done
-                    ? "#10b981"
-                    : active
-                      ? "linear-gradient(135deg,#8b5cf6,#6366f1)"
-                      : "rgba(255,255,255,.06)",
-                  color: done || active ? "#fff" : "#7a7a8c",
-                  boxShadow: active ? "0 0 18px rgba(139,92,246,.6)" : undefined,
+                  background: done ? "var(--ok)" : active ? "var(--pg)" : "var(--card3)",
+                  // `--pOn` rather than #fff: white is unreadable on the Steel
+                  // accent, and on the light-mode `--ok` green.
+                  color: done || active ? "var(--pOn)" : "var(--faint)",
+                  boxShadow: active ? "0 0 18px var(--pglow)" : undefined,
                 }}
               >
                 {done ? "✓" : idx}
               </motion.div>
               <span
                 className="whitespace-nowrap text-[12px] font-semibold"
-                style={{ color: active ? "#ececf1" : done ? "#9ca3af" : "#6c6c7e" }}
+                style={{ color: active ? "var(--txt)" : done ? "var(--muted)" : "var(--faint)" }}
               >
                 {t(`pipeline.${label.toLowerCase()}`)}
               </span>
@@ -97,7 +95,7 @@ export function PipelineRail({
             {i < STAGES.length - 1 && (
               <div
                 className="mx-1 h-px flex-1"
-                style={{ background: done ? "rgba(16,185,129,.4)" : "rgba(255,255,255,.08)" }}
+                style={{ background: done ? "var(--ok)" : "var(--bd2)", opacity: done ? 0.5 : 1 }}
               />
             )}
           </div>

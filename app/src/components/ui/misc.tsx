@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
  * by every surface that visually tags something as Claude/Anthropic-related —
  * credential cards, the admin Claude credentials screen, the AI status
  * popover — so the glyph stays pixel-identical everywhere it appears. */
-export function ClaudeLogo({ size = 16, color = "#D97757" }: { size?: number; color?: string }) {
+export function ClaudeLogo({ size = 16, color = "var(--claude)" }: { size?: number; color?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
       <path d="M12 2.4l2.6 6.6 6.9.4-5.3 4.4 1.8 6.7L12 17.3 6 20.9l1.8-6.7L2.5 9.4l6.9-.4z" />
@@ -21,8 +21,8 @@ export function Spinner({ size = 15, className }: { size?: number; className?: s
       style={{
         width: size,
         height: size,
-        border: "2px solid rgba(167,139,250,.3)",
-        borderTopColor: "#a78bfa",
+        border: "2px solid var(--pb)",
+        borderTopColor: "var(--pl)",
         animation: "spin .7s linear infinite",
       }}
     />
@@ -50,7 +50,7 @@ export function ProgressRing({
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox="0 0 120 120">
-        <circle cx="60" cy="60" r={r} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={stroke} />
+        <circle cx="60" cy="60" r={r} fill="none" stroke="var(--bd2)" strokeWidth={stroke} />
         <circle
           cx="60"
           cy="60"
@@ -66,8 +66,10 @@ export function ProgressRing({
         />
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#8b5cf6" />
-            <stop offset="1" stopColor="#22d3ee" />
+            {/* The ring is brand -> secondary highlight; both are tokens, so
+                it re-paints on an accent switch without re-rendering. */}
+            <stop offset="0" stopColor="var(--p)" />
+            <stop offset="1" stopColor="var(--cyan)" />
           </linearGradient>
         </defs>
       </svg>
@@ -108,14 +110,14 @@ export function ErrorState({
     <div className="glass flex flex-col items-center rounded-[22px] px-8 py-14 text-center" role="alert">
       <div
         className="mb-5 flex h-[70px] w-[70px] items-center justify-center rounded-[22px]"
-        style={{ background: "rgba(248,113,113,.10)" }}
+        style={{ background: "var(--dangerTint)" }}
       >
         <svg
           width="28"
           height="28"
           viewBox="0 0 24 24"
           fill="none"
-          stroke="#f87171"
+          stroke="var(--danger)"
           strokeWidth="1.7"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -131,8 +133,8 @@ export function ErrorState({
         <button
           type="button"
           onClick={onRetry}
-          className="flex h-[38px] items-center gap-2 rounded-xl border px-4 text-[13px] font-bold text-ink transition-colors hover:bg-white/[.07]"
-          style={{ background: "rgba(255,255,255,.05)", borderColor: "rgba(255,255,255,.18)" }}
+          className="flex h-[38px] items-center gap-2 rounded-xl border px-4 text-[13px] font-bold text-ink transition-colors hover:bg-card3"
+          style={{ background: "var(--card2)", borderColor: "var(--bd2)" }}
         >
           {retryLabel}
         </button>
@@ -154,7 +156,7 @@ export function EmptyState({
 }) {
   return (
     <div className="glass flex flex-col items-center rounded-[22px] px-8 py-14 text-center">
-      <div className="mb-5 flex h-[70px] w-[70px] items-center justify-center rounded-[22px] bg-white/[0.05]">
+      <div className="mb-5 flex h-[70px] w-[70px] items-center justify-center rounded-[22px] bg-card3">
         {icon}
       </div>
       <h2 className="m-0 mb-2 text-xl font-extrabold">{title}</h2>

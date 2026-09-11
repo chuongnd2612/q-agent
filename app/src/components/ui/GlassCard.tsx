@@ -51,12 +51,15 @@ export function GlassCard({
         // from the top and must not rise; a plain card just brightens its frame).
         ...(liftEnabled ? { y: -4 } : {}),
         zIndex: 20,
-        ...(interactive ? { borderColor: "rgba(139,92,246,.4)" } : {}),
+        ...(interactive ? { borderColor: "var(--pb)" } : {}),
+        // Motion animates inline values, so these are var() compositions rather
+        // than utilities. `--pglow` follows the accent; the cyan companion glow
+        // stays the secondary highlight it has always been.
         boxShadow: liftEnabled
-          ? "0 22px 48px -22px rgba(139,92,246,.5), 0 0 26px -12px rgba(34,211,238,.3)"
+          ? "0 22px 48px -22px var(--pglow), 0 0 26px -12px var(--cyan)"
           : interactive
-            ? "0 20px 45px -20px rgba(139,92,246,.5), 0 0 26px -10px rgba(34,211,238,.35)"
-            : "0 18px 50px -22px rgba(139,92,246,.5)",
+            ? "0 20px 45px -20px var(--pglow), 0 0 26px -10px var(--cyan)"
+            : "0 18px 50px -22px var(--pglow)",
         transition: { duration: 0.25, ease: [0.2, 0.8, 0.2, 1] },
       }}
       onClick={onClick}

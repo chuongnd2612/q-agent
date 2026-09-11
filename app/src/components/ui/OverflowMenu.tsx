@@ -72,8 +72,8 @@ export function OverflowMenu({ items, title }: { items: OverflowItem[]; title?: 
         type="button"
         onClick={() => setOpen((o) => !o)}
         title={title ?? t("overflow.moreActions")}
-        className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[9px] border border-white/[0.09] bg-white/5 text-ink-soft transition-colors hover:bg-white/10"
-        style={open ? { background: "rgba(255,255,255,.12)" } : undefined}
+        className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[9px] border border-bd2 bg-card2 text-ink-soft transition-colors hover:bg-card3"
+        style={open ? { background: "var(--card3)" } : undefined}
       >
         <MoreHorizontal size={15} />
       </button>
@@ -87,8 +87,8 @@ export function OverflowMenu({ items, title }: { items: OverflowItem[]; title?: 
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.98 }}
               transition={{ duration: 0.14 }}
-              className="fixed z-[1000] overflow-hidden rounded-[14px] border border-white/[0.12] p-1.5 shadow-[0_30px_70px_-20px_rgba(0,0,0,.8)]"
-              style={{ top: pos.top, left: pos.left, width: MENU_WIDTH, background: "rgb(24,24,32)" }}
+              className="fixed z-[1000] overflow-hidden rounded-[14px] border border-bd2 bg-pop p-1.5 shadow-pop"
+              style={{ top: pos.top, left: pos.left, width: MENU_WIDTH }}
               onMouseDown={(e) => e.stopPropagation()}
             >
               {items.map((it) => (
@@ -100,7 +100,7 @@ export function OverflowMenu({ items, title }: { items: OverflowItem[]; title?: 
                     setOpen(false);
                     it.onClick();
                   }}
-                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-ink-soft hover:bg-white/[0.06] disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12.5px] font-semibold text-ink-soft hover:bg-card3 disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   {it.icon && <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">{it.icon}</span>}
                   {it.label}
