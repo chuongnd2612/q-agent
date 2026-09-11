@@ -31,6 +31,13 @@ export const queryKeys = {
     ["projects", projectGuid, "automation", "repos", projectId, "files"] as const,
   automationFile: (projectGuid: string, projectId: number, path: string) =>
     ["projects", projectGuid, "automation", "repos", projectId, "file", path] as const,
+  /** A repo's project-scoped execution history (#800), and one execution's
+   * detail. The detail key is NOT nested under the project: `GET /executions/{id}`
+   * is addressed by execution id alone, and nesting it would make the same row
+   * cacheable twice. */
+  projectExecutions: (projectGuid: string, projectId: number) =>
+    ["projects", projectGuid, "automation", "repos", projectId, "executions"] as const,
+  projectExecution: (executionId: number) => ["executions", executionId] as const,
   repoKnowledge: (key: string, repo: string) =>
     ["projects", key, "repos", repo, "knowledge"] as const,
   tickets: (filters?: Record<string, string | number | undefined>) =>

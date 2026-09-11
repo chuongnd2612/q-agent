@@ -515,7 +515,8 @@
       "util": "Tiện ích",
       "config": "Cấu hình",
       "other": "Khác"
-    }
+    },
+    "selectSpec": "Chọn {{name}} để chạy"
   },
   "export": {
     "title": "Xuất dự án tự động hoá",

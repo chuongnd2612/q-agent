@@ -23,6 +23,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import type {
   AnnotationShape,
   AutomationSpecOut,
+  ProjectExecutionStart,
   ClaudeCredentialsUpload,
   ConnectionUpdate,
   ExecutionTarget,
@@ -1269,6 +1270,71 @@ export const useAutomationFile = (
     enabled: !!projectGuid && projectId != null && !!path,
     staleTime: 5 * 60_000,
   });
+
+/**
+ * Statuses a project-scoped execution can still move out of (#800).
+ *
+ * `create()` opens a server-target execution as `running` and
+ * `execution_service.finalize` lands it on `passed`/`failed`/`error`; anything
+ * not terminal is still in flight.
+ */
+const PROGRESSING_EXECUTION_STATUSES = new Set(["queued", "running", "dispatched"]);
+
+/** This repo's project-scoped execution history for this project, newest first. */
+export const useProjectExecutions = (
+  projectGuid: string | null,
+  projectId: number | null,
+) =>
+  useQuery({
+    queryKey: queryKeys.projectExecutions(projectGuid ?? "", projectId ?? 0),
+    queryFn: () => api.listProjectExecutions(projectGuid as string, projectId as number),
+    enabled: !!projectGuid && projectId != null,
+  });
+
+/**
+ * One project-scoped execution's live detail.
+ *
+ * Polls **while the execution is still progressing**, for the same reason
+ * `useRun` does (see {@link PROGRESSING_RUN_STATUSES}): the WS events that drive
+ * the fast path are fire-and-forget, so a dropped one would otherwise freeze the
+ * bar at "3 of 8" forever. Here the argument is stronger still — the project
+ * channel (`project:<repoId>`) is served by `/ws/runs/{id}`, whose ownership
+ * check parses the channel as an integer, so on an auth-required deployment the
+ * socket is refused and polling is the *only* thing that moves the bar. Polling
+ * stops the moment the row reaches a terminal status.
+ */
+export const useProjectExecution = (executionId: number | null) =>
+  useQuery({
+    queryKey: queryKeys.projectExecution(executionId ?? 0),
+    queryFn: () => api.getProjectExecution(executionId as number),
+    enabled: executionId != null,
+    refetchInterval: (query) =>
+      PROGRESSING_EXECUTION_STATUSES.has(query.state.data?.status ?? "") ? 2000 : false,
+  });
+
+/**
+ * Start a project-scoped execution from an explicit spec selection (#797/#800).
+ *
+ * Seeds the detail cache from the POST response so the progress bar renders the
+ * real row immediately instead of waiting a poll interval, and invalidates the
+ * history list so the new execution appears there too.
+ */
+export const useStartProjectExecution = (
+  projectGuid: string | null,
+  projectId: number | null,
+) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProjectExecutionStart) =>
+      api.startProjectExecution(projectGuid as string, projectId as number, body),
+    onSuccess: (execution) => {
+      qc.setQueryData(queryKeys.projectExecution(execution.id), execution);
+      qc.invalidateQueries({
+        queryKey: queryKeys.projectExecutions(projectGuid ?? "", projectId ?? 0),
+      });
+    },
+  });
+};
 
 // The last self-heal trail for a case (per-attempt error + diff + outcome).
 export const useHealReport = (caseId: number, enabled: boolean) =>

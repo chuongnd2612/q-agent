@@ -1089,6 +1089,57 @@ export interface ExecutionOut {
 }
 
 /**
+ * One spec's row in a **project-scoped** execution (#796/#797/#800).
+ *
+ * Its only identity is `specPath` — a spec read straight out of the automation
+ * repo has no ticket and no test case behind it, so `ticketExternalId` /
+ * `caseCode` are empty on the wire and are deliberately not modelled here.
+ */
+export interface ProjectExecutionResultOut {
+  id: number;
+  specPath: string;
+  title: string;
+  status: ExecCaseStatus;
+  durationMs: number;
+  errorMessage: string;
+}
+
+/**
+ * A project-scoped execution (`POST|GET /projects/{guid}/automation/repos/{id}/executions`).
+ *
+ * Distinct from {@link ExecutionOut} rather than a widening of it: `runId` is
+ * always `null` here (that is the whole point of #796), there is no `browser`,
+ * and the results carry no case identity. `results` / `log` are present on the
+ * POST response and on `GET /executions/{id}`, and absent from the history list,
+ * which is summaries only.
+ */
+export interface ProjectExecutionOut {
+  id: number;
+  runId: number | null;
+  automationProjectId: number | null;
+  status: string;
+  target: ExecutionTarget;
+  env: string;
+  workers: number;
+  total: number;
+  passed: number;
+  failed: number;
+  progress: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  log?: string;
+  results?: ProjectExecutionResultOut[];
+}
+
+/** Body of `POST /projects/{guid}/automation/repos/{id}/executions`. */
+export interface ProjectExecutionStart {
+  specPaths: string[];
+  workers?: number;
+  env?: string;
+  target?: string;
+}
+
+/**
  * Live-authoring pause state for one case (`GET /cases/{id}/authoring`, #619).
  *
  * Fetched rather than derived from the WS stream because the `paused` event fires

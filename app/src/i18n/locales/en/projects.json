@@ -273,6 +273,22 @@
       "copySha": "Copy the full sha256",
       "shaCopied": "sha256 copied",
       "gitNote": "The repo's own git history does hold the per-commit answer; exposing it over HTTP (git log --follow) is a follow-up, not part of this view."
+    },
+    "runSuite": {
+      "label_one": "Run {{count}} spec",
+      "label_other": "Run {{count}} specs",
+      "description_one": "Execute the {{count}} selected spec out of this repo, in parallel",
+      "description_other": "Execute the {{count}} selected specs out of this repo, in parallel",
+      "noneSelected": "Nothing selected — tick the specs you want to run in the tree",
+      "sharedRepoNote": "{{selected}} of {{total}} specs in this repo are selected. This repo is shared across your projects, so specs another project's runs generated are listed here but are not selected.",
+      "startFailed": "Couldn't start the run",
+      "status": {
+        "running": "running",
+        "finished": "finished"
+      },
+      "passed": "{{count}} passed",
+      "failed": "{{count}} failed",
+      "ofTotal": "of {{count}}"
     }
   }
 }

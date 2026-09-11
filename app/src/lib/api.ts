@@ -51,6 +51,8 @@ import type {
   ConnectionUpdate,
   KnowledgeBuildRequest,
   ProjectConfigOut,
+  ProjectExecutionOut,
+  ProjectExecutionStart,
   ProjectConfigUpdate,
   ProjectKnowledgeOut,
   ProjectOut,
@@ -1008,6 +1010,28 @@ export const api = {
   /** One file's content. `path` is a QUERY param, not a path segment: automation
    * paths always contain `/`, and a catch-all segment would both collide with the
    * sibling `files`/`export` routes and mangle the percent-encoded slashes. */
+  /** Run the ticked specs out of this repo, project-scoped (#797/#800). The
+   * selection is always explicit — the server 400s an empty `specPaths` rather
+   * than inventing a "run everything" default, since one repo is shared across
+   * projects. */
+  startProjectExecution: (
+    projectGuid: string,
+    projectId: number,
+    body: ProjectExecutionStart,
+  ) =>
+    post<ProjectExecutionOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/executions`,
+      body,
+    ),
+  /** This repo's project-scoped execution history for this project, newest first. */
+  listProjectExecutions: (projectGuid: string, projectId: number, limit = 20) =>
+    get<ProjectExecutionOut[]>(
+      `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/executions?limit=${limit}`,
+    ),
+  /** One execution with its per-spec results. Serves a run-less execution since
+   * #797, which is what makes it usable from the Automation tab. */
+  getProjectExecution: (executionId: number) =>
+    get<ProjectExecutionOut>(`/executions/${executionId}`),
   getAutomationFile: (projectGuid: string, projectId: number, path: string) =>
     get<AutomationFileOut>(
       `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/file?path=${encodeURIComponent(path)}`,
