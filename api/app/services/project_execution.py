@@ -21,9 +21,16 @@ Three things are deliberately **not** carried over from the run path:
   is no cancel for a project execution yet.
 * **Run status.** There is no run, so nothing advances a pipeline stage. The
   Execution row's own ``status`` is the whole lifecycle.
-* **Evidence and the stored JSON report.** Per #795 a project execution uploads
-  no per-case evidence, and persisting ``report.json`` for the viewer lands with
-  the agent slice (#798) so the server and agent targets gain it together.
+* **Evidence.** Per #795 a project execution uploads no per-case evidence; the
+  Playwright report is the deliverable. (The local-agent target does upload
+  failure screenshots — see ``routers/agent.py`` — but this worker has no
+  attachment copy step.)
+
+``report.json`` **is** persisted here, through
+``execution_report_service.store_from_file``, so the Automation tab's viewer is
+target-agnostic: the agent uploads its copy via ``POST /agent/jobs/{id}/report``
+and the server target files its own from the staging dir at the end of the run
+(#798).
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from app.models.automation_project import AutomationFile, AutomationProject
 from app.models.execution import Execution, ExecutionResult
 from app.services import (
     automation_project_service,
+    execution_report_service,
     execution_service,
     project_config_service,
     settings_store,
@@ -398,6 +406,11 @@ def run(execution_id: int) -> None:
             execution.passed = passed
             execution.failed = failed
             execution.total = len(results)
+            # Persist the raw report for the viewer (#798) BEFORE finalizing, so
+            # an execution that reports "done" always has its report already
+            # readable. Best-effort: the results are recorded either way, and a
+            # missing report must not turn a finished run into a failed one.
+            execution_report_service.store_from_file(execution, report_path)
             log_text = run_error or proc_output
             execution_service.finalize(db, execution, None, log_text)
         except Exception as exc:  # noqa: BLE001 - never crash the worker thread silently

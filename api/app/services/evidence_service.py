@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from sqlalchemy.orm import Session
 
@@ -71,9 +71,37 @@ def apply_log_capture(
     return True
 
 
+def _destination_dir(run: Run | None, result: ExecutionResult) -> Path:
+    """``<scoped evidence root>/<execution label>/<case or spec segments>``.
+
+    A run-scoped result is filed the way it always has been —
+    ``<run.code>/<ticket>/<case>/`` — so nothing already on disk moves.
+
+    A **project-scoped** result (#798) has no run, no ticket and no case code:
+    its only identity is ``spec_path``. It is filed under the execution id (the
+    same key ``project_execution.staging_label`` uses, so the two are obviously
+    the same run) plus the spec's own repo-relative directories, with the spec
+    filename as the leaf directory. That keeps two specs of the same execution
+    from overwriting each other's ``screenshot.png``.
+    """
+    if run is not None:
+        return (
+            scoped_evidence_dir(run.owner_id)
+            / run.code
+            / result.ticket_external_id
+            / result.case_code
+        )
+    execution = result.execution
+    relative = PurePosixPath((result.spec_path or f"result-{result.id}").replace("\\", "/"))
+    segments = [part for part in relative.parts if part not in ("", ".", "..")]
+    return scoped_evidence_dir(execution.owner_id).joinpath(
+        f"projexec-{execution.id}", *segments
+    )
+
+
 def store_uploaded_evidence(
     db: Session,
-    run: Run,
+    run: Run | None,
     result: ExecutionResult,
     kind: str,
     src_file_or_bytes: str | Path | bytes | bytearray,
@@ -81,14 +109,16 @@ def store_uploaded_evidence(
 ) -> Evidence | None:
     """Persist one evidence artifact and record its ``Evidence`` row.
 
-    Writes into the run owner's scoped evidence dir (ADR 0009 §1):
-    ``scoped_evidence_dir(run.owner_id)/<run.code>/<ticket>/<case>/<filename>``.
+    Writes into the owner's scoped evidence dir (ADR 0009 §1) — see
+    :func:`_destination_dir` for the two layouts (run-scoped and project-scoped).
 
     Args:
         db: Active session (the created row is added but not committed — the
             caller commits, matching the rest of this codebase's session
             handling).
-        run: The run whose owner scopes the on-disk evidence root.
+        run: The run whose owner scopes the on-disk evidence root, or ``None``
+            for a project-scoped execution (#798), whose owner and layout come
+            from ``result.execution`` instead.
         result: The ExecutionResult the evidence belongs to.
         kind: Evidence kind (see ``EVIDENCE_KINDS``).
         src_file_or_bytes: Either a filesystem path to copy (the server runner's
@@ -101,8 +131,10 @@ def store_uploaded_evidence(
         The created (uncommitted) ``Evidence`` row, or ``None`` if a given
         source path does not exist, or the copy/write failed.
     """
-    evidence_root = scoped_evidence_dir(run.owner_id)
-    dest_dir = evidence_root / run.code / result.ticket_external_id / result.case_code
+    evidence_root = scoped_evidence_dir(
+        run.owner_id if run is not None else result.execution.owner_id
+    )
+    dest_dir = _destination_dir(run, result)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / filename
 

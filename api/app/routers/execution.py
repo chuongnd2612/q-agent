@@ -4,6 +4,7 @@ Endpoints to implement:
   POST /runs/{run_id}/execution        -> ExecutionOut   (start; body ExecutionStart; async)
   GET  /runs/{run_id}/execution        -> ExecutionOut   (latest execution + results)
   GET  /executions/{execution_id}      -> ExecutionOut
+  GET  /executions/{execution_id}/report -> raw Playwright report.json (#798)
 
 Spawns Playwright (real) against workspace/specs, streams per-case status via WS
 (events: exec.case.running / exec.case.result / exec.progress / exec.done),
@@ -15,7 +16,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -25,7 +26,7 @@ from app.models.execution import EXEC_TARGETS, Evidence, Execution, ExecutionRes
 from app.models.run import Run
 from app.models.testcase import TestCase
 from app.models.user import User
-from app.services import settings_store
+from app.services import execution_report_service, settings_store
 from app.services.ownership import check_owned_or_404, get_owned_or_404
 from app.services.playwright_runner import run_execution
 from app.services import execution_pruning
@@ -274,6 +275,49 @@ def get_execution(
         return _execution_out(db, execution, execution.owner_id)
     run = get_owned_or_404(db, Run, execution.run_id, user)
     return _execution_out(db, execution, run.owner_id)
+
+
+@router.get("/executions/{execution_id}/report")
+def get_execution_report(
+    execution_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
+) -> Response:
+    """The raw Playwright ``report.json`` stored for this execution (#798).
+
+    A **normal authenticated endpoint**, deliberately: the report is fetched by
+    the SPA through ``lib/api.ts`` with its bearer token like any other request.
+    It is not served from the ``/artifacts`` static mount and there is no
+    ``?token=`` capability URL — the file does not even live under a servable
+    kind (see ``workspace_scope.scoped_reports_dir``).
+
+    Returned as the stored bytes with ``application/json``, never re-serialized:
+    a large report would otherwise be parsed and re-encoded for nothing, and the
+    viewer must see exactly what Playwright wrote.
+
+    404s when the execution has no stored report — which is every execution that
+    predates this slice, and any whose Playwright run produced none.
+    """
+    execution = _scoped_execution(db, execution_id, user)
+    raw = execution_report_service.load(execution)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="No report stored for this execution")
+    return Response(content=raw, media_type="application/json")
+
+
+def _scoped_execution(db: Session, execution_id: int, user: User | None) -> Execution:
+    """Fetch an Execution, 404ing unless ``user`` owns it.
+
+    A run-scoped row is scoped through its Run; a project-scoped one (#796) has
+    no run and is scoped on its own ``owner_id``. Shared by ``GET
+    /executions/{id}`` and the report endpoint so the two cannot drift.
+    """
+    execution = db.get(Execution, execution_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if execution.run_id is None:
+        check_owned_or_404(execution, user, not_found="Execution not found")
+    else:
+        get_owned_or_404(db, Run, execution.run_id, user)
+    return execution
 
 
 def _execution_out(db: Session, execution: Execution, owner_id: int | None) -> dict:

@@ -1085,26 +1085,109 @@ def test_starting_a_project_execution_refuses_a_spec_from_another_repo(
     assert _count_executions(db_session) == 0
 
 
-def test_starting_a_project_execution_refuses_the_local_agent_target_for_now(
-    client, db_session, no_worker
+def test_starting_a_project_execution_queues_the_local_agent_target_without_a_worker(
+    app, client, db_session, no_worker
 ):
-    """Better a 400 that says why than a ``queued`` row nothing can ever claim.
+    """#798 makes the local-agent target real: queued for a device, never run here.
 
-    The workspace default target is ``local-agent`` (#161), but the agent's job
-    claim cannot see a run-less execution until #798, so this slice pins the
-    server target and refuses the other explicitly.
+    Two things are asserted that a plain 200 would not catch. First the refusal
+    leg: with no paired device the request is a 409 and creates **nothing** —
+    a queued row no device can claim would spin the tab forever, which is the
+    reason #797 refused this target outright. Then the accept leg pins *which
+    branch ran*: ``status == "queued"`` and, the observable effect,
+    ``no_worker == []`` — the in-process worker was never handed the execution.
     """
+    from app.models.agent_device import AgentDevice
+
+    # A real owner, because `AgentDevice.owner_id` is NOT NULL — a device can only
+    # ever be paired to a user, so the un-owned default repo cannot express "paired".
+    me = _as_me(app, db_session)
+    project = _repo(db_session, owner_id=me.id)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    body = {"specPaths": ["tests/SUR-1428/a.spec.ts"], "target": "local-agent"}
+
+    refused = client.post(_executions_url(project), json=body)
+    assert refused.status_code == 409, refused.text
+    assert "No local agent paired" in refused.json()["detail"]
+    assert _count_executions(db_session) == 0
+    assert no_worker == []
+
+    db_session.add(AgentDevice(owner_id=project.owner_id, name="Paired", token_hash="x" * 64))
+    db_session.commit()
+
+    response = client.post(_executions_url(project), json=body)
+    assert response.status_code == 200, response.text
+    created = response.json()
+    assert created["target"] == "local-agent"
+    assert created["status"] == "queued"
+    assert created["runId"] is None
+    # The branch that matters: nothing was executed in-process.
+    assert no_worker == []
+
+    from app.models.execution import Execution
+
+    stored = db_session.get(Execution, created["id"])
+    assert stored.status == "queued"
+    assert stored.started_at is None
+
+
+def test_the_server_target_persists_its_report_json_for_the_viewer(
+    client, db_session, no_worker, monkeypatch
+):
+    """#798: the report viewer must not care which target produced the execution.
+
+    The server target already writes ``report.json`` into its staging dir, so the
+    only question is whether it survives the run. Asserted through the read
+    endpoint (which is how the SPA gets it) **and** on disk under the owner's
+    scope — a handler that stuffed it onto the row would pass the first check and
+    fail the second.
+    """
+    from app.services import execution_report_service, project_execution
+
     project = _repo(db_session)
     _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
 
-    response = client.post(
-        _executions_url(project),
-        json={"specPaths": ["tests/SUR-1428/a.spec.ts"], "target": "local-agent"},
-    )
+    created = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()
 
-    assert response.status_code == 400
-    assert "#798" in response.json()["detail"]
-    assert _count_executions(db_session) == 0
+    report = _report_for([("tests/SUR-1428/a.spec.ts", "passed")])
+    # A key `parse_playwright_report` throws away — the viewer exists to show it,
+    # so the stored document must be Playwright's, not a re-derived summary.
+    report["config"] = {"version": "1.48.0"}
+
+    def fake_invoke(spec_dir, workers, timeout_s, spec_file="", **_kwargs):
+        (spec_dir / "report.json").write_text(_json.dumps(report), encoding="utf-8")
+        return 0, "1 passed", ""
+
+    monkeypatch.setattr(project_execution, "_invoke_playwright", fake_invoke)
+    project_execution.run(created["id"])
+
+    served = client.get(f"/executions/{created['id']}/report")
+    assert served.status_code == 200, served.text
+    assert served.json()["config"]["version"] == "1.48.0"
+
+    from app.models.execution import Execution
+
+    db_session.expire_all()
+    execution = db_session.get(Execution, created["id"])
+    assert execution.status == "done"
+    assert execution_report_service.report_path(execution).is_file()
+
+
+def test_an_execution_with_no_stored_report_is_a_404_not_an_empty_body(
+    client, db_session, no_worker
+):
+    """The negative control for the test above: nothing ran, so nothing is served."""
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    created = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()
+
+    response = client.get(f"/executions/{created['id']}/report")
+    assert response.status_code == 404, response.text
+    assert "No report stored" in response.json()["detail"]
 
 
 def test_project_execution_history_is_newest_first_and_excludes_run_scoped_ones(

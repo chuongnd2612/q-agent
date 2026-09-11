@@ -32,13 +32,14 @@ __all__ = [
     "scoped_repos_dir",
     "scoped_auth_dir",
     "scoped_automation_dir",
+    "scoped_reports_dir",
     "served_evidence_path",
     "slug",
 ]
 
 # The artifact kinds every scope holds (mirrors the flat `workspace/<kind>/`
 # dirs config.py has historically exposed as `specs_dir`/`evidence_dir`/etc).
-_KINDS = ("specs", "evidence", "knowledge", "repos", "auth", "automation")
+_KINDS = ("specs", "evidence", "knowledge", "repos", "auth", "automation", "reports")
 
 
 def scope_for(owner_id: int | None) -> str:
@@ -60,7 +61,7 @@ def scoped_dir(kind: str, owner_id: int | None) -> Path:
     """Return the scoped directory for artifact ``kind`` owned by ``owner_id``.
 
     ``kind`` is one of ``"specs"``, ``"evidence"``, ``"knowledge"``, ``"repos"``,
-    ``"auth"``, ``"automation"``. The path is not created on disk here — callers ``mkdir`` as
+    ``"auth"``, ``"automation"``, ``"reports"``. The path is not created on disk here — callers ``mkdir`` as
     needed, matching the existing (unscoped) ``Settings.*_dir`` properties.
 
     Returns ``get_settings().workspace_dir / scope_for(owner_id) / kind``.
@@ -100,6 +101,19 @@ def scoped_automation_dir(owner_id: int | None) -> Path:
     ``workspace/<scope>/automation/<project-slug>/<repo-slug>/``.
     """
     return scoped_dir("automation", owner_id)
+
+
+def scoped_reports_dir(owner_id: int | None) -> Path:
+    """Scoped ``reports`` directory for ``owner_id`` — see :func:`scoped_dir`.
+
+    Holds one raw Playwright ``report.json`` per Execution (#798). It is
+    deliberately **not** an ``evidence`` subdirectory: the ``/artifacts`` static
+    mount serves the workspace root and ``auth_guard`` admits only paths
+    containing ``/evidence/`` (``app/main.py``), so a report stored here cannot
+    be reached by URL at all — it is served only by the authenticated
+    ``GET /executions/{id}/report`` endpoint.
+    """
+    return scoped_dir("reports", owner_id)
 
 
 def served_evidence_path(owner_id: int | None, relative_path: str) -> str:

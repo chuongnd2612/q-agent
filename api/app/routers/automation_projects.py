@@ -58,6 +58,7 @@ from app.schemas import (
     SpecProvenanceEntryOut,
     SpecProvenanceOut,
 )
+from app.routers.execution import _require_paired_device, _resolve_target
 from app.services import audit_service, automation_export_service, project_execution
 from app.services import automation_project_service as aps
 from app.services.ownership import check_owned_or_404, owned
@@ -549,22 +550,18 @@ def start_project_automation_execution(
     to attribute a result to. The specs come from the request, their code from
     the mirror, and the whole lifecycle is the Execution row's own ``status``.
 
-    ``target`` is pinned to ``"server"`` for this slice. The workspace default is
-    ``local-agent`` (#161), but the agent cannot claim a run-less execution until
-    #798 scopes the claim on ``Execution.owner_id`` — so honouring that default
-    here would create a ``queued`` row nothing would ever pick up. An explicit
-    ``local-agent`` is refused with that reason rather than silently downgraded.
+    Both targets are supported since #798. ``target`` comes from the request when
+    it names a valid target, else from the workspace-wide ``executionTarget``
+    setting — the same resolution ``POST /runs/{id}/execution`` does, so the
+    shipped ``local-agent`` default (#161) applies here too. A ``local-agent``
+    execution is created ``queued`` with no worker thread; a paired device claims
+    it via ``POST /agent/jobs/next``, which is why the paired-device check runs
+    first: queueing a row no device will ever claim would spin the tab forever.
     """
     project = _project_or_404(db, project_guid, project_id, user)
-    target = (payload.target or "server").strip()
-    if target != "server":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only the server target can run a project's suite today — "
-                "Local Agent support lands with #798."
-            ),
-        )
+    target = _resolve_target({"target": payload.target})
+    if target == "local-agent":
+        _require_paired_device(db, project.owner_id)
     spec_paths = _selected_specs(db, project, payload.spec_paths)
     workers = max(1, min(int(payload.workers or 2), 16))
     execution = project_execution.create(
@@ -582,7 +579,10 @@ def start_project_automation_execution(
         target=f"{project.slug} · {len(spec_paths)} specs",
         detail={"projectGuid": project_guid, "executionId": execution.id},
     )
-    project_execution.start_in_thread(execution.id)
+    # A local-agent execution stays queued for a device to claim — the same
+    # "no in-process thread" contract the run path has.
+    if target == "server":
+        project_execution.start_in_thread(execution.id)
     return _project_execution_out(db, execution, with_results=True)
 
 
