@@ -1,55 +1,287 @@
 @import "tailwindcss";
 
-/*
- * Q-Agent design system — ported 1:1 from the approved design (Q-Agent.dc.html).
- * Tailwind 4 CSS-first theme. Colors, radii and fonts are exposed as tokens so
- * components can use utilities like `text-accent`, `bg-panel`, `rounded-glass`.
- */
-@theme {
-  /* Surface / ink */
-  --color-base: #0a0a0f;
-  --color-ink: #ececf1;
-  --color-ink-soft: #c3c3d0;
-  --color-ink-dim: #a0a0b2;
-  --color-muted: #8b8b9e;
-  --color-faint: #6c6c7e;
+/* ============================================================================
+   Q-Agent theme layer (#783, part of #782).
 
-  /* Brand accents */
-  --color-accent: #8b5cf6; /* violet-500 */
-  --color-accent-2: #6366f1; /* indigo-500 */
-  --color-violet: #a78bfa;
-  --color-cyan: #22d3ee;
-  --color-cyan-soft: #67e8f9;
+   Ported from EmeHub's `app/src/styles/theme.css` so the two apps in the suite
+   share one token vocabulary. Token names are EmeHub's and must NOT be renamed:
+   light mode and accent switching both depend on them.
 
-  /* Status */
-  --color-success: #10b981;
-  --color-success-soft: #6ee7b7;
-  --color-warning: #f59e0b;
-  --color-warning-soft: #fbbf24;
-  --color-danger: #f43f5e;
-  --color-danger-soft: #fb7185;
+   Structure:
+     1. :root             — dark column of the theme-token table
+     2. [data-mode=light] — light column (+ derived --pOn / --psText)
+     3. [data-accent=*]   — the four accents
+     4. semantic status + provider colours (both modes)
+     5. BRIDGE            — the pre-#782 --color-* names, kept alive temporarily
+     6. @keyframes
+     7. base element styles, scrollbars, ::selection, autofill
+     8. @theme inline     — maps every token to a Tailwind utility, so a
+                            [data-mode] / [data-accent] flip restyles the whole
+                            app with NO React re-render
+     9. @utility          — the recipes a colour utility cannot express
 
-  /* Provider brand */
-  --color-ado: #0078d4;
-  --color-jira: #2684ff;
+   `data-mode` / `data-accent` are stamped on <html> by AppearanceProvider.
+   They must live on documentElement, not the app root div: dropdowns, modals
+   and the command palette portal to document.body and would otherwise keep the
+   old theme (CLAUDE.md › Frontend).
+   ========================================================================= */
 
-  --font-sans: "Satoshi", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+/* ---------------------------------------------------------------------------
+   1. Theme tokens — DARK (the default)
+   ------------------------------------------------------------------------ */
+:root {
+  --bg: #0a0a0f;
+  --panel: rgba(20, 20, 28, 0.55);
+  --card: rgba(255, 255, 255, 0.035);
+  --card2: rgba(255, 255, 255, 0.045);
+  --card3: rgba(255, 255, 255, 0.05);
+  --inset: rgba(255, 255, 255, 0.03);
+  --bd: rgba(255, 255, 255, 0.07);
+  --bd2: rgba(255, 255, 255, 0.09);
+  --bd3: rgba(255, 255, 255, 0.06);
+  --pop: #191921;
+  --code: rgba(8, 8, 13, 0.6);
+  /* The dark pill field the auth + toolbar inputs sit in. A token because the
+     autofill mask below has to repaint exactly this colour, and in light mode
+     that colour is not #16161f. */
+  --field: #16161f;
+  /* Evidence screenshots and screencasts are of arbitrary captured pages, so
+     their frame stays dark-ish in BOTH modes — flipping it to white would make
+     light-UI captures bleed into the page. Deliberately not --bg. */
+  --media-bg: #14141c;
 
-  --radius-glass: 22px;
+  --txt: #ececf1;
+  --txt2: #dcdce4;
+  --txt3: #c3c3d0;
+  --txt4: #a9a9bc;
+  --muted: #8b8b9e;
+  /* CONTRAST FIX, carried over from EmeHub (#26 there). The design system's
+     dark `--faint` #7a7a8c and `--label` #6c6c7e measure 3.62-4.42:1 and
+     2.96-3.84:1 — below AA. Both carry real information (timestamps, table
+     headers, field labels), so neither is decorative, and `--label` is always
+     9-11px/700, well under WCAG's large-text threshold, so it gets no
+     exemption either.
 
-  /* Motion keyframes (mirror the design) */
-  --animate-fade-in-up: fadeInUp 0.5s ease both;
-  --animate-scale-in: scaleIn 0.22s ease both;
-  --animate-slide-in: slideIn 0.35s ease both;
-  --animate-pulse-dot: pulseDot 1.6s infinite;
-  --animate-spin-fast: spin 0.7s linear infinite;
-  --animate-floaty: floaty 6s ease-in-out infinite;
-  --animate-think: think 1.4s infinite;
-  --animate-glow-pulse: glowPulse 9s ease-in-out infinite;
-  --animate-bar-grow: barGrow 0.6s ease both;
+     Lifting them independently does not work: the ramp is too compressed at
+     the bottom. Any pair that both clear 4.5:1 lands within ~0.01 luminance of
+     each other AND of `--muted`, turning three tokens into one indistinguishable
+     grey — a worse outcome than the original failure. So they are deliberately
+     merged to one accessible value; `--label` is already distinguished from
+     `--faint` by typography (uppercase, 700, .08-.1em tracking) rather than
+     colour. Both names are kept so call sites do not churn.
+
+     #85859b measures 4.85:1 on --pop and 5.48:1 on --bg. */
+  --faint: #85859b;
+  --label: #85859b;
+
+  --shadow: rgba(0, 0, 0, 0.6);
+  --scroll: rgba(255, 255, 255, 0.09);
+  --scroll2: rgba(255, 255, 255, 0.18);
+  --brandSoft: #c4b5fd;
+  --cyanSoft: #a5f3fc;
+  --terra: #e0a58c;
 }
 
+/* ---------------------------------------------------------------------------
+   2. Theme tokens — LIGHT
+   ------------------------------------------------------------------------ */
+[data-mode="light"] {
+  --bg: #eef0f5;
+  --panel: rgba(255, 255, 255, 0.74);
+  --card: rgba(255, 255, 255, 0.66);
+  --card2: rgba(255, 255, 255, 0.82);
+  --card3: rgba(18, 22, 36, 0.05);
+  --inset: rgba(18, 22, 36, 0.035);
+  --bd: rgba(18, 22, 36, 0.1);
+  --bd2: rgba(18, 22, 36, 0.14);
+  --bd3: rgba(18, 22, 36, 0.075);
+  --pop: #ffffff;
+  --code: rgba(18, 22, 36, 0.05);
+  --field: #ffffff;
+  --media-bg: #dfe2ea;
+
+  --txt: #141721;
+  --txt2: #252935;
+  --txt3: #414759;
+  --txt4: #565d70;
+  /* CONTRAST FIX, carried over from EmeHub. The handoff's theme-token table
+     gives light `--muted` as #6a7182, but its own darkening map gives
+     `#8b8b9e -> #5c6273` — and #8b8b9e IS the dark `--muted`. The two tables
+     disagree, and #6a7182 measures 4.29:1 on --bg, which breaks the table's own
+     promise that every token is >=4.5:1 on its surface. Take the darkening
+     map's value. */
+  --muted: #5c6273;
+  --faint: #5f6675;
+  --label: #5c6371;
+
+  --shadow: rgba(18, 22, 36, 0.16);
+  --scroll: rgba(18, 22, 36, 0.16);
+  --scroll2: rgba(18, 22, 36, 0.3);
+  --brandSoft: #5b3fc4;
+  --cyanSoft: #0d6a7a;
+  /* Terracotta darkened just enough to clear 4.5:1 on the Claude explainer
+     banner's composited background while staying the same hue. */
+  --terra: #984c26;
+
+  /* Derived accent tokens, re-stated here so one [data-mode] flip carries both.
+     --pOn = text ON an accent fill; --psText = accent text on a surface. */
+  --pOn: var(--pDark);
+  --psText: var(--pDark);
+}
+
+/* ---------------------------------------------------------------------------
+   3. Accent tokens — set on <html> via data-accent.
+
+   NOTE (#783): the default here is PURPLE, not EMESOFT Red. #782 ships red as
+   the default, but only in the cleanup slice (#792), once the ~435 hard-coded
+   purple literals across 86 components are gone. Defaulting to red now would
+   put red chrome on a still-purple app in every intermediate merge.
+   ------------------------------------------------------------------------ */
+:root,
+[data-accent="purple"] {
+  --p: #8b5cf6;
+  --pl: #a78bfa;
+  --ps: #c4b5fd;
+  --pg: linear-gradient(135deg, #8b5cf6, #6366f1);
+  --pglow: rgba(139, 92, 246, 0.5);
+  --pt: rgba(139, 92, 246, 0.14);
+  --pb: rgba(139, 92, 246, 0.34);
+  --pDark: #5227b8;
+}
+
+[data-accent="red"] {
+  --p: #e1172b;
+  --pl: #ff5568;
+  --ps: #ffa1ab;
+  --pg: linear-gradient(135deg, #ff4d5c, #c20d22);
+  --pglow: rgba(225, 23, 43, 0.5);
+  --pt: rgba(225, 23, 43, 0.14);
+  --pb: rgba(225, 23, 43, 0.34);
+  --pDark: #a80d1e;
+}
+
+[data-accent="cyan"] {
+  --p: #22d3ee;
+  --pl: #67e8f9;
+  --ps: #a5f3fc;
+  --pg: linear-gradient(135deg, #22d3ee, #0ea5b7);
+  --pglow: rgba(34, 211, 238, 0.45);
+  --pt: rgba(34, 211, 238, 0.13);
+  --pb: rgba(34, 211, 238, 0.32);
+  --pDark: #0b5c69;
+}
+
+[data-accent="steel"] {
+  --p: #9aa3b2;
+  --pl: #c3cad6;
+  --ps: #dde2ea;
+  --pg: linear-gradient(135deg, #e2e6ec, #8d939e);
+  --pglow: rgba(180, 190, 205, 0.4);
+  --pt: rgba(180, 190, 205, 0.13);
+  --pb: rgba(180, 190, 205, 0.3);
+  --pDark: #434a59;
+}
+
+/* Dark defaults for the derived pair, declared AFTER the accent blocks and
+   BEFORE the light re-statement: [data-mode] and [data-accent] have equal
+   specificity and both sit on <html>, so source order is what decides. */
+:root {
+  --pOn: #fff;
+  --psText: var(--ps);
+}
+
+[data-mode="light"][data-accent],
+[data-mode="light"] {
+  --pOn: var(--pDark);
+  --psText: var(--pDark);
+}
+
+/* ---------------------------------------------------------------------------
+   4. Semantic status + provider / brand colours.
+
+   Light applies the handoff's darkening map. Provider marks do NOT darken —
+   they are brand colours; use --terra for Claude *text* in light mode.
+   ------------------------------------------------------------------------ */
+:root {
+  --ok: #6ee7b7;
+  --okTint: rgba(16, 185, 129, 0.14);
+  --warn: #fbbf24;
+  --warnTint: rgba(251, 191, 36, 0.14);
+  --danger: #fb7185;
+  --dangerTint: rgba(244, 63, 94, 0.14);
+  --info: #a5f3fc;
+  --infoTint: rgba(34, 211, 238, 0.13);
+  --neutral: #c3cad6;
+  --neutralTint: rgba(255, 255, 255, 0.07);
+  --paused: #8b8b9e;
+  --pausedTint: rgba(255, 255, 255, 0.07);
+
+  --claude: #d97757;
+  --claudeTint: rgba(217, 119, 87, 0.14);
+  --azure: #0078d4;
+  --jira: #2684ff;
+  --github: #c9ced8;
+  --githubGlyph: #12121a;
+}
+
+[data-mode="light"] {
+  --ok: #0b6d4c;
+  --okTint: rgba(16, 185, 129, 0.15);
+  --warn: #8a5b00;
+  --warnTint: rgba(251, 191, 36, 0.15);
+  --danger: #a5123c;
+  --dangerTint: rgba(244, 63, 94, 0.15);
+  --info: #0d6a7a;
+  --infoTint: rgba(34, 211, 238, 0.15);
+  --neutral: #4a5162;
+  --neutralTint: rgba(18, 22, 36, 0.07);
+  --paused: #5c6273;
+  --pausedTint: rgba(18, 22, 36, 0.07);
+
+  --claudeTint: rgba(217, 119, 87, 0.15);
+}
+
+/* ---------------------------------------------------------------------------
+   5. THE BRIDGE — temporary, deleted in #792.
+
+   133 components still reference the pre-#782 token names, directly as
+   `var(--color-ink)` and through utilities like `text-accent` / `bg-panel`.
+   Aliasing them onto the new layer keeps every one of them compiling, building
+   and looking unchanged while slices #785-#791 migrate them a directory at a
+   time. When the last slice lands, this block and its `@theme inline` half go.
+
+   Do not add to it. A new component writes the new tokens.
+   ------------------------------------------------------------------------ */
+:root {
+  --color-base: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--txt);
+  --color-ink-soft: var(--txt3);
+  --color-ink-dim: var(--txt4);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--p);
+  --color-accent-2: var(--p);
+  --color-violet: var(--pl);
+  --color-cyan: #22d3ee;
+  --color-cyan-soft: var(--cyanSoft);
+  /* The old solid/soft status pairs collapse onto one mode-aware token each.
+     `--color-success` was a flat #10b981 and `--color-success-soft` #6ee7b7;
+     keeping the flat value would leave every solid status dot frozen at a
+     dark-mode-only colour. Same for warning and danger. */
+  --color-success: var(--ok);
+  --color-success-soft: var(--ok);
+  --color-warning: var(--warn);
+  --color-warning-soft: var(--warn);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger);
+  --color-ado: var(--azure);
+  --color-jira: var(--jira);
+}
+
+/* ---------------------------------------------------------------------------
+   6. Motion keyframes
+   ------------------------------------------------------------------------ */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: none; }
@@ -136,6 +368,9 @@
   100% { left: 100%; }
 }
 
+/* ---------------------------------------------------------------------------
+   7. Base element styles
+   ------------------------------------------------------------------------ */
 * {
   box-sizing: border-box;
 }
@@ -147,11 +382,16 @@ body,
   height: 100%;
 }
 body {
-  background: var(--color-base);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--txt);
+  font-family: "Satoshi", "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  /* A ~.35s cross-fade when the mode flips, so Dark -> Light reads as one
+     surface changing rather than the app blinking. */
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease;
 }
 
 /*
@@ -159,8 +399,12 @@ body {
  * background and dark text, which breaks the dark pill fields (esp. on the auth
  * screen). Neutralise it — mask the input box with the field colour via an inset
  * box-shadow, keep the ink text colour, and stall the UA transition so it never
- * flashes white. Fields are `bg-transparent` inside a `#16161f` wrap, so the
- * inset colour matches that wrap exactly.
+ * flashes white.
+ *
+ * `--field` rather than a literal #16161f: in light mode that literal paints a
+ * near-black block inside a white field. (#787 revisits whether the mask should
+ * become `background-clip: text`, which works on any surface without this rule
+ * knowing which one it is on.)
  */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
@@ -168,17 +412,17 @@ input:-webkit-autofill:focus,
 input:-webkit-autofill:active,
 textarea:-webkit-autofill,
 select:-webkit-autofill {
-  -webkit-text-fill-color: var(--color-ink);
-  caret-color: var(--color-ink);
-  -webkit-box-shadow: 0 0 0 1000px #16161f inset;
-  box-shadow: 0 0 0 1000px #16161f inset;
+  -webkit-text-fill-color: var(--txt);
+  caret-color: var(--txt);
+  -webkit-box-shadow: 0 0 0 1000px var(--field) inset;
+  box-shadow: 0 0 0 1000px var(--field) inset;
   border-radius: inherit;
   transition: background-color 100000s ease 0s;
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.4);
-  color: #fff;
+  background: var(--pt);
+  color: var(--txt);
 }
 ::-webkit-scrollbar {
   width: 10px;
@@ -188,13 +432,13 @@ select:-webkit-autofill {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--scroll);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--scroll2);
   background-clip: padding-box;
 }
 
@@ -205,26 +449,6 @@ select:-webkit-autofill {
 }
 .scrollbar-none::-webkit-scrollbar {
   display: none;
-}
-
-/*
- * Reusable surface utilities. The design repeats a frosted-glass recipe
- * everywhere; these classes capture it so screens stay DRY.
- */
-@utility glass {
-  background: rgba(255, 255, 255, 0.02);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-}
-@utility glass-strong {
-  background: rgba(20, 20, 28, 0.55);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-}
-@utility accent-gradient {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
 }
 
 /* Blinking caret for the spec-chat typewriter reveal (SpecChatPanel). */
@@ -254,25 +478,19 @@ select:-webkit-autofill {
    Tailwind's preflight strips list markers and margins, which would render the
    numbered "Actual result" list as unnumbered lines and defeat the point of previewing
    the destination's shape. These rules are scoped to `.comment-preview` so nothing
-   else in the app inherits list styling back.
-
-   Colours come from the app's own tokens, not a hardcoded light palette. ADO renders
-   comments on white, and the first version imitated that — but a white slab inside a
-   dark shell is a worse mismatch than the one it was copying, and it would break again
-   the day the app gains a light theme. Following the tokens means this file does not
-   change when that happens. */
+   else in the app inherits list styling back. */
 .comment-preview {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   font-size: 13.5px;
   line-height: 1.55;
-  color: var(--color-ink);
+  color: var(--txt);
 }
 .comment-preview ol { list-style: decimal; margin: 8px 0 12px; padding-left: 26px; }
 .comment-preview ul { list-style: disc; margin: 6px 0 10px; padding-left: 24px; }
 .comment-preview li { margin: 0 0 10px; }
 .comment-preview div { margin: 0 0 2px; }
 .comment-preview b { font-weight: 700; }
-.comment-preview a { color: var(--color-violet); }
+.comment-preview a { color: var(--psText); }
 /* Screenshots are of light web apps, so they keep a neutral frame that reads on either
    surface. Bounded height because the reader is checking placement, not reading pixels
    — a full-page capture would otherwise make the card as tall as a monitor. */
@@ -281,7 +499,135 @@ select:-webkit-autofill {
   margin: 6px 0 4px;
   max-width: 100%;
   max-height: 420px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--bd2);
   border-radius: 6px;
   background: #fff;
+}
+
+/* ---------------------------------------------------------------------------
+   8. Tailwind 4 theme mapping.
+
+   `@theme inline` makes each utility emit `var(--token)` rather than the
+   resolved value, so flipping [data-mode] / [data-accent] restyles the whole
+   app with no re-render. Plain `@theme` resolves at build time and would defeat
+   the entire feature. Components use these utilities and NEVER a hex.
+   ------------------------------------------------------------------------ */
+@theme inline {
+  /* surfaces */
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-card2: var(--card2);
+  --color-card3: var(--card3);
+  --color-inset: var(--inset);
+  --color-pop: var(--pop);
+  --color-code: var(--code);
+  --color-field: var(--field);
+  --color-media-bg: var(--media-bg);
+
+  /* borders */
+  --color-bd: var(--bd);
+  --color-bd2: var(--bd2);
+  --color-bd3: var(--bd3);
+
+  /* type */
+  --color-txt: var(--txt);
+  --color-txt2: var(--txt2);
+  --color-txt3: var(--txt3);
+  --color-txt4: var(--txt4);
+  --color-label: var(--label);
+  --color-brand-soft: var(--brandSoft);
+  --color-cyan-soft: var(--cyanSoft);
+  --color-terra: var(--terra);
+
+  /* accent */
+  --color-p: var(--p);
+  --color-pl: var(--pl);
+  --color-ps: var(--ps);
+  --color-pt: var(--pt);
+  --color-pb: var(--pb);
+  --color-p-on: var(--pOn);
+  --color-ps-text: var(--psText);
+  --color-p-dark: var(--pDark);
+
+  /* semantic status */
+  --color-ok: var(--ok);
+  --color-ok-tint: var(--okTint);
+  --color-warn: var(--warn);
+  --color-warn-tint: var(--warnTint);
+  --color-danger: var(--danger);
+  --color-danger-tint: var(--dangerTint);
+  --color-info: var(--info);
+  --color-info-tint: var(--infoTint);
+  --color-neutral: var(--neutral);
+  --color-neutral-tint: var(--neutralTint);
+  --color-paused: var(--paused);
+  --color-paused-tint: var(--pausedTint);
+
+  /* providers */
+  --color-claude: var(--claude);
+  --color-claude-tint: var(--claudeTint);
+  --color-azure: var(--azure);
+  --color-github: var(--github);
+  --color-github-glyph: var(--githubGlyph);
+
+  /* --- BRIDGE (deleted in #792, with its :root half in section 5) --- */
+  --color-base: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--txt);
+  --color-ink-soft: var(--txt3);
+  --color-ink-dim: var(--txt4);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--p);
+  --color-accent-2: var(--p);
+  --color-violet: var(--pl);
+  --color-cyan: #22d3ee;
+  --color-success: var(--ok);
+  --color-success-soft: var(--ok);
+  --color-warning: var(--warn);
+  --color-warning-soft: var(--warn);
+  --color-danger-soft: var(--danger);
+  --color-ado: var(--azure);
+  --color-jira: var(--jira);
+  /* --- end bridge --- */
+
+  --font-sans: "Satoshi", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-glass: 22px;
+
+  /* elevation */
+  --shadow-panel: 0 24px 60px -20px var(--shadow);
+  --shadow-pop: 0 24px 60px -18px var(--shadow);
+  --shadow-primary: 0 6px 18px -4px var(--pglow);
+
+  /* Motion keyframes (mirror the design) */
+  --animate-fade-in-up: fadeInUp 0.5s ease both;
+  --animate-scale-in: scaleIn 0.22s ease both;
+  --animate-slide-in: slideIn 0.35s ease both;
+  --animate-pulse-dot: pulseDot 1.6s infinite;
+  --animate-spin-fast: spin 0.7s linear infinite;
+  --animate-floaty: floaty 6s ease-in-out infinite;
+  --animate-think: think 1.4s infinite;
+  --animate-glow-pulse: glowPulse 9s ease-in-out infinite;
+  --animate-bar-grow: barGrow 0.6s ease both;
+}
+
+/* ---------------------------------------------------------------------------
+   9. Recipes a colour utility cannot express.
+   ------------------------------------------------------------------------ */
+@utility glass {
+  background: var(--card);
+  /* Lightning CSS adds the -webkit- prefix; declaring it by hand makes it drop
+     the unprefixed property. */
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--bd);
+}
+@utility glass-strong {
+  background: var(--panel);
+  backdrop-filter: blur(28px);
+  border: 1px solid var(--bd);
+}
+@utility accent-gradient {
+  background: var(--pg);
 }

@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import { AppBackground } from "@/components/background/AppBackground";
 import { AppLayout } from "@/components/shell/AppLayout";
 import { QueryProvider } from "@/app/QueryProvider";
+import { AppearanceProvider } from "@/components/appearance/AppearanceProvider";
 import { useUI } from "@/store/ui";
 
 import { KnowledgeBuildOverlay } from "@/screens/KnowledgeBuildOverlay";
@@ -42,19 +43,23 @@ export default function App() {
   }, [togglePalette, closePalette, closeCreateRun, closeDrawer, closeChat]);
 
   return (
-    <QueryProvider>
-      <AppBackground />
-      <AppLayout />
-      <CommandPalette />
-      <CreateRunModal />
-      <KnowledgeBuildOverlay />
-      <TourOverlay />
-      {/* Inside QueryProvider — Retry refetches the failed queries. Renders
-          nothing while the backend is reachable. */}
-      <ServiceUnreachableBanner />
-      {/* Every toast is rendered by our custom card (see @/lib/toast), so the
-          Toaster itself is unstyled — it only provides positioning + lifecycle. */}
-      <Toaster position="bottom-center" toastOptions={{ unstyled: true }} />
-    </QueryProvider>
+    // Outermost: it stamps data-mode / data-accent on <html>, which portalled
+    // overlays (rendered into document.body) also read.
+    <AppearanceProvider>
+      <QueryProvider>
+        <AppBackground />
+        <AppLayout />
+        <CommandPalette />
+        <CreateRunModal />
+        <KnowledgeBuildOverlay />
+        <TourOverlay />
+        {/* Inside QueryProvider — Retry refetches the failed queries. Renders
+            nothing while the backend is reachable. */}
+        <ServiceUnreachableBanner />
+        {/* Every toast is rendered by our custom card (see @/lib/toast), so the
+            Toaster itself is unstyled — it only provides positioning + lifecycle. */}
+        <Toaster position="bottom-center" toastOptions={{ unstyled: true }} />
+      </QueryProvider>
+    </AppearanceProvider>
   );
 }
