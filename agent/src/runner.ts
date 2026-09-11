@@ -145,21 +145,83 @@ async function runPlaywright(
   return runProcess(nodeBin(), args, workDir, nodePathEnv(nm), EXEC_TIMEOUT_MS, onLine);
 }
 
+/** How one spec in a job is named on the wire and in the UI. */
+export interface SpecIdentity {
+  /** Ticket external id, or "" for a project-scoped job (there is no ticket). */
+  ticket: string;
+  /** Case code, or "" for a project-scoped job (there is no case). */
+  caseCode: string;
+  /** Repo-relative spec path — the only identity a project-scoped result has. */
+  specPath: string;
+  /** What to print for this spec: "SUR-1428 TC-01", or the spec path. */
+  label: string;
+}
+
 /**
- * Best identity `{ticket, caseCode}` for wire events: prefers explicit
- * fields on the job spec (forward-compatible with a server patch that adds
- * them), falling back to parsing the filename convention otherwise. See
- * README "Known limitation" — the fallback only recovers the ticket's
- * short numeric suffix, not its full provider-prefixed external id.
+ * Best identity for one spec's wire events and log lines.
+ *
+ * For a run job it prefers the explicit `ticketExternalId`/`caseCode` fields and
+ * falls back to parsing the filename convention (`1428-TC-01.spec.ts`) — see
+ * README "Known limitation": the fallback only recovers the ticket's short
+ * numeric suffix, not its full provider-prefixed external id.
+ *
+ * For a PROJECT-SCOPED job (#799) that fallback must not run at all. A project
+ * spec path (`tests/checkout/smoke.spec.ts`) carries no ticket and no case code,
+ * so parsing it would mint a garbage ticket ("smoke") that matches no row on the
+ * server and reads as a real identity in the log. It degrades to the spec path
+ * instead, and ticket/caseCode stay empty so nothing downstream can mistake a
+ * path fragment for a ticket.
+ *
+ * @param spec The claimed job spec.
+ * @param projectScoped True when the claim carried `projectScoped: true`.
+ * @returns The spec's ticket/case (both "" when project-scoped), its repo-relative
+ *   path, and the label to print for it.
  */
-function identityFor(spec: api.JobSpec): { ticket: string; caseCode: string } {
+export function identityFor(spec: api.JobSpec, projectScoped = false): SpecIdentity {
+  const specPath = spec.specPath || spec.filename;
+  if (projectScoped) {
+    return { ticket: "", caseCode: "", specPath, label: specPath };
+  }
   if (spec.ticketExternalId && spec.caseCode) {
-    return { ticket: spec.ticketExternalId, caseCode: spec.caseCode };
+    return {
+      ticket: spec.ticketExternalId,
+      caseCode: spec.caseCode,
+      specPath,
+      label: `${spec.ticketExternalId} ${spec.caseCode}`,
+    };
   }
   // A layered spec's `filename` is project-relative (`tests/SUR-1428/…`), so parse
   // the basename — the convention only ever described the file's own name.
   const parsed = parseSpecIdentity(path.basename(spec.filename));
-  return { ticket: spec.ticketExternalId || parsed.shortTicket, caseCode: spec.caseCode || parsed.caseCode };
+  const ticket = spec.ticketExternalId || parsed.shortTicket;
+  const caseCode = spec.caseCode || parsed.caseCode;
+  return { ticket, caseCode, specPath, label: `${ticket} ${caseCode}`.trim() };
+}
+
+/**
+ * Which of a spec's report attachments should actually be uploaded (#799).
+ *
+ * A run job uploads everything the report references (screenshot, video, trace,
+ * DOM, console/network) because the run's Evidence panel shows all of it.
+ *
+ * A project-scoped job uploads **failure screenshots only**. Its report viewer
+ * (#801) renders the JSON report plus screenshots and deliberately has no trace
+ * tab, so a video or a multi-MB trace would be bytes uploaded for something
+ * nothing can display; and a passing spec has nothing to look at.
+ *
+ * @param projectScoped True when the claim carried `projectScoped: true`.
+ * @param status The spec's final status from the parsed report.
+ * @param attachments The spec's parsed attachments.
+ * @returns The subset of `attachments` to upload.
+ */
+export function evidenceToUpload(
+  projectScoped: boolean,
+  status: string,
+  attachments: ParsedAttachment[]
+): ParsedAttachment[] {
+  if (!projectScoped) return attachments;
+  if (status !== "fail") return [];
+  return attachments.filter((att) => att.kind === "screenshot");
 }
 
 /**
@@ -211,12 +273,12 @@ function stageJobTree(workDir: string, job: api.Job, specs: { filename: string; 
 /** Mark every spec in the job failed with `message` and finalize — used when a run cannot proceed (e.g. manual login was not completed). */
 async function failAllResults(cfg: AgentConfig, job: api.Job, message: string): Promise<void> {
   for (const spec of job.specs) {
-    const { ticket, caseCode } = identityFor(spec);
+    const { ticket, caseCode, specPath } = identityFor(spec, Boolean(job.projectScoped));
     await api
       .postResult(cfg, job.executionId, { file: spec.filename, status: "fail", duration_ms: 0, error_message: message })
       .catch((err) => console.error("postResult failed:", err));
     await api
-      .postEvent(cfg, job.executionId, "exec.case.result", { ticket, caseCode, status: "fail", durationMs: 0 })
+      .postEvent(cfg, job.executionId, "exec.case.result", { ticket, caseCode, specPath, status: "fail", durationMs: 0 })
       .catch((err) => console.error("postEvent failed:", err));
   }
   const total = job.specs.length;
@@ -287,6 +349,10 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     await processHealJob(cfg, job, job.heal);
     return;
   }
+  // A project-scoped job (#799) was started from a project's Automation tab: no
+  // run, no tickets, no case codes. It changes three things here — how a spec is
+  // identified, which evidence is worth uploading, and what the log says.
+  const projectScoped = Boolean(job.projectScoped);
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "qagent-"));
   // Set once the (detached) evidence uploader takes ownership of workDir — it
   // then removes the dir when its uploads finish. Until then, this function's
@@ -327,9 +393,9 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     // the basename is the only stable join key.
     const specByFile = new Map(job.specs.map((s) => [path.basename(s.filename), s]));
     for (let i = 0; i < job.specs.length; i++) {
-      const { ticket, caseCode } = identityFor(job.specs[i]);
-      await api.postEvent(cfg, job.executionId, "exec.case.running", { ticket, caseCode, index: i + 1, total });
-      emit("case-running", { ticket, caseCode, index: i + 1, total });
+      const { ticket, caseCode, specPath, label } = identityFor(job.specs[i], projectScoped);
+      await api.postEvent(cfg, job.executionId, "exec.case.running", { ticket, caseCode, specPath, index: i + 1, total });
+      emit("case-running", { ticket, caseCode, label, index: i + 1, total });
     }
 
     // A single-spec job targets just that one file (the "run this test"
@@ -354,18 +420,18 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
       handled.add(spec.filename);
       if (status === "pass") passed++;
       else if (status === "fail") failed++;
-      const { ticket, caseCode } = identityFor(spec);
+      const { ticket, caseCode, specPath, label } = identityFor(spec, projectScoped);
       const progress = total ? Math.trunc((100 * handled.size) / total) : 100;
       await api
         .postResult(cfg, job.executionId, { file: spec.filename, status, duration_ms: durationMs, error_message: error })
         .catch(() => {});
       await api
-        .postEvent(cfg, job.executionId, "exec.case.result", { ticket, caseCode, status, durationMs })
+        .postEvent(cfg, job.executionId, "exec.case.result", { ticket, caseCode, specPath, status, durationMs })
         .catch(() => {});
       await api
         .postEvent(cfg, job.executionId, "exec.progress", { progress, passed, failed, remaining: total - handled.size })
         .catch(() => {});
-      emit("case-result", { ticket, caseCode, status, durationMs });
+      emit("case-result", { ticket, caseCode, label, status, durationMs });
       emit("progress", { progress, passed, failed, remaining: total - handled.size });
     };
 
@@ -396,10 +462,16 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
 
     const reportPath = path.join(workDir, "report.json");
     let parsed: ParsedResult[] = [];
+    // The report's raw text, kept for the verbatim upload (#799). Read once and
+    // held here rather than re-read in the uploader: the workDir is removed by
+    // the uploader itself, and a string is cheaper to reason about than a
+    // lifetime.
+    let reportRaw = "";
     if (!runError) {
       if (fs.existsSync(reportPath)) {
         try {
-          parsed = parsePlaywrightReport(JSON.parse(fs.readFileSync(reportPath, "utf-8")));
+          reportRaw = fs.readFileSync(reportPath, "utf-8");
+          parsed = parsePlaywrightReport(JSON.parse(reportRaw));
         } catch (exc) {
           runError = `Could not parse Playwright report: ${(exc as Error).message}`;
         }
@@ -416,14 +488,22 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     // Evidence uploads are deferred until AFTER results + complete are posted so
     // the web marks the run done immediately rather than waiting on (multi-MB)
     // video/trace/DOM uploads.
-    const pendingEvidence: { ticket: string; caseCode: string; kind: string; filePath: string }[] = [];
+    const pendingEvidence: PendingEvidence[] = [];
     for (const spec of job.specs) {
       const entry = parsed.find((e) => path.basename(e.file) === path.basename(spec.filename));
-      const { ticket, caseCode } = identityFor(spec);
+      const { ticket, caseCode, specPath } = identityFor(spec, projectScoped);
       if (entry) {
-        for (const att of entry.attachments) {
+        for (const att of evidenceToUpload(projectScoped, entry.status, entry.attachments)) {
           const filePath = path.isAbsolute(att.path) ? att.path : path.join(workDir, att.path);
-          if (fs.existsSync(filePath)) pendingEvidence.push({ ticket, caseCode, kind: att.kind, filePath });
+          if (fs.existsSync(filePath)) {
+            pendingEvidence.push({
+              ticket,
+              caseCode,
+              kind: att.kind,
+              filePath,
+              specPath: projectScoped ? specPath : undefined,
+            });
+          }
         }
         await postCaseResult(spec, entry.status, entry.duration_ms || elapsedMs, entry.error_message);
       } else {
@@ -446,23 +526,35 @@ export async function processJob(cfg: AgentConfig, job: api.Job): Promise<void> 
     // finishes uploading — that block is what stalled the agent when a new run
     // was started mid-upload. The uploader owns workDir cleanup from here.
     handedOff = true;
-    void uploadEvidenceThenCleanup(cfg, job.executionId, pendingEvidence, workDir);
+    void uploadEvidenceThenCleanup(cfg, job.executionId, pendingEvidence, workDir, reportRaw);
   } finally {
     if (!handedOff) fs.rmSync(workDir, { recursive: true, force: true });
   }
 }
 
+/** One artifact queued for the post-completion upload pass. `specPath` is set
+ * only for a project-scoped job, where it is the server's only matching key. */
+interface PendingEvidence {
+  ticket: string;
+  caseCode: string;
+  kind: string;
+  filePath: string;
+  specPath?: string;
+}
+
 /**
- * Upload a completed job's deferred evidence artifacts, then remove its workDir.
+ * Upload a completed job's raw JSON report and deferred evidence artifacts, then
+ * remove its workDir.
  * Runs detached from the claim loop (see {@link processJob}) so uploads never
  * delay claiming the next run. Never throws: each upload's failure is logged and
  * the workDir is always removed, even if some uploads fail or time out.
  */
-async function uploadEvidenceThenCleanup(
+export async function uploadEvidenceThenCleanup(
   cfg: AgentConfig,
   executionId: number,
-  pendingEvidence: { ticket: string; caseCode: string; kind: string; filePath: string }[],
-  workDir: string
+  pendingEvidence: PendingEvidence[],
+  workDir: string,
+  reportRaw = ""
 ): Promise<void> {
   // Tell the UI evidence is still incoming so it can show a loader instead of an
   // empty panel while these deferred uploads land (results are already visible).
@@ -472,6 +564,15 @@ async function uploadEvidenceThenCleanup(
       .catch(() => {});
   }
   try {
+    // The raw JSON report first: it is what the Automation tab's report viewer
+    // renders (#801), so it is the one upload whose absence leaves an execution
+    // with nothing to show. Failure is logged, never thrown — the execution is
+    // already reported complete and the workDir must still be cleaned up below.
+    if (reportRaw) {
+      await api
+        .postReport(cfg, executionId, reportRaw)
+        .catch((err) => console.error("postReport failed:", err));
+    }
     for (const ev of pendingEvidence) {
       await api
         .postEvidence(cfg, executionId, {
@@ -480,6 +581,7 @@ async function uploadEvidenceThenCleanup(
           kind: ev.kind,
           filePath: ev.filePath,
           filename: path.basename(ev.filePath),
+          specPath: ev.specPath,
         })
         .catch((err) => console.error("postEvidence failed:", err));
     }
@@ -1821,8 +1923,18 @@ export async function runAgentLoop(cfg: AgentConfig, signal: { aborted: boolean 
       await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
       continue;
     }
-    console.log(`Claimed execution #${job.executionId} (run ${job.runCode}, ${job.specs.length} spec(s))`);
-    emit("job-claimed", { executionId: job.executionId, runCode: job.runCode, total: job.specs.length });
+    // For a project-scoped job `runCode` carries the project/repo label, not a run
+    // code — so say "project", not "run" (#799).
+    const scopeLabel = job.projectScoped ? "project" : "run";
+    console.log(
+      `Claimed execution #${job.executionId} (${scopeLabel} ${job.runCode}, ${job.specs.length} spec(s))`
+    );
+    emit("job-claimed", {
+      executionId: job.executionId,
+      runCode: job.runCode,
+      projectScoped: Boolean(job.projectScoped),
+      total: job.specs.length,
+    });
     try {
       await processJob(cfg, job);
       console.log(`Execution #${job.executionId} complete`);
