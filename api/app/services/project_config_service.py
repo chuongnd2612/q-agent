@@ -423,6 +423,45 @@ def clear_auth(project_key: str, owner_id: int | None = None) -> dict[str, Any]:
     return auth_state(project_key, owner_id)
 
 
+def base_url_for_env(config: ProjectConfig | None, env: str = "") -> str:
+    """The base URL a config resolves to for ``env``, else its project-level one.
+
+    The env name is matched **case-insensitively**, and a matching entry only
+    wins when it actually carries a URL — an environment configured with a name
+    and no URL must not blank out the project's own.
+
+    Extracted from :func:`build_context` so the project-scoped execution path
+    (``project_execution``) resolves a base URL exactly the way a run does. The
+    matching rule is load-bearing and easy to get subtly wrong: on no match the
+    caller silently falls through to the project URL and the suite runs against
+    the wrong host, which is the failure :func:`environment_names` exists to
+    prevent from the other side.
+    """
+    if config is None:
+        return ""
+    if env:
+        for entry in config.environments or []:
+            if str(entry.get("name", "")).lower() == env.lower() and entry.get("base_url"):
+                return entry["base_url"]
+    return config.base_url or ""
+
+
+def resolve_base_url(db: Session, project_key: str, env: str = "") -> str:
+    """Base URL for a project **key** (not a ticket), with the knowledge fallback.
+
+    Same two steps as :func:`build_context`: the config's env-aware URL first,
+    then the knowledge base's, so a project whose base URL was only ever
+    discovered still resolves. ``""`` when neither has one.
+    """
+    if not project_key:
+        return ""
+    url = base_url_for_env(get_config(db, project_key), env)
+    if url:
+        return url
+    row = db.query(ProjectKnowledge).filter(ProjectKnowledge.key == project_key).first()
+    return (row.knowledge or {}).get("base_url", "") if row else ""
+
+
 def base_url_for(db: Session, ticket: Ticket, env: str = "") -> str:
     """Resolve the base URL a run should target for a ticket's project.
 
@@ -726,14 +765,8 @@ def build_context(
     target_name = repo if (repo and repo in configured_names) else default_name
     context["repo"] = target_name
     if cfg:
-        base_url = cfg.base_url
         # Prefer a per-environment URL when the run's env matches one.
-        if env:
-            for e in cfg.environments or []:
-                if str(e.get("name", "")).lower() == env.lower() and e.get("base_url"):
-                    base_url = e["base_url"]
-                    break
-        context["baseUrl"] = base_url
+        context["baseUrl"] = base_url_for_env(cfg, env)
         context["localRepoPath"] = cfg.local_repo_path
         context["environments"] = cfg.environments or []
         context["extra"] = cfg.extra or {}

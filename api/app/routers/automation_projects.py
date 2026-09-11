@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps_auth import current_user
 from app.models.automation_project import AutomationFile, AutomationProject
+from app.models.execution import Execution, ExecutionResult
 from app.models.run import Run
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.user import User
@@ -53,10 +54,11 @@ from app.schemas import (
     AutomationRepoOut,
     AutomationTreeFileOut,
     AutomationTreeOut,
+    ProjectExecutionStart,
     SpecProvenanceEntryOut,
     SpecProvenanceOut,
 )
-from app.services import audit_service, automation_export_service
+from app.services import audit_service, automation_export_service, project_execution
 from app.services import automation_project_service as aps
 from app.services.ownership import check_owned_or_404, owned
 
@@ -465,3 +467,189 @@ def export_project_automation_zip(
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+#: Upper bound on one project execution's selection. Not a performance limit —
+#: Playwright's own `--workers` handles volume — but a guard against a client
+#: posting an unbounded list, which would create that many rows and stage that
+#: many files before anything could go wrong more cheaply.
+_MAX_SELECTED_SPECS = 200
+
+
+def _selected_specs(db: Session, project: AutomationProject, raw: list[str] | None) -> list[str]:
+    """The requested spec paths, validated against the mirror, order preserved.
+
+    **There is no "run everything" default here, by construction.** An automation
+    repo is keyed on ``(owner, provider project key, repo)`` and is legitimately
+    written to by runs from *several* q-agent projects, so "every spec in the
+    repo" is not the same set as "this project's specs" — which is exactly why
+    the Automation tab's tree is unfiltered and the selection is explicit (#795).
+    An empty selection is therefore a 400, never an implicit everything.
+
+    Every path must resolve to a mirror row of ``kind == "spec"`` for **this**
+    repo. That single check covers three distinct refusals at once: a path from
+    another repo, a shared asset (a page object or fixture is not runnable on its
+    own), and a path that no longer exists. The mirror is also what the tab
+    listed, so what runs is what the user saw.
+
+    Raises:
+        HTTPException: 400, naming the offending paths rather than the count.
+    """
+    if not raw:
+        raise HTTPException(
+            status_code=400, detail="Select at least one spec to run."
+        )
+    seen: set[str] = set()
+    paths: list[str] = []
+    for entry in raw:
+        value = _validated_path(entry)
+        if value in seen:
+            continue
+        seen.add(value)
+        paths.append(value)
+    if len(paths) > _MAX_SELECTED_SPECS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Select at most {_MAX_SELECTED_SPECS} specs in one run.",
+        )
+    runnable = {
+        row.path
+        for row in db.execute(
+            select(AutomationFile.path).where(
+                AutomationFile.project_id == project.id,
+                AutomationFile.path.in_(paths),
+                AutomationFile.kind == "spec",
+            )
+        ).all()
+    }
+    unknown = [p for p in paths if p not in runnable]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Not runnable specs in this automation repo: " + ", ".join(unknown[:10])
+            ),
+        )
+    return paths
+
+
+@router.post("/repos/{project_id}/executions")
+def start_project_automation_execution(
+    project_guid: str,
+    project_id: int,
+    payload: ProjectExecutionStart,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> dict:
+    """Run the selected specs out of this automation repo (#797).
+
+    The project-scoped counterpart of ``POST /runs/{id}/execution``, and
+    deliberately **not** a branch inside it: there is no run to put into the
+    ``executing`` stage, no approved-case filter to apply, and no ticket or case
+    to attribute a result to. The specs come from the request, their code from
+    the mirror, and the whole lifecycle is the Execution row's own ``status``.
+
+    ``target`` is pinned to ``"server"`` for this slice. The workspace default is
+    ``local-agent`` (#161), but the agent cannot claim a run-less execution until
+    #798 scopes the claim on ``Execution.owner_id`` — so honouring that default
+    here would create a ``queued`` row nothing would ever pick up. An explicit
+    ``local-agent`` is refused with that reason rather than silently downgraded.
+    """
+    project = _project_or_404(db, project_guid, project_id, user)
+    target = (payload.target or "server").strip()
+    if target != "server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only the server target can run a project's suite today — "
+                "Local Agent support lands with #798."
+            ),
+        )
+    spec_paths = _selected_specs(db, project, payload.spec_paths)
+    workers = max(1, min(int(payload.workers or 2), 16))
+    execution = project_execution.create(
+        db,
+        project,
+        spec_paths,
+        workers=workers,
+        env=(payload.env or "").strip(),
+        target=target,
+        owner_id=project.owner_id,
+    )
+    audit_service.record(
+        category="execution",
+        action="Started a project automation run",
+        target=f"{project.slug} · {len(spec_paths)} specs",
+        detail={"projectGuid": project_guid, "executionId": execution.id},
+    )
+    project_execution.start_in_thread(execution.id)
+    return _project_execution_out(db, execution, with_results=True)
+
+
+@router.get("/repos/{project_id}/executions")
+def list_project_automation_executions(
+    project_guid: str,
+    project_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> list[dict]:
+    """This repo's execution history for this project, newest first.
+
+    Summaries only — no per-spec results, which is what makes the list cheap
+    enough to load with the tab. The detail comes from
+    ``GET /executions/{id}``, which serves a run-less execution since #797.
+    """
+    project = _project_or_404(db, project_guid, project_id, user)
+    executions = (
+        db.query(Execution)
+        .filter(Execution.automation_project_id == project.id, Execution.run_id.is_(None))
+        .order_by(Execution.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_project_execution_out(db, e, with_results=False) for e in executions]
+
+
+def _project_execution_out(db: Session, execution: Execution, *, with_results: bool) -> dict:
+    """Wire shape for a project-scoped execution.
+
+    Matches the field names ``routers/execution.py`` already uses for a run-scoped
+    execution (``total``/``passed``/``failed``/``progress``/``startedAt``), so the
+    Automation tab's progress rendering is the same code as the run screen's.
+    """
+    out = {
+        "id": execution.id,
+        "runId": None,
+        "automationProjectId": execution.automation_project_id,
+        "status": execution.status,
+        "target": execution.target,
+        "env": execution.env,
+        "workers": execution.workers,
+        "total": execution.total,
+        "passed": execution.passed,
+        "failed": execution.failed,
+        "progress": execution.progress,
+        "startedAt": execution.started_at,
+        "finishedAt": execution.finished_at,
+    }
+    if with_results:
+        results = (
+            db.query(ExecutionResult)
+            .filter(ExecutionResult.execution_id == execution.id)
+            .order_by(ExecutionResult.id)
+            .all()
+        )
+        out["log"] = execution.log
+        out["results"] = [
+            {
+                "id": r.id,
+                "specPath": r.spec_path,
+                "title": r.title,
+                "status": r.status,
+                "durationMs": r.duration_ms,
+                "errorMessage": r.error_message,
+            }
+            for r in results
+        ]
+    return out

@@ -158,8 +158,12 @@ def test_match_result_prefers_the_full_ticket_form():
     """SUR-1428 and OPS-1428 both shorten to '1428' — full form must win."""
     from app.services import execution_service
 
-    sur = SimpleNamespace(ticket_external_id="SUR-1428", case_code="TC-01")
-    ops = SimpleNamespace(ticket_external_id="OPS-1428", case_code="TC-01")
+    # `spec_path=""` is what a run-scoped ExecutionResult actually holds (#796):
+    # it is the identity column for a *project*-scoped result, and match_result
+    # checks it before either filename convention. A stub without the attribute
+    # would not be modelling the row these assertions are about.
+    sur = SimpleNamespace(ticket_external_id="SUR-1428", case_code="TC-01", spec_path="")
+    ops = SimpleNamespace(ticket_external_id="OPS-1428", case_code="TC-01", spec_path="")
     results = [sur, ops]
 
     assert execution_service.match_result(results, "SUR-1428-TC-01.spec.ts") is sur
@@ -177,7 +181,7 @@ def test_match_result_still_matches_legacy_short_form():
     """In-flight runs generated before #540 keep matching."""
     from app.services import execution_service
 
-    legacy = SimpleNamespace(ticket_external_id="SUR-1502", case_code="TC-03")
+    legacy = SimpleNamespace(ticket_external_id="SUR-1502", case_code="TC-03", spec_path="")
     assert execution_service.match_result([legacy], "1502-TC-03.spec.ts") is legacy
     assert execution_service.match_result([legacy], "nope-TC-03.spec.ts") is None
 
@@ -398,8 +402,8 @@ def test_two_tickets_with_the_same_short_id_coexist(db_session, project_generati
     from app.services import execution_service
 
     rows = [
-        SimpleNamespace(ticket_external_id="SUR-1428", case_code="TC-01"),
-        SimpleNamespace(ticket_external_id="OPS-1428", case_code="TC-01"),
+        SimpleNamespace(ticket_external_id="SUR-1428", case_code="TC-01", spec_path=""),
+        SimpleNamespace(ticket_external_id="OPS-1428", case_code="TC-01", spec_path=""),
     ]
     assert execution_service.match_result(rows, sur_spec.filename) is rows[0]
     assert execution_service.match_result(rows, ops_spec.filename) is rows[1]

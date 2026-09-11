@@ -1215,6 +1215,8 @@ class ExecutionResultOut(ApiModel):
     test_case_id: int
     ticket_external_id: str
     case_code: str
+    #: A project-scoped result's only identity (#796); "" for a run-scoped one.
+    spec_path: str = ""
     title: str = ""
     status: str
     failure_class: str = ""
@@ -1227,7 +1229,8 @@ class ExecutionResultOut(ApiModel):
 
 class ExecutionOut(ApiModel):
     id: int
-    run_id: int
+    #: None for a project-scoped execution (#796), which has no run.
+    run_id: int | None = None
     status: str
     env: str
     browser: str
@@ -1245,6 +1248,20 @@ class ExecutionOut(ApiModel):
 class ExecutionStart(ApiModel):
     workers: int | None = None
     env: str | None = None
+
+
+class ProjectExecutionStart(ApiModel):
+    """Body of ``POST /projects/{guid}/automation/repos/{id}/executions`` (#797).
+
+    ``spec_paths`` has no default on purpose — the selection is always explicit,
+    because one automation repo is shared across q-agent projects and "every spec
+    in the repo" is not "this project's specs" (#795).
+    """
+
+    spec_paths: list[str] | None = None
+    workers: int | None = None
+    env: str | None = None
+    target: str | None = None
 
 
 # ---------------------------------------------------------------- Annotation

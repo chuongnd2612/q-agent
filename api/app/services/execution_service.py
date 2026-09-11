@@ -62,8 +62,23 @@ def match_result(results: list[ExecutionResult], filename: str) -> ExecutionResu
     without any change here. Shared by the server runner (matching a Playwright
     JSON report entry) and the Local Agent's job-results endpoint (matching a
     pushed result payload), so both paths are fixed at once.
+
+    A **project-scoped** result (#796) is matched before either convention, on
+    ``spec_path``. It has no ticket and no case code, so both conventions below
+    would build ``"-.spec.ts"`` for it and match nothing — and a spec run straight
+    out of an automation repo is under no obligation to be named
+    ``{ticket}-{case}.spec.ts`` in the first place. The full path is compared
+    first and the basename only as a fallback, because Playwright reports paths
+    relative to its own ``testDir``, while ``spec_path`` is relative to the repo
+    root.
     """
     name = Path(filename).name
+    for result in results:
+        if result.spec_path and result.spec_path == filename:
+            return result
+    for result in results:
+        if result.spec_path and Path(result.spec_path).name == name:
+            return result
     for result in results:
         if f"{result.ticket_external_id}-{result.case_code}.spec.ts" == name:
             return result
@@ -106,7 +121,13 @@ def apply_result(
     return result
 
 
-def finalize(db: Session, execution: Execution, run: Run, log: str, advance_run: bool = True) -> None:
+def finalize(
+    db: Session,
+    execution: Execution,
+    run: Run | None,
+    log: str,
+    advance_run: bool = True,
+) -> None:
     """Finalize an Execution: stamp the log, mark done, advance the run, notify.
 
     Expects ``execution.passed``/``execution.failed``/``execution.total`` to
@@ -117,6 +138,10 @@ def finalize(db: Session, execution: Execution, run: Run, log: str, advance_run:
     ``POST /agent/jobs/{id}/complete`` endpoint.
 
     Args:
+        run: The owning run, or ``None`` for a project-scoped execution (#796),
+            which has no run to advance and no run code to name in the audit
+            entry. A project-scoped execution's lifecycle **is** the Execution
+            row's own status.
         advance_run: When False, the run's lifecycle status is left untouched —
             used for agent-executed self-heal (#260), which re-runs one case's
             spec and must not push the whole run into the ``evidence`` stage
@@ -135,12 +160,16 @@ def finalize(db: Session, execution: Execution, run: Run, log: str, advance_run:
         {"progress": 100, "passed": execution.passed, "failed": execution.failed, "remaining": 0},
     )
     hub.publish(channel, "exec.done", {"passed": execution.passed, "failed": execution.failed})
-    if advance_run:
+    if advance_run and run is not None:
         set_run_status(db, run, "evidence")
 
     audit_service.record(
         category="execution", actor_type="ai", action="Executed test run",
-        target=f"{run.code} · {execution.total} cases",
+        target=(
+            f"{run.code} · {execution.total} cases"
+            if run is not None
+            else f"automation repo #{execution.automation_project_id} · {execution.total} specs"
+        ),
         status="warning" if execution.failed else "success",
         meta=f"{execution.passed} passed · {execution.failed} failed",
     )

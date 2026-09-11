@@ -26,7 +26,7 @@ from app.models.run import Run
 from app.models.testcase import TestCase
 from app.models.user import User
 from app.services import settings_store
-from app.services.ownership import get_owned_or_404
+from app.services.ownership import check_owned_or_404, get_owned_or_404
 from app.services.playwright_runner import run_execution
 from app.services import execution_pruning
 from app.services.run_status import set_run_status
@@ -258,10 +258,20 @@ def get_latest_execution(
 def get_execution(
     execution_id: int, db: Session = Depends(get_db), user: User | None = Depends(current_user)
 ) -> dict:
-    """Return a single Execution by id, with its results."""
+    """Return a single Execution by id, with its results.
+
+    A **project-scoped** execution (#796) has no run, so it cannot be scoped
+    through one: ``db.get(Run, None)`` is ``None`` and the run-keyed check below
+    would 404 every one of them. It is scoped on the execution's own
+    ``owner_id`` instead — the column that exists precisely because ownership
+    could no longer be derived from a join.
+    """
     execution = db.get(Execution, execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
+    if execution.run_id is None:
+        check_owned_or_404(execution, user, not_found="Execution not found")
+        return _execution_out(db, execution, execution.owner_id)
     run = get_owned_or_404(db, Run, execution.run_id, user)
     return _execution_out(db, execution, run.owner_id)
 
@@ -303,6 +313,8 @@ def _result_out(db: Session, result: ExecutionResult, owner_id: int | None) -> d
         "testCaseId": result.test_case_id,
         "ticketExternalId": result.ticket_external_id,
         "caseCode": result.case_code,
+        # A project-scoped result's only identity (#796); "" for a run-scoped one.
+        "specPath": result.spec_path,
         "title": result.title,
         "status": result.status,
         "failureClass": result.failure_class,
