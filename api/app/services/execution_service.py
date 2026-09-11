@@ -19,6 +19,25 @@ from app.services.run_status import set_run_status
 from app.ws import hub
 
 
+def channel_key(execution: Execution) -> str:
+    """The WS channel an Execution's progress events belong on.
+
+    A run-scoped execution keeps the channel name it has always had —
+    ``str(run_id)``, which is what ``/ws/runs/{run_id}`` and every existing SPA
+    subscriber listen on, so routing publishes through here changes nothing for
+    them. A project-scoped execution (#796) has no run, so it is keyed by its
+    automation repo instead.
+
+    The project key uses ``automation_project_id`` rather than the project GUID
+    deliberately: the hub is keyed by an arbitrary string (see
+    ``hub.connect("ai", …)``), the repo id is already what the Automation tab
+    holds as ``selectedRepo.id``, and it needs no DB lookup to derive.
+    """
+    if execution.run_id is not None:
+        return str(execution.run_id)
+    return f"project:{execution.automation_project_id}"
+
+
 def match_result(results: list[ExecutionResult], filename: str) -> ExecutionResult | None:
     """Find the ExecutionResult whose spec filename convention matches ``filename``.
 
@@ -109,13 +128,13 @@ def finalize(db: Session, execution: Execution, run: Run, log: str, advance_run:
     execution.finished_at = datetime.now(timezone.utc)
     db.commit()
 
-    run_id_str = str(run.id)
+    channel = channel_key(execution)
     hub.publish(
-        run_id_str,
+        channel,
         "exec.progress",
         {"progress": 100, "passed": execution.passed, "failed": execution.failed, "remaining": 0},
     )
-    hub.publish(run_id_str, "exec.done", {"passed": execution.passed, "failed": execution.failed})
+    hub.publish(channel, "exec.done", {"passed": execution.passed, "failed": execution.failed})
     if advance_run:
         set_run_status(db, run, "evidence")
 

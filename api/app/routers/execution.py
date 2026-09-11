@@ -97,6 +97,9 @@ def start_execution(
 
     execution = Execution(
         run_id=run_id,
+        # Denormalized from the run (#796) so ownership scoping reads one column
+        # instead of joining Run — the join is what a run-less execution cannot do.
+        owner_id=run.owner_id,
         status="running" if target == "server" else "queued",
         target=target,
         env=env,
@@ -197,6 +200,7 @@ def run_single_spec(
 
     execution = Execution(
         run_id=run.id,
+        owner_id=run.owner_id,
         status="running" if target == "server" else "queued",
         target=target,
         env=run.env,

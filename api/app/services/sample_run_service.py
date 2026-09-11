@@ -244,6 +244,7 @@ def _build_execution(db: Session, run: Run, cases: list[TestCase]) -> Execution:
 
     execution = Execution(
         run_id=run.id,
+        owner_id=run.owner_id,
         status="done",
         target="server",
         env=run.env,

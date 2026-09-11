@@ -1369,30 +1369,33 @@ def bundle_for_agent(project: AutomationProject) -> dict[str, str]:
 
 def stage_for_run(
     project: AutomationProject,
-    run_code: str,
+    label: str,
     spec_paths: Sequence[str] = (),
     owner_id: int | None = None,
 ) -> Path:
-    """Stage an ephemeral per-run copy under ``<scoped specs>/<RUN-CODE>/``.
+    """Stage an ephemeral copy under ``<scoped specs>/<label>/``.
 
-    Copies the **whole** shared library (imports must resolve) but **only this
-    run's spec files**. Playwright runs everything under ``testDir``, so staging
+    Copies the **whole** shared library (imports must resolve) but **only the
+    given spec files**. Playwright runs everything under ``testDir``, so staging
     all of ``tests/`` would re-run every test ever generated for the project on
     every run.
 
     Args:
         project: The source project.
-        run_code: The owning Run's code, e.g. ``"RUN-211"``.
+        label: Directory name for the staged copy, unique per execution. A
+            run-scoped execution passes the Run's code (e.g. ``"RUN-211"``); a
+            project-scoped one (#796) has no run and passes its own key. It is
+            only ever a directory name — nothing here parses it.
         spec_paths: Project-relative spec paths to include (e.g.
             ``["tests/SUR-1502/SUR-1502-TC-01.spec.ts"]``). Empty stages no specs.
         owner_id: Scope for the staging dir; defaults to the project's owner.
 
     Returns:
-        The staged run directory.
+        The staged directory.
     """
     root = project_dir(project)
     scope_owner = project.owner_id if owner_id is None else owner_id
-    staged = scoped_specs_dir(scope_owner) / run_code
+    staged = scoped_specs_dir(scope_owner) / label
     with project_lock(project):
         staged.mkdir(parents=True, exist_ok=True)
         for relative in LIBRARY_DIRS:

@@ -792,3 +792,109 @@ def test_run_execution_non_auth_still_injects_dom_fixtures(client, db_session, m
     fixtures = (spec_dir / "fixtures.ts").read_text(encoding="utf-8")
     assert "qagent-dom-distilled" in fixtures
     assert "addInitScript" not in fixtures
+
+
+# --- An Execution without a Run (#796, foundation for #795) -------------------
+
+
+def test_channel_key_keeps_the_run_channel_name_for_a_run_scoped_execution():
+    """The run channel name must stay exactly ``str(run_id)``.
+
+    ``/ws/runs/{run_id}`` and every existing SPA subscriber listen on that
+    literal string, so routing publishes through ``channel_key`` has to be a
+    no-op for a run-scoped execution. Asserting the exact value (not just
+    "contains the id") is the point: a prefix would silently orphan every
+    existing subscriber while the code still looked correct.
+    """
+    from app.models.execution import Execution
+    from app.services.execution_service import channel_key
+
+    assert channel_key(Execution(run_id=211, automation_project_id=None)) == "211"
+    # Even with a repo id also set, the run still wins — a run-scoped execution
+    # of a project-backed spec is the normal case, not a project-scoped one.
+    assert channel_key(Execution(run_id=211, automation_project_id=7)) == "211"
+
+
+def test_channel_key_of_a_run_less_execution_is_keyed_by_its_automation_repo():
+    from app.models.execution import Execution
+    from app.services.execution_service import channel_key
+
+    assert channel_key(Execution(run_id=None, automation_project_id=7)) == "project:7"
+
+
+def test_a_run_less_execution_persists_with_a_spec_path_only_result(db_session):
+    """The schema genuinely accepts an Execution with no Run.
+
+    This is the assertion the model change alone cannot pass: ``executions.run_id``
+    was NOT NULL, so without the migration the INSERT fails. It also pins the
+    shape a project-scoped result has — identified by ``spec_path``, with no
+    ticket or case to name it.
+    """
+    from app.models.automation_project import AutomationProject
+    from app.models.execution import Execution, ExecutionResult
+
+    project = AutomationProject(project_key="demo", repo="surency-admin-hub")
+    db_session.add(project)
+    db_session.flush()
+
+    execution = Execution(
+        run_id=None,
+        owner_id=None,
+        automation_project_id=project.id,
+        status="running",
+        target="server",
+        total=1,
+    )
+    db_session.add(execution)
+    db_session.flush()
+    db_session.add(
+        ExecutionResult(
+            execution_id=execution.id,
+            test_case_id=0,
+            ticket_external_id="",
+            case_code="",
+            spec_path="tests/1377/1377-TC-01.spec.ts",
+            status="pending",
+        )
+    )
+    db_session.commit()
+
+    stored = db_session.get(Execution, execution.id)
+    assert stored.run_id is None
+    assert stored.automation_project_id == project.id
+    assert [r.spec_path for r in stored.results] == ["tests/1377/1377-TC-01.spec.ts"]
+
+
+def test_start_execution_stamps_the_runs_owner_on_the_execution(client, db_session, monkeypatch):
+    """Ownership is denormalized onto the Execution, not derived from the Run.
+
+    The agent's job claim scopes by owner, and a run-less execution has no Run to
+    join — so the column has to be populated at creation. Seeding a run with a
+    real owner is what makes this a live assertion: with the stamp removed,
+    ``owner_id`` comes back ``None`` rather than the owner's id.
+    """
+    from app.models.execution import Execution
+    from app.models.user import User
+
+    # Patch the name the ROUTER holds, not `playwright_runner.run_execution`:
+    # `routers/execution.py` does `from ... import run_execution`, so patching the
+    # service module leaves the router's already-bound reference untouched and the
+    # worker thread really does shell out to `npx playwright test`.
+    monkeypatch.setattr("app.routers.execution.run_execution", lambda execution_id: None)
+
+    owner = User(email="owner@example.com")
+    db_session.add(owner)
+    db_session.flush()
+
+    run, _case = _seed_run_with_approved_case(db_session)
+    run.owner_id = owner.id
+    db_session.commit()
+
+    created = client.post(f"/runs/{run.id}/execution", json={})
+    assert created.status_code == 200
+
+    execution = db_session.get(Execution, created.json()["id"])
+    assert execution.owner_id == owner.id
+    # And the run-scoped columns still say what they always did.
+    assert execution.run_id == run.id
+    assert execution.automation_project_id is None

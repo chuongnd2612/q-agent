@@ -399,7 +399,7 @@ def push_job_event(
     event = body.get("event")
     if not event:
         raise HTTPException(status_code=400, detail="event is required")
-    hub.publish(str(execution.run_id), event, body.get("payload") or {})
+    hub.publish(execution_service.channel_key(execution), event, body.get("payload") or {})
     return {"ok": True}
 
 
