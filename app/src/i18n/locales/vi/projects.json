@@ -290,5 +290,37 @@
       "failed": "{{count}} lỗi",
       "ofTotal": "trên {{count}}"
     }
+  },
+  "report": {
+    "title": "Báo cáo Playwright",
+    "playwrightVersion": "Playwright {{version}}",
+    "absent": "Lần chạy này không lưu báo cáo Playwright. Báo cáo chỉ được giữ lại từ khi lần chạy kết thúc với JSON reporter được cấu hình, nên các lần chạy cũ hơn không có.",
+    "failedTitle": "Không tải được báo cáo",
+    "failedBody": "Không đọc được báo cáo Playwright của lần chạy này. Hãy thử lại, hoặc chạy lại bộ spec.",
+    "total": "{{count}} bài kiểm thử",
+    "testCount": "{{count}} bài",
+    "noMatches": "Không có bài kiểm thử nào khớp bộ lọc này.",
+    "noAttempts": "Playwright không ghi nhận lần thử nào cho bài kiểm thử này.",
+    "searchPlaceholder": "Lọc theo tên, tệp hoặc project",
+    "summary": {
+      "passed": "{{count}} đạt",
+      "failed": "{{count}} lỗi",
+      "flaky": "{{count}} chập chờn",
+      "skipped": "{{count}} bỏ qua"
+    },
+    "filters": {
+      "all": "Tất cả {{count}}",
+      "passed": "Đạt {{count}}",
+      "failed": "Lỗi {{count}}",
+      "flaky": "Chập chờn {{count}}",
+      "skipped": "Bỏ qua {{count}}"
+    },
+    "firstAttempt": "Lần thử đầu",
+    "retryN": "Thử lại {{n}}",
+    "worker": "worker {{n}}",
+    "stdout": "stdout",
+    "stderr": "stderr",
+    "stack": "Stack trace",
+    "attachments": "Tệp đính kèm"
   }
 }

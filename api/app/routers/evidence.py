@@ -28,7 +28,7 @@ from app.models.user import User
 from app.schemas import AnnotateRequest, EvidenceOut, ExecutionResultOut
 from app.services import evidence_analysis, report_service
 from app.services.annotate import render_annotations
-from app.services.ownership import get_owned_or_404
+from app.services.ownership import check_owned_or_404, get_owned_or_404
 from app.services.workspace_scope import scoped_evidence_dir, served_evidence_path
 
 router = APIRouter(tags=["evidence"])
@@ -38,15 +38,30 @@ _PROVIDER_GLYPH = {"ado": "AD", "jira": "JR", "github": "GH"}
 _PROVIDER_COLOR = {"ado": "#0078d4", "jira": "#0052cc", "github": "#24292e"}
 
 
-def _check_result_owner(db: Session, result: ExecutionResult, user: User | None) -> Run | None:
-    """404s unless ``user`` owns the run behind ``result``'s execution.
+def _check_result_owner(
+    db: Session, result: ExecutionResult, user: User | None
+) -> tuple[Run | None, int | None]:
+    """404s unless ``user`` owns the execution behind ``result``.
 
-    Returns the resolved ``Run`` (or ``None`` if the result has no execution)
-    so callers can read ``run.owner_id`` to scope the evidence path (ADR 0009).
+    Returns ``(run, owner_id)``. The owner id is returned **separately from the
+    run** because a project-scoped execution (#796) has no run at all: its
+    ``run_id`` is ``NULL`` and it is owned directly. Scoping such a result through
+    ``get_owned_or_404(db, Run, None, user)`` would 404 every one of them, which
+    is what kept the Automation tab's report viewer (#801) from ever reaching a
+    project execution's failure screenshots.
+
+    Callers need the owner id to build the served evidence path (ADR 0009) and
+    the run only where a run-scoped side effect is involved (the hub credential),
+    so the two are handed back as they are, rather than the run standing in for
+    both.
     """
-    if result.execution is not None:
-        return get_owned_or_404(db, Run, result.execution.run_id, user)
-    return None
+    if result.execution is None:
+        return None, None
+    if result.execution.run_id is None:
+        check_owned_or_404(result.execution, user, not_found="Execution result not found")
+        return None, result.execution.owner_id
+    run = get_owned_or_404(db, Run, result.execution.run_id, user)
+    return run, run.owner_id
 
 
 def _evidence_out(evidence: Evidence, owner_id: int | None) -> dict:
@@ -151,8 +166,7 @@ def get_result_evidence(
     result = db.get(ExecutionResult, result_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Execution result not found")
-    run = _check_result_owner(db, result, user)
-    owner_id = run.owner_id if run is not None else None
+    _run, owner_id = _check_result_owner(db, result, user)
     return [_evidence_out(e, owner_id) for e in result.evidence]
 
 
@@ -175,7 +189,7 @@ def auto_annotate_evidence(
         raise HTTPException(status_code=400, detail="Only screenshot evidence can be annotated")
 
     result = db.get(ExecutionResult, evidence.result_id)
-    run = _check_result_owner(db, result, user) if result is not None else None
+    run, owner_id = _check_result_owner(db, result, user) if result is not None else (None, None)
     error_message = result.error_message if result else ""
     # Same hub credential the run resolved, re-resolved with this request's fresh
     # token (#689) — Q-Agent has no credential of its own to fall back on while it is
@@ -186,7 +200,7 @@ def auto_annotate_evidence(
     if not evidence_analysis.annotate_screenshot(db, evidence, error_message or "", force=True):
         raise HTTPException(status_code=502, detail="Auto-annotation failed (see server logs)")
     db.refresh(evidence)
-    return _evidence_out(evidence, run.owner_id if run is not None else None)
+    return _evidence_out(evidence, owner_id)
 
 
 @router.post("/evidence/{evidence_id}/annotate", response_model=EvidenceOut)
@@ -202,8 +216,7 @@ def annotate_evidence(
     if evidence.kind != "screenshot":
         raise HTTPException(status_code=400, detail="Only screenshot evidence can be annotated")
     result = db.get(ExecutionResult, evidence.result_id)
-    run = _check_result_owner(db, result, user) if result is not None else None
-    owner_id = run.owner_id if run is not None else None
+    _run, owner_id = _check_result_owner(db, result, user) if result is not None else (None, None)
 
     evidence_root = scoped_evidence_dir(owner_id)
     src_path = evidence_root / evidence.path

@@ -290,5 +290,37 @@
       "failed": "{{count}} failed",
       "ofTotal": "of {{count}}"
     }
+  },
+  "report": {
+    "title": "Playwright report",
+    "playwrightVersion": "Playwright {{version}}",
+    "absent": "This execution stored no Playwright report. Reports are kept from the moment an execution finishes with the JSON reporter configured, so older executions have none.",
+    "failedTitle": "Couldn't load the report",
+    "failedBody": "The Playwright report for this execution could not be read. Try again, or re-run the suite.",
+    "total": "{{count}} tests",
+    "testCount": "{{count}} tests",
+    "noMatches": "No test matches this filter.",
+    "noAttempts": "Playwright recorded no attempt for this test.",
+    "searchPlaceholder": "Filter tests by title, file or project",
+    "summary": {
+      "passed": "{{count}} passed",
+      "failed": "{{count}} failed",
+      "flaky": "{{count}} flaky",
+      "skipped": "{{count}} skipped"
+    },
+    "filters": {
+      "all": "All {{count}}",
+      "passed": "Passed {{count}}",
+      "failed": "Failed {{count}}",
+      "flaky": "Flaky {{count}}",
+      "skipped": "Skipped {{count}}"
+    },
+    "firstAttempt": "First attempt",
+    "retryN": "Retry {{n}}",
+    "worker": "worker {{n}}",
+    "stdout": "stdout",
+    "stderr": "stderr",
+    "stack": "Stack trace",
+    "attachments": "Attachments"
   }
 }

@@ -1313,6 +1313,41 @@ export const useProjectExecution = (executionId: number | null) =>
   });
 
 /**
+ * One execution's raw Playwright `report.json`, for the viewer (#801).
+ *
+ * `enabled` is the caller's call, and the caller passes `false` while the
+ * execution is still progressing: the report is written once, at the end, so
+ * asking earlier buys a guaranteed 404 and a retry storm. `retry: false` for the
+ * same reason — a 404 here means "this execution stored no report" (every
+ * execution predating #798 does), which is a state to render, not a failure to
+ * retry. Never garbage-collected early: a stored report is immutable, so the
+ * default staleness rules are all it needs.
+ */
+export const useExecutionReport = (executionId: number | null, enabled: boolean) =>
+  useQuery({
+    queryKey: queryKeys.executionReport(executionId ?? 0),
+    queryFn: () => api.getExecutionReport(executionId as number),
+    enabled: executionId != null && enabled,
+    retry: false,
+  });
+
+/**
+ * One execution result's evidence rows — the failure screenshots the report
+ * viewer shows inline (#801).
+ *
+ * Per-result rather than per-run because a project-scoped execution has no run:
+ * `GET /runs/{id}/evidence` cannot address it at all. `retry: false` so a result
+ * with no evidence (every passing spec) settles immediately.
+ */
+export const useResultEvidence = (resultId: number | null) =>
+  useQuery({
+    queryKey: queryKeys.resultEvidence(resultId ?? 0),
+    queryFn: () => api.resultEvidence(resultId as number),
+    enabled: resultId != null,
+    retry: false,
+  });
+
+/**
  * Start a project-scoped execution from an explicit spec selection (#797/#800).
  *
  * Seeds the detail cache from the POST response so the progress bar renders the

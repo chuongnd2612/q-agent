@@ -29,6 +29,7 @@ import {
   ScaffoldOnlyEmpty,
 } from "./ProjectAutomationEmpty";
 import { defaultSpecSelection } from "./defaultSpecSelection";
+import { ExecutionReportPanel } from "./ExecutionReportPanel";
 import { ProjectSuiteBar } from "./ProjectSuiteBar";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { RepoSelector } from "./RepoSelector";
@@ -266,6 +267,12 @@ export function ProjectAutomationTab() {
           onRun={runSuite}
         />
       )}
+
+      {/* Playwright's report for the execution this tab started (#801), rendered
+          by us from the raw JSON. Mounted only once the row has loaded; the panel
+          itself stays silent while the execution is still progressing, because
+          the report is written once, at the end. */}
+      {execution.data && <ExecutionReportPanel execution={execution.data} />}
 
       {tree.isLoading && (
         <div className="flex items-center justify-center py-16">
