@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json as _json
 import shutil
 import zipfile
 from datetime import datetime, timezone
@@ -941,3 +942,549 @@ def test_the_run_keyed_export_route_is_unchanged(client, db_session):
     paths = set(create_app().openapi()["paths"])
     assert "/runs/{run_id}/automation/export/zip" in paths
     assert "/projects/{project_guid}/automation/repos/{project_id}/export/zip" in paths
+
+
+# ---------------------------------------------------------------------------
+# Running the selected specs — project-scoped execution (#797)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_worker(monkeypatch):
+    """Stop the background Playwright worker from ever starting.
+
+    Patches the **service** attribute, which is the one the router resolves at
+    call time (it does ``from app.services import project_execution`` and then
+    ``project_execution.start_in_thread(...)``). These tests assert on what the
+    endpoint creates synchronously; the worker has its own coverage.
+    """
+    started: list[int] = []
+    monkeypatch.setattr(
+        "app.services.project_execution.start_in_thread", lambda execution_id: started.append(execution_id)
+    )
+    return started
+
+
+def _executions_url(project, guid: str = GUID) -> str:
+    return f"/projects/{guid}/automation/repos/{project.id}/executions"
+
+
+def _count_executions(db_session) -> int:
+    from app.models.execution import Execution
+
+    return db_session.query(Execution).count()
+
+
+def test_starting_a_project_execution_creates_a_run_less_execution_per_selected_spec(
+    client, db_session, no_worker
+):
+    """The whole point of #795: a suite run with no Run behind it.
+
+    Asserts the *identity* of what was created, not just a 200 — ``runId`` is
+    None, the repo is recorded, and there is exactly one result per selected
+    spec carrying ``specPath`` in the order asked for. A handler that fell back
+    to the run-scoped path would fail on the first of those.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "pages/LoginPage.ts", kind="page")
+    _file(db_session, project, "tests/SUR-1428/b.spec.ts", kind="spec", code=SPEC_CODE)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    response = client.post(
+        _executions_url(project),
+        json={"specPaths": ["tests/SUR-1428/b.spec.ts", "tests/SUR-1428/a.spec.ts"]},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runId"] is None
+    assert body["automationProjectId"] == project.id
+    assert body["target"] == "server"
+    assert body["total"] == 2
+    # Selection order is preserved — the client chose it, and the report lists in it.
+    assert [r["specPath"] for r in body["results"]] == [
+        "tests/SUR-1428/b.spec.ts",
+        "tests/SUR-1428/a.spec.ts",
+    ]
+    assert {r["status"] for r in body["results"]} == {"pending"}
+    # ...and the worker was handed exactly this execution.
+    assert no_worker == [body["id"]]
+
+    from app.models.execution import Execution
+
+    stored = db_session.get(Execution, body["id"])
+    assert stored.run_id is None
+    assert stored.automation_project_id == project.id
+
+
+def test_starting_a_project_execution_never_defaults_to_the_whole_repo(
+    client, db_session, no_worker
+):
+    """An empty selection is a refusal, not an implicit "run everything".
+
+    This is a deliberate design rule, not an input-validation nicety: an
+    automation repo is shared across q-agent projects, so "every spec in the
+    repo" is a *different set* from "this project's specs" (#795). The negative
+    control is the row count — a handler that quietly ran everything would also
+    return 200 here, so the test pins that **nothing** was created.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    for body in ({}, {"specPaths": []}):
+        response = client.post(_executions_url(project), json=body)
+        assert response.status_code == 400, response.text
+        assert "at least one spec" in response.json()["detail"]
+
+    assert _count_executions(db_session) == 0
+    assert no_worker == []
+
+
+def test_starting_a_project_execution_refuses_a_shared_asset(client, db_session, no_worker):
+    """A page object is not runnable on its own — and the spec beside it is.
+
+    Both requests are made in one body so the refusal cannot be passing because
+    the mirror lookup matches nothing at all: the *only* difference between them
+    is the mirror row's ``kind``.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "pages/LoginPage.ts", kind="page")
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    refused = client.post(_executions_url(project), json={"specPaths": ["pages/LoginPage.ts"]})
+    assert refused.status_code == 400
+    assert "pages/LoginPage.ts" in refused.json()["detail"]
+
+    accepted = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_starting_a_project_execution_refuses_a_spec_from_another_repo(
+    client, db_session, no_worker
+):
+    """A path that exists — in a *different* repo — cannot be run through this one.
+
+    The mirror lookup is scoped to ``project_id``, so naming another repo's spec
+    is a 400 rather than a cross-repo hop. The other repo is reachable from the
+    same GUID, which is what makes this a real test: resolution is not what
+    refuses it.
+    """
+    project = _repo(db_session)
+    other = _repo(db_session, repo="admin")
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    _file(db_session, other, "tests/SUR-9999/z.spec.ts", kind="spec", code=SPEC_CODE)
+
+    response = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-9999/z.spec.ts"]}
+    )
+
+    assert response.status_code == 400
+    assert "tests/SUR-9999/z.spec.ts" in response.json()["detail"]
+    assert _count_executions(db_session) == 0
+
+
+def test_starting_a_project_execution_refuses_the_local_agent_target_for_now(
+    client, db_session, no_worker
+):
+    """Better a 400 that says why than a ``queued`` row nothing can ever claim.
+
+    The workspace default target is ``local-agent`` (#161), but the agent's job
+    claim cannot see a run-less execution until #798, so this slice pins the
+    server target and refuses the other explicitly.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    response = client.post(
+        _executions_url(project),
+        json={"specPaths": ["tests/SUR-1428/a.spec.ts"], "target": "local-agent"},
+    )
+
+    assert response.status_code == 400
+    assert "#798" in response.json()["detail"]
+    assert _count_executions(db_session) == 0
+
+
+def test_project_execution_history_is_newest_first_and_excludes_run_scoped_ones(
+    client, db_session, no_worker
+):
+    """History is scoped to *project* executions of *this* repo.
+
+    The run-scoped execution seeded here points at the same
+    ``automation_project_id``, which is legitimate — a run executes specs out of
+    a project's repo too. It must not appear in the tab's history, so the query's
+    ``run_id IS NULL`` leg is what this pins; without it the assertion on the id
+    list fails rather than merely counting one extra.
+    """
+    from app.models.execution import Execution
+    from app.models.run import Run
+
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    first = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()["id"]
+    second = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()["id"]
+
+    run = Run(code="RUN-777", name="A run", status="executing", project_guid=GUID)
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        Execution(
+            run_id=run.id,
+            automation_project_id=project.id,
+            status="done",
+            target="server",
+            env="",
+            browser="chromium",
+            workers=1,
+            total=1,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(_executions_url(project))
+
+    assert response.status_code == 200
+    assert [e["id"] for e in response.json()] == [second, first]
+    # A summary, not the detail — results stay behind GET /executions/{id}.
+    assert "results" not in response.json()[0]
+
+
+def test_get_execution_serves_a_run_less_execution(client, db_session, no_worker):
+    """``GET /executions/{id}`` used to 404 every project-scoped execution.
+
+    It scoped through ``get_owned_or_404(db, Run, execution.run_id, …)``, and
+    ``db.get(Run, None)`` is ``None``. Pinning ``specPath`` on the way out as
+    well: it is the only identity such a result has.
+    """
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    created = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()
+
+    response = client.get(f"/executions/{created['id']}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runId"] is None
+    assert [r["specPath"] for r in body["results"]] == ["tests/SUR-1428/a.spec.ts"]
+
+
+def test_starting_a_project_execution_is_404_for_another_users_repo(client, app, db_session):
+    """Ownership is enforced on the write, not just on the reads.
+
+    The suite runs with ``auth_required=False``, so this overrides
+    ``current_user`` with a real user — otherwise the #91 bridge skips the check
+    and the test would pass against a handler that has none.
+    """
+    project = _repo(db_session, owner_id=None)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    me = _as_me(app, db_session)
+    project.owner_id = me.id + 1000
+    db_session.commit()
+
+    response = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    )
+
+    assert response.status_code == 404
+    assert _count_executions(db_session) == 0
+
+
+def test_match_result_identifies_a_project_scoped_result_by_spec_path():
+    """A project-scoped result has no ticket or case, so the conventions can't name it.
+
+    Both conventions build ``"{ticket}-{case}.spec.ts"``, which for empty fields
+    is ``"-.spec.ts"`` — it would match nothing, and a spec run out of a repo is
+    under no obligation to follow that naming at all. The last assertion is the
+    negative control: a row with a ``spec_path`` must not start swallowing
+    run-scoped filenames.
+    """
+    from app.models.execution import ExecutionResult
+    from app.services.execution_service import match_result
+
+    project_row = ExecutionResult(
+        test_case_id=0, ticket_external_id="", case_code="",
+        spec_path="tests/1377/1377-TC-09.spec.ts", status="pending",
+    )
+    run_row = ExecutionResult(
+        test_case_id=1, ticket_external_id="SUR-1428", case_code="TC-01",
+        spec_path="", status="pending",
+    )
+    rows = [project_row, run_row]
+
+    # The full repo-relative path, as the selection recorded it.
+    assert match_result(rows, "tests/1377/1377-TC-09.spec.ts") is project_row
+    # ...and the basename, because Playwright reports paths relative to testDir.
+    assert match_result(rows, "1377-TC-09.spec.ts") is project_row
+    # The run-scoped convention still wins for a run-scoped file.
+    assert match_result(rows, "SUR-1428-TC-01.spec.ts") is run_row
+    assert match_result(rows, "nothing-at-all.spec.ts") is None
+
+
+def _report_for(entries: list[tuple[str, str]]) -> dict:
+    """A minimal Playwright JSON report: ``[(file, "passed"|"failed"), …]``."""
+    return {
+        "suites": [
+            {
+                "title": file,
+                "file": file,
+                "specs": [
+                    {
+                        "title": f"spec for {file}",
+                        "file": file,
+                        "ok": status == "passed",
+                        "tests": [
+                            {
+                                "status": "expected" if status == "passed" else "unexpected",
+                                "results": [
+                                    {
+                                        "status": status,
+                                        "duration": 42,
+                                        "error": (
+                                            {} if status == "passed" else {"message": "boom"}
+                                        ),
+                                        "attachments": [],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "suites": [],
+            }
+            for file, status in entries
+        ]
+    }
+
+
+def test_the_worker_runs_the_selected_specs_and_records_each_outcome(
+    client, db_session, no_worker, monkeypatch
+):
+    """End-to-end through ``project_execution.run`` with Playwright mocked out.
+
+    Called synchronously rather than through the thread the endpoint spawns, so
+    the assertions cannot race it. What this actually proves, beyond a status:
+
+    * The staged dir is built **from the mirror**. The seeded repo has no working
+      tree on disk at all (``_repo`` writes no files), so every spec Playwright
+      is asked to run had to be materialized from ``automation_files`` — the
+      fallback in ``_stage``. The mock asserts the files are really there.
+    * Results are attributed by ``spec_path``, mixing a pass and a failure so a
+      handler that stamped one status over the whole set cannot pass.
+    * ``finalize`` works with ``run=None``: status ``done``, progress 100, and no
+      attempt to advance a run that does not exist.
+    """
+    from app.models.execution import Execution, ExecutionResult
+    from app.services import project_execution
+
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    _file(db_session, project, "tests/SUR-1428/b.spec.ts", kind="spec", code=SPEC_CODE)
+
+    created = client.post(
+        _executions_url(project),
+        json={"specPaths": ["tests/SUR-1428/a.spec.ts", "tests/SUR-1428/b.spec.ts"]},
+    ).json()
+
+    staged_specs: list[str] = []
+
+    def fake_invoke(spec_dir, workers, timeout_s, spec_file="", **_kwargs):
+        # Whatever ran had to be staged from the mirror — assert it, don't assume.
+        staged_specs.extend(
+            sorted(p.relative_to(spec_dir).as_posix() for p in spec_dir.rglob("*.spec.ts"))
+        )
+        (spec_dir / "report.json").write_text(
+            _json.dumps(
+                _report_for(
+                    [("tests/SUR-1428/a.spec.ts", "passed"), ("tests/SUR-1428/b.spec.ts", "failed")]
+                )
+            ),
+            encoding="utf-8",
+        )
+        return 0, "1 passed, 1 failed", ""
+
+    monkeypatch.setattr(project_execution, "_invoke_playwright", fake_invoke)
+
+    project_execution.run(created["id"])
+
+    assert staged_specs == ["tests/SUR-1428/a.spec.ts", "tests/SUR-1428/b.spec.ts"]
+
+    db_session.expire_all()
+    execution = db_session.get(Execution, created["id"])
+    assert execution.status == "done"
+    assert execution.progress == 100
+    assert (execution.passed, execution.failed) == (1, 1)
+    assert execution.finished_at is not None
+
+    outcomes = {
+        r.spec_path: (r.status, r.error_message)
+        for r in db_session.query(ExecutionResult)
+        .filter(ExecutionResult.execution_id == execution.id)
+        .all()
+    }
+    assert outcomes["tests/SUR-1428/a.spec.ts"][0] == "pass"
+    assert outcomes["tests/SUR-1428/b.spec.ts"][0] == "fail"
+    assert "boom" in outcomes["tests/SUR-1428/b.spec.ts"][1]
+
+
+def test_the_worker_fails_a_spec_playwright_never_reported_on(
+    client, db_session, no_worker, monkeypatch
+):
+    """A missing report entry is a failure, never a row left ``running`` forever.
+
+    Playwright reports on only one of the two selected specs here (the shape a
+    crashed or filtered-out spec produces), so the reconcile pass is the only
+    thing that can give the second row a terminal status.
+    """
+    from app.models.execution import Execution, ExecutionResult
+    from app.services import project_execution
+
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    _file(db_session, project, "tests/SUR-1428/b.spec.ts", kind="spec", code=SPEC_CODE)
+
+    created = client.post(
+        _executions_url(project),
+        json={"specPaths": ["tests/SUR-1428/a.spec.ts", "tests/SUR-1428/b.spec.ts"]},
+    ).json()
+
+    def fake_invoke(spec_dir, workers, timeout_s, spec_file="", **_kwargs):
+        (spec_dir / "report.json").write_text(
+            _json.dumps(_report_for([("tests/SUR-1428/a.spec.ts", "passed")])), encoding="utf-8"
+        )
+        return 1, "", ""
+
+    monkeypatch.setattr(project_execution, "_invoke_playwright", fake_invoke)
+
+    project_execution.run(created["id"])
+
+    db_session.expire_all()
+    execution = db_session.get(Execution, created["id"])
+    assert (execution.passed, execution.failed) == (1, 1)
+    assert execution.status == "done"
+    unreported = (
+        db_session.query(ExecutionResult)
+        .filter(
+            ExecutionResult.execution_id == execution.id,
+            ExecutionResult.spec_path == "tests/SUR-1428/b.spec.ts",
+        )
+        .one()
+    )
+    assert unreported.status == "fail"
+    assert "No result reported" in unreported.error_message
+
+
+def test_the_worker_reports_a_missing_report_on_every_spec(
+    client, db_session, no_worker, monkeypatch
+):
+    """Playwright writing no report at all must surface its own output, not silence."""
+    from app.models.execution import Execution, ExecutionResult
+    from app.services import project_execution
+
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+
+    created = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()
+
+    monkeypatch.setattr(
+        project_execution,
+        "_invoke_playwright",
+        lambda *a, **k: (1, "", "Error: could not resolve @playwright/test"),
+    )
+
+    project_execution.run(created["id"])
+
+    db_session.expire_all()
+    execution = db_session.get(Execution, created["id"])
+    assert (execution.passed, execution.failed) == (0, 1)
+    result = (
+        db_session.query(ExecutionResult)
+        .filter(ExecutionResult.execution_id == execution.id)
+        .one()
+    )
+    assert result.status == "fail"
+    assert "could not resolve @playwright/test" in result.error_message
+
+
+def test_a_crashed_worker_still_leaves_a_terminal_status(
+    client, db_session, no_worker, monkeypatch
+):
+    """A crash must not leave the tab's progress bar spinning forever.
+
+    The run path can afford to bail on an exception — a Run has ``failed_stage``
+    and a retry endpoint — but a project execution's entire lifecycle is this one
+    row, so an unfinished ``running`` is unrecoverable from the UI.
+    """
+    from app.models.execution import Execution
+    from app.services import project_execution
+
+    project = _repo(db_session)
+    _file(db_session, project, "tests/SUR-1428/a.spec.ts", kind="spec", code=SPEC_CODE)
+    created = client.post(
+        _executions_url(project), json={"specPaths": ["tests/SUR-1428/a.spec.ts"]}
+    ).json()
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk is on fire")
+
+    monkeypatch.setattr(project_execution, "_write_config", boom)
+
+    project_execution.run(created["id"])
+
+    db_session.expire_all()
+    execution = db_session.get(Execution, created["id"])
+    assert execution.status == "done"
+    assert execution.finished_at is not None
+    assert execution.failed == 1
+    assert "disk is on fire" in execution.log
+
+
+def test_failing_everything_does_not_overwrite_specs_that_already_passed(monkeypatch):
+    """The crash path recomputes counts; it does not stamp ``fail`` over a pass.
+
+    A crash can fire *after* some specs genuinely finished, and reporting a
+    half-green suite as entirely failed would be a lie the user cannot see past.
+    ``finalize`` is stubbed so the assertion is about the row arithmetic alone,
+    and it captures ``run`` to pin that a project execution finalizes with none.
+    """
+    from types import SimpleNamespace
+
+    from app.models.execution import Execution, ExecutionResult
+    from app.services import execution_service, project_execution
+
+    passed = ExecutionResult(
+        test_case_id=0, ticket_external_id="", case_code="",
+        spec_path="a.spec.ts", status="pass", duration_ms=11,
+    )
+    pending = ExecutionResult(
+        test_case_id=0, ticket_external_id="", case_code="",
+        spec_path="b.spec.ts", status="running",
+    )
+    execution = Execution(run_id=None, automation_project_id=7, total=2)
+
+    finalized: dict = {}
+    monkeypatch.setattr(
+        execution_service,
+        "finalize",
+        lambda db, ex, run, log, advance_run=True: finalized.update(
+            passed=ex.passed, failed=ex.failed, total=ex.total, run=run, log=log
+        ),
+    )
+
+    project_execution._fail_all(
+        SimpleNamespace(commit=lambda: None), execution, [passed, pending], "it broke"
+    )
+
+    assert (passed.status, passed.duration_ms) == ("pass", 11)
+    assert (pending.status, pending.error_message) == ("fail", "it broke")
+    assert finalized == {"passed": 1, "failed": 1, "total": 2, "run": None, "log": "it broke"}
