@@ -38,6 +38,14 @@ export const queryKeys = {
   projectExecutions: (projectGuid: string, projectId: number) =>
     ["projects", projectGuid, "automation", "repos", projectId, "executions"] as const,
   projectExecution: (executionId: number) => ["executions", executionId] as const,
+  /** One execution's raw Playwright report (#801) — addressed by execution id
+   * alone, for the same reason `projectExecution` is. */
+  executionReport: (executionId: number) =>
+    ["executions", executionId, "report"] as const,
+  /** One ExecutionResult's evidence rows (#801) — the project-scoped route to a
+   * failure screenshot, which `evidence(runId)` cannot serve for a run-less
+   * execution. */
+  resultEvidence: (resultId: number) => ["results", resultId, "evidence"] as const,
   repoKnowledge: (key: string, repo: string) =>
     ["projects", key, "repos", repo, "knowledge"] as const,
   tickets: (filters?: Record<string, string | number | undefined>) =>

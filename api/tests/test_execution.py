@@ -898,3 +898,66 @@ def test_start_execution_stamps_the_runs_owner_on_the_execution(client, db_sessi
     # And the run-scoped columns still say what they always did.
     assert execution.run_id == run.id
     assert execution.automation_project_id is None
+
+
+def test_a_project_executions_result_evidence_is_readable_and_owner_scoped(
+    client, db_session
+):
+    """``GET /results/{id}/evidence`` serves a **run-less** execution's evidence.
+
+    This is the only route to a project-scoped execution's failure screenshots —
+    ``GET /runs/{id}/evidence`` needs a run, and #796's executions have none — so
+    the Automation tab's report viewer (#801) reads it directly. The endpoint used
+    to scope every result through ``get_owned_or_404(db, Run, result.execution.run_id,
+    …)``, which for ``run_id = NULL`` looked up ``Run(None)`` and 404'd: not a
+    permission failure, just an unreachable row.
+
+    Both halves are asserted, because a 200 alone would also pass with the owner
+    dropped: the served path has to carry the execution's **own** owner scope
+    (ADR 0009), or the ``<img>`` the viewer builds from it points at another
+    user's tree — or at ``shared/`` and 404s in the browser instead.
+    """
+    from app.models.automation_project import AutomationProject
+    from app.models.execution import Evidence, Execution, ExecutionResult
+    from app.models.user import User
+
+    owner = User(email="report-viewer@example.com")
+    project = AutomationProject(project_key="demo", repo="surency-admin-hub")
+    db_session.add_all([owner, project])
+    db_session.flush()
+
+    execution = Execution(
+        run_id=None,
+        owner_id=owner.id,
+        automation_project_id=project.id,
+        status="failed",
+        target="local-agent",
+        total=1,
+    )
+    db_session.add(execution)
+    db_session.flush()
+    result = ExecutionResult(
+        execution_id=execution.id,
+        test_case_id=0,
+        ticket_external_id="",
+        case_code="",
+        spec_path="tests/1377/1377-TC-01.spec.ts",
+        status="failed",
+    )
+    db_session.add(result)
+    db_session.flush()
+    db_session.add(
+        Evidence(
+            result_id=result.id,
+            kind="screenshot",
+            path="EXEC-9/1377-TC-01/failure.png",
+            filename="failure.png",
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/results/{result.id}/evidence")
+    assert response.status_code == 200
+    rows = response.json()
+    assert [r["filename"] for r in rows] == ["failure.png"]
+    assert rows[0]["path"] == f"users/{owner.id}/evidence/EXEC-9/1377-TC-01/failure.png"

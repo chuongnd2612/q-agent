@@ -5,6 +5,7 @@
  */
 
 import { BASE_PREFIX, stripBase, withBase } from "@/lib/basePath";
+import type { PwJsonReport } from "@/lib/playwrightReport";
 import { useAuth } from "@/store/auth";
 import type {
   HubClaudeCredential,
@@ -1032,6 +1033,16 @@ export const api = {
    * #797, which is what makes it usable from the Automation tab. */
   getProjectExecution: (executionId: number) =>
     get<ProjectExecutionOut>(`/executions/${executionId}`),
+  /**
+   * One execution's raw Playwright `report.json` (#798), for the viewer in #801.
+   *
+   * A normal bearer-authed GET — the report is **not** under the `/artifacts`
+   * mount and there is no `?token=` capability URL for it. 404s for every
+   * execution that stored no report (anything predating #798), which the viewer
+   * renders as "no report", not as an error.
+   */
+  getExecutionReport: (executionId: number) =>
+    get<PwJsonReport>(`/executions/${executionId}/report`),
   getAutomationFile: (projectGuid: string, projectId: number, path: string) =>
     get<AutomationFileOut>(
       `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/file?path=${encodeURIComponent(path)}`,
@@ -1068,6 +1079,11 @@ export const api = {
   // evidence
   getEvidence: (runId: number | string) =>
     get<EvidenceGrouped>(`/runs/${runId}/evidence`),
+  /** One execution result's evidence rows. The only route to a project-scoped
+   *  execution's failure screenshots: `/runs/{id}/evidence` needs a run, and a
+   *  project execution has none (#796). */
+  resultEvidence: (resultId: number) =>
+    get<EvidenceOut[]>(`/results/${resultId}/evidence`),
   annotate: (evidenceId: number, shapes: AnnotationShape[]) =>
     post<EvidenceOut>(`/evidence/${evidenceId}/annotate`, { shapes }),
   autoAnnotateEvidence: (evidenceId: number, hubToken: string | null = null) =>
