@@ -28,7 +28,23 @@ class Execution(Base):
     __tablename__ = "executions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    # NULL for a project-scoped execution (#796): the Automation tab runs a
+    # selection of specs straight out of a project's automation repo, where there
+    # is no Run, no RunTicket and no TestCase behind any result.
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # Ownership used to be derived by joining Run, which a run-less row cannot do,
+    # so it is denormalized here and is what every scope check reads. Nullable to
+    # mirror Run.owner_id (still nullable under the #91/#98 ownership bridge).
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    # The automation repo a project-scoped execution ran out of. NULL for a
+    # run-scoped one, whose specs are resolved through its cases instead.
+    automation_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("automation_projects.id"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     # See EXEC_TARGETS. "local-agent" executions are created status="queued" and
     # never spawn the in-process runner thread — a paired device claims them.
@@ -71,6 +87,10 @@ class ExecutionResult(Base):
     ticket_external_id: Mapped[str] = mapped_column(String(64), index=True)
     case_code: Mapped[str] = mapped_column(String(32))
     title: Mapped[str] = mapped_column(String(500), default="")
+    # A project-scoped result's ONLY identity (#796) — it has no ticket or case to
+    # be named by. Empty for a run-scoped result, which is matched on
+    # ticket_external_id/case_code by `execution_service.match_result`.
+    spec_path: Mapped[str] = mapped_column(String(600), default="", server_default="")
 
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     # Root-cause classification of a failure (see FAILURE_CLASSES); "" until classified.

@@ -775,7 +775,7 @@ def _fail_all_results(
     """
     from datetime import datetime, timezone
 
-    run_id_str = str(run.id)
+    run_id_str = execution_service.channel_key(execution)
     for result in results:
         result.status = "fail"
         result.error_message = message
@@ -1001,7 +1001,7 @@ def run_execution(execution_id: int) -> None:
                 .all()
             )
             total = len(results)
-            run_id_str = str(run.id)
+            run_id_str = execution_service.channel_key(execution)
 
             if run_control.is_cancelled(run.id, db):
                 logger.info("Run {} cancelled — skipping execution", run.code)

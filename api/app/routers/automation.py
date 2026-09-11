@@ -1819,7 +1819,7 @@ def heal_case_spec(
         if not has_device:
             raise HTTPException(status_code=409, detail="No local agent paired — start your local agent")
         execution = Execution(
-            run_id=run.id, status="queued", target="local-agent",
+            run_id=run.id, owner_id=run.owner_id, status="queued", target="local-agent",
             env=run.env, browser=run.browser, workers=1, total=1,
             heal_case_id=case.id,
         )
