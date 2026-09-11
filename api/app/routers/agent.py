@@ -16,6 +16,7 @@ handler scopes to the device's owning user via ``get_owned_or_404``):
   POST /agent/jobs/{id}/events        -> re-emit {event, payload} onto the run's WS
   POST /agent/jobs/{id}/results       -> upsert one parsed ExecutionResult
   POST /agent/jobs/{id}/evidence      -> multipart artifact upload
+  POST /agent/jobs/{id}/report        -> raw Playwright report.json (#798)
   POST /agent/jobs/{id}/complete      -> finalize {passed, failed, log}
 
 The ``/agent/jobs/next`` payload NEVER includes storageState/sessionStorage or
@@ -31,8 +32,8 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile
-from sqlalchemy import update
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from sqlalchemy import and_, or_, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -62,8 +63,10 @@ from app.schemas import (
     ExploreFinalizeRequest,
     ExploreTarget,
 )
-from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, agent_project_bundle, automation_project_service, evidence_service, execution_service, exploration_agent, heal_service, knowledge_service, project_config_service, run_context, settings_store, spec_service
+from app.models.automation_project import AutomationFile
+from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, agent_project_bundle, automation_project_service, evidence_service, execution_report_service, execution_service, exploration_agent, heal_service, knowledge_service, project_config_service, project_execution, run_context, settings_store, spec_service
 from app.services.auth_service import AuthError
+from app.services import workspace_scope
 from app.services.ownership import get_owned_or_404
 from app.services.playwright_runner import _resolve_project_for_run
 from app.ws import hub
@@ -139,17 +142,28 @@ def redeem_device(body: dict, db: Session = Depends(get_db)) -> dict:
 
 
 # --------------------------------------------------------------------- job protocol
-def _owned_execution(db: Session, execution_id: int, user: User) -> tuple[Execution, Run]:
-    """Fetch an Execution + its Run, 404ing unless the run belongs to ``user``."""
+def _owned_execution(db: Session, execution_id: int, user: User) -> tuple[Execution, Run | None]:
+    """Fetch an Execution + its Run, 404ing unless it belongs to ``user``.
+
+    A **project-scoped** execution (#796) has no run, so it cannot be scoped
+    through one — ``get_owned_or_404(db, Run, None, user)`` would 404 every one
+    of them. It is scoped on its own denormalized ``owner_id`` instead, and the
+    returned run is ``None``; every caller here already tolerates that
+    (``execution_service.finalize`` and ``channel_key`` both take it).
+    """
     execution = db.get(Execution, execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
+    if execution.run_id is None:
+        if execution.owner_id != user.id:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        return execution, None
     run = get_owned_or_404(db, Run, execution.run_id, user)
     return execution, run
 
 
 def _fail_claimed_execution(
-    db: Session, execution: Execution, run: Run, results: list[ExecutionResult], message: str
+    db: Session, execution: Execution, run: Run | None, results: list[ExecutionResult], message: str
 ) -> None:
     """Fail an already-claimed execution cleanly, with ``message`` on every case.
 
@@ -165,13 +179,17 @@ def _fail_claimed_execution(
     execution.passed = 0
     execution.failed = len(results)
     db.commit()
+    channel = execution_service.channel_key(execution)
     for result in results:
         hub.publish(
-            str(run.id),
+            channel,
             "exec.case.result",
             {
                 "ticket": result.ticket_external_id,
                 "caseCode": result.case_code,
+                # A project-scoped result is named by its spec path alone (#796);
+                # the tab's progress listens on this, not on ticket/caseCode.
+                "specPath": result.spec_path,
                 "status": "fail",
                 "durationMs": 0,
             },
@@ -200,6 +218,121 @@ def _spec_relpath(
     return f"{relative.as_posix()}/{filename}"
 
 
+def _auth_origins(base_url: str) -> list[str]:
+    """``["https://host"]`` for a usable base URL, else ``[]``."""
+    if not base_url:
+        return []
+    parts = urlsplit(base_url)
+    if parts.scheme and parts.netloc:
+        return [f"{parts.scheme}://{parts.netloc}"]
+    return []
+
+
+def _project_scoped_claim(
+    db: Session,
+    execution: Execution,
+    results: list[ExecutionResult],
+    reported_version: str,
+    device,  # AgentDevice | None
+) -> dict:
+    """The claim payload for a run-less, project-scoped Execution (#798).
+
+    A project execution runs a selection of specs straight out of an automation
+    repo: there is no Run, no ticket and no case, so the payload differs from the
+    run-scoped one in exactly three ways, all of which the agent branches on:
+
+    * ``projectScoped: true`` — the agent uploads the Playwright JSON report and
+      **failure screenshots only**, instead of per-case evidence.
+    * ``runCode`` carries the repo's slug rather than a run code. The agent uses
+      it for its log line and work-dir name only; nothing parses it.
+    * each ``specs[]`` entry carries ``specPath`` — the repo-relative POSIX path
+      that is the result row's *only* identity — alongside the ``filename`` the
+      spec is written to in the staged tree. They are the same string: the spec
+      must land where its imports expect it, and the result must be matchable.
+
+    The library itself ships through the same ``project`` bundle a layered
+    run-scoped claim uses, so page objects and fixtures resolve identically.
+
+    Raises:
+        HTTPException: 409 for version skew or a missing repo, 413 for an
+            over-cap bundle. In every case the execution is failed first with the
+            same reason, so the tab shows why instead of spinning forever.
+    """
+    project = (
+        db.get(AutomationProject, execution.automation_project_id)
+        if execution.automation_project_id
+        else None
+    )
+    if project is None:
+        message = "This execution's automation repo no longer exists."
+        _fail_claimed_execution(db, execution, None, results, message)
+        raise HTTPException(status_code=409, detail=message)
+
+    # A HIGHER floor than the layered one, checked only here (see
+    # agent_project_bundle). An older agent understands neither `projectScoped`
+    # nor the report upload, so it would run the specs and silently upload
+    # nothing — the exact silent failure the version guard exists to prevent.
+    if not agent_project_bundle.version_ok(
+        reported_version, agent_project_bundle.MIN_AGENT_VERSION
+    ):
+        logger.warning(
+            "refusing project-scoped claim for execution {}: device {} reports version {!r} "
+            "(minimum {})",
+            execution.id,
+            device.id if device else None,
+            reported_version or None,
+            agent_project_bundle.MIN_AGENT_VERSION,
+        )
+        _fail_claimed_execution(
+            db, execution, None, results, agent_project_bundle.PROJECT_SCOPED_UPDATE_MESSAGE
+        )
+        raise HTTPException(
+            status_code=409, detail=agent_project_bundle.PROJECT_SCOPED_UPDATE_MESSAGE
+        )
+
+    project_bundle, total_bytes = agent_project_bundle.bundle_payload(project)
+    if total_bytes > agent_project_bundle.BUNDLE_MAX_BYTES:
+        _fail_claimed_execution(
+            db, execution, None, results, agent_project_bundle.OVERSIZE_MESSAGE
+        )
+        raise HTTPException(status_code=413, detail=agent_project_bundle.OVERSIZE_MESSAGE)
+
+    # Code comes from the `automation_files` mirror — the same source the
+    # Automation tab listed and `_selected_specs` validated against, so what runs
+    # on the device is what the user saw and picked.
+    spec_paths = [r.spec_path for r in results if r.spec_path]
+    code_by_path = {
+        row.path: row.code or ""
+        for row in db.query(AutomationFile)
+        .filter(AutomationFile.project_id == project.id, AutomationFile.path.in_(spec_paths))
+        .all()
+    }
+    specs = [
+        {"filename": path, "code": code_by_path.get(path, ""), "specPath": path}
+        for path in spec_paths
+    ]
+
+    _key, base_url, manual_auth, _session = project_execution._resolve_auth(
+        db, project, execution.owner_id, execution.env
+    )
+    stored = settings_store.load_settings()
+    return {
+        "executionId": execution.id,
+        "projectScoped": True,
+        "runCode": workspace_scope.slug(project.slug or f"project-{project.id}"),
+        "env": execution.env,
+        "browser": execution.browser,
+        "workers": execution.workers,
+        "headless": bool(stored.get("headless", True)),
+        "captureVideo": bool(stored.get("video", False)),
+        "baseUrl": base_url,
+        "manualAuth": manual_auth,
+        "authOrigins": _auth_origins(base_url),
+        "specs": specs,
+        "project": project_bundle,
+    }
+
+
 @router.post("/jobs/next")
 def claim_next_job(
     response: Response,
@@ -218,13 +351,21 @@ def claim_next_job(
     :mod:`app.services.agent_project_bundle`. A body-less claim from a pre-#541
     agent still works for legacy (``project_id IS NULL``) specs.
     """
+    # A run-scoped row is still scoped through its Run, exactly as before — the
+    # denormalized `Execution.owner_id` only exists since #796, so rows created
+    # by an older build have it NULL and switching wholesale would make an
+    # in-flight execution unclaimable. A **project-scoped** row has no run to
+    # join, so it is the one scoped on `Execution.owner_id`.
     candidate = (
         db.query(Execution.id)
-        .join(Run, Execution.run_id == Run.id)
+        .outerjoin(Run, Execution.run_id == Run.id)
         .filter(
             Execution.status == "queued",
             Execution.target == "local-agent",
-            Run.owner_id == user.id,
+            or_(
+                Run.owner_id == user.id,
+                and_(Execution.run_id.is_(None), Execution.owner_id == user.id),
+            ),
         )
         .order_by(Execution.id)
         .first()
@@ -256,19 +397,18 @@ def claim_next_job(
         return None
 
     execution = db.get(Execution, execution_id)
-    run = db.get(Run, execution.run_id)
+    run = db.get(Run, execution.run_id) if execution.run_id is not None else None
     results = (
         db.query(ExecutionResult)
         .filter(ExecutionResult.execution_id == execution.id)
         .order_by(ExecutionResult.id)
         .all()
     )
+    if run is None:
+        return _project_scoped_claim(db, execution, results, reported_version, device)
+
     _project_key, base_url, manual_auth, _provider = _resolve_project_for_run(db, run, execution.env)
-    auth_origins: list[str] = []
-    if base_url:
-        parts = urlsplit(base_url)
-        if parts.scheme and parts.netloc:
-            auth_origins = [f"{parts.scheme}://{parts.netloc}"]
+    auth_origins = _auth_origins(base_url)
 
     # Layered (#537/#541) vs legacy specs. A project-backed spec imports from
     # `../pages/…` and `@q-agent/playwright-base`, so it only runs on a device
@@ -428,26 +568,47 @@ def push_job_result(
 @router.post("/jobs/{execution_id}/evidence")
 async def push_job_evidence(
     execution_id: int,
-    ticket_external_id: str = Form(...),
-    case_code: str = Form(...),
     kind: str = Form(...),
     file: UploadFile = File(...),
+    ticket_external_id: str = Form(default=""),
+    case_code: str = Form(default=""),
+    spec_path: str = Form(default=""),
+    spec_path_camel: str = Form(default="", alias="specPath"),
     user: User = Depends(require_agent),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Upload one evidence artifact (multipart) for a case's result."""
+    """Upload one evidence artifact (multipart) for a result.
+
+    The result is addressed **by whatever identity it has**. A run-scoped result
+    is matched on ``(ticket_external_id, case_code)``, exactly as before. A
+    project-scoped result (#796) has neither — both columns are ``""`` on every
+    row of the execution, so that match would hit an arbitrary one — and is
+    matched on the ``spec_path`` form field instead, which is its only identity.
+    The spec path is accepted under **both** spellings: ``specPath`` (the name
+    pinned in the cross-slice contract, and what the shipped 0.3.0 agent sends)
+    and ``spec_path`` (the snake_case convention every other field on this
+    endpoint already uses). The 0.3.0 agent sends both, so accepting both is what
+    makes it work either way; ``spec_path`` wins if they somehow disagree.
+    Whichever is present wins over the ticket/case pair; nothing else changes.
+
+    Only ``kind="screenshot"`` is expected for a project-scoped execution: per
+    #795 the deliverable is the Playwright report plus failure screenshots, not
+    per-case evidence.
+    """
     execution, run = _owned_execution(db, execution_id, user)
-    result = (
-        db.query(ExecutionResult)
-        .filter(
-            ExecutionResult.execution_id == execution.id,
+    spec_path = spec_path or spec_path_camel
+    query = db.query(ExecutionResult).filter(ExecutionResult.execution_id == execution.id)
+    if spec_path:
+        result = query.filter(ExecutionResult.spec_path == spec_path).first()
+        missing = f"No matching result for spec {spec_path}"
+    else:
+        result = query.filter(
             ExecutionResult.ticket_external_id == ticket_external_id,
             ExecutionResult.case_code == case_code,
-        )
-        .first()
-    )
+        ).first()
+        missing = "No matching result for this ticket/case"
     if result is None:
-        raise HTTPException(status_code=404, detail="No matching result for this ticket/case")
+        raise HTTPException(status_code=404, detail=missing)
     content = await file.read()
     # Console/network (#456) are JSON data, not media — decode into the result's
     # console_logs/network_logs columns instead of storing a file.
@@ -462,6 +623,47 @@ async def push_job_evidence(
         raise HTTPException(status_code=400, detail="Failed to store evidence")
     db.commit()
     return {"id": evidence.id, "kind": evidence.kind, "filename": evidence.filename}
+
+
+@router.post("/jobs/{execution_id}/report")
+async def push_job_report(
+    execution_id: int,
+    request: Request,
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Ingest this execution's raw Playwright ``report.json`` (#798).
+
+    The body is the report file's bytes, verbatim — not a wrapper object and not
+    a multipart upload. It is the JSON reporter's output that both targets
+    already produce (``reporter: [['json', …]]``), which the Automation tab's
+    viewer renders directly: the steps tree, per-retry results and the *flaky*
+    outcome that ``parse_playwright_report`` flattens away.
+
+    Stored as a file under the owner's workspace scope (ADR 0009) rather than on
+    the row — see :mod:`app.services.execution_report_service` — and read back
+    only through the authenticated ``GET /executions/{id}/report``.
+
+    Returns ``{"ok": true, "bytes": n}``. Refuses an over-cap body with **413**
+    and a legible reason rather than storing a truncated document, and a body
+    that is not JSON with **400**.
+    """
+    execution, _run = _owned_execution(db, execution_id, user)
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit():
+        reason = execution_report_service.oversize_reason(int(declared))
+        if reason is not None:
+            raise HTTPException(status_code=413, detail=reason)
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty report body")
+    try:
+        execution_report_service.store(execution, raw)
+    except execution_report_service.ReportTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "bytes": len(raw)}
 
 
 @router.post("/auth/next")

@@ -235,6 +235,40 @@ def test_claim_refuses_a_layered_run_when_the_device_reports_no_version(client, 
     assert client.post("/agent/jobs/next", headers={"Authorization": f"Bearer {token}"}).status_code == 204
 
 
+def test_a_layered_run_scoped_claim_still_works_for_an_0_2_x_agent(client, db_session):
+    """#798 raised ``MIN_AGENT_VERSION`` to 0.3.0 — for PROJECT-scoped claims only.
+
+    The regression this guards is un-pairing every device in the field: a 0.2.x
+    agent has been claiming layered run-scoped jobs since #541 and is perfectly
+    capable of them, so raising one shared constant would have broken working
+    installs the day this shipped. Asserts the accept leg by an effect only the
+    served payload can produce — the bundled library — not just a 200.
+    """
+    user = _make_user(db_session, "stillworks@example.com")
+    _device, token = _pair_device(db_session, user)
+    run, case = _seed_agent_run(db_session, user.id)
+    _make_layered_project(db_session, user.id, case)
+    execution = _queued_execution(db_session, run, case)
+
+    below_project_floor = "0.2.1"
+    assert agent_project_bundle.version_ok(
+        below_project_floor, agent_project_bundle.MIN_AGENT_VERSION
+    ) is False
+
+    resp = client.post(
+        "/agent/jobs/next",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agentVersion": below_project_floor},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["executionId"] == execution.id
+    assert "pages/LoginPage.ts" in {f["path"] for f in body["project"]["files"]}
+    # A run-scoped claim carries no project-scoped flag, so the agent's old
+    # branch is the one that runs.
+    assert body.get("projectScoped") is None
+
+
 def test_claim_refuses_a_layered_run_below_the_minimum_version(client, db_session):
     from app.models.agent_device import AgentDevice
 

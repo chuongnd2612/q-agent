@@ -14,11 +14,16 @@ This module owns the two things that makes safe:
   cap. Over-cap fails fast with a reason instead of shipping a truncated tree
   that would fail collection on the device.
 * :func:`version_ok` — the version-skew guard. A device below
-  :data:`MIN_AGENT_VERSION`, **or reporting no version at all**, cannot
+  :data:`MIN_LAYERED_AGENT_VERSION`, **or reporting no version at all**, cannot
   materialize a nested tree; it would flatten the bundle into one directory and
   every relative import would fail collection. That is a silent mass failure
   across the whole run, so the server refuses the claim and fails the execution
-  with :data:`UPDATE_MESSAGE` instead.
+  with :data:`UPDATE_MESSAGE` instead. A **project-scoped** claim (#798) is a
+  second, higher floor — :data:`MIN_AGENT_VERSION` — because its payload shape is
+  new (``projectScoped``/``specPath``, a JSON-report upload); the two floors are
+  separate constants on purpose, so raising the project-scoped one never
+  un-pairs a device that is perfectly capable of the run-scoped layered job it
+  has been doing all along.
 
 * :func:`multi_project_reason` — the multi-project guard (#556). A run's tickets
   each carry their own ``repo`` and projects are keyed per repo, so one execution
@@ -43,6 +48,8 @@ __all__ = [
     "BUNDLE_BASE_VERSION",
     "BUNDLE_MAX_BYTES",
     "MIN_AGENT_VERSION",
+    "MIN_LAYERED_AGENT_VERSION",
+    "PROJECT_SCOPED_UPDATE_MESSAGE",
     "MULTI_PROJECT_TEMPLATE",
     "OVERSIZE_MESSAGE",
     "UPDATE_MESSAGE",
@@ -66,11 +73,24 @@ BUNDLE_MAX_BYTES = 5 * 1024 * 1024
 # The first agent release that materializes `project.files[]` into a nested tree
 # and computes depth-aware `fixtures` specifiers. Anything below this — including
 # a device that reports nothing — is refused for layered specs.
-MIN_AGENT_VERSION = "0.2.0"
+MIN_LAYERED_AGENT_VERSION = "0.2.0"
+
+# The first agent release that understands a PROJECT-SCOPED job (#798): the
+# `projectScoped` flag, `specs[].specPath`, the failure-screenshots-only evidence
+# filter and the `report.json` upload. Strictly higher than the layered floor and
+# checked ONLY for a project-scoped claim: an 0.2.x device keeps claiming
+# run-scoped layered jobs exactly as it does today.
+MIN_AGENT_VERSION = "0.3.0"
 
 UPDATE_MESSAGE = (
     "Update your Local Agent to run layered specs — this project ships a nested "
-    f"automation project that requires agent v{MIN_AGENT_VERSION} or newer."
+    f"automation project that requires agent v{MIN_LAYERED_AGENT_VERSION} or newer."
+)
+
+PROJECT_SCOPED_UPDATE_MESSAGE = (
+    "Update your Local Agent to run a project's specs — running a selection "
+    "straight out of an automation repo (and uploading its Playwright report) "
+    f"requires agent v{MIN_AGENT_VERSION} or newer."
 )
 
 OVERSIZE_MESSAGE = (
@@ -104,13 +124,17 @@ def parse_version(raw: str | None) -> tuple[int, int, int] | None:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def version_ok(reported: str | None, minimum: str = MIN_AGENT_VERSION) -> bool:
+def version_ok(reported: str | None, minimum: str = MIN_LAYERED_AGENT_VERSION) -> bool:
     """True only when ``reported`` is a parseable version >= ``minimum``.
 
     **An absent, empty, ``"unknown"`` or unparseable version is False.** That is
     the entire point of the guard: pre-#541 agents send no version, and letting
     them proceed produces a wall of import errors that reads as a product
     failure instead of a stale install.
+
+    ``minimum`` defaults to the *layered* floor, not the project-scoped one: the
+    default call is the run-scoped layered guard, and defaulting to the higher
+    floor would silently refuse every 0.2.x device the day #798 shipped.
     """
     current = parse_version(reported)
     if current is None:
