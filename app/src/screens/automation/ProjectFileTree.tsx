@@ -35,6 +35,8 @@ export function ProjectFileTree({
   specPath,
   selectedPath,
   onSelect,
+  checkedSpecs,
+  onToggleSpec,
 }: {
   groups: ProjectFileGroup<ProjectFileMeta>[];
   /** Path of the editable spec — the default selection. */
@@ -42,8 +44,19 @@ export function ProjectFileTree({
   /** Currently open file; equals `specPath` when the editor is showing the spec. */
   selectedPath: string;
   onSelect: (path: string) => void;
+  /**
+   * Ticked spec paths (#800). Passing it (with `onToggleSpec`) turns on the
+   * multi-select checkboxes; omitting it leaves the tree exactly as the run
+   * overlay has always rendered it.
+   */
+  checkedSpecs?: ReadonlySet<string>;
+  /** Tick/untick one spec. **Spec rows only** — a page object, fixture or test
+   * data file is not runnable on its own, so giving it a checkbox would offer a
+   * selection the server refuses (`_selected_specs` requires `kind == "spec"`). */
+  onToggleSpec?: (path: string) => void;
 }) {
   const { t } = useTranslation("pipeline");
+  const selectable = !!checkedSpecs && !!onToggleSpec;
   if (groups.length === 0) return null;
   return (
     <GlassCard className="p-2">
@@ -80,6 +93,8 @@ export function ProjectFileTree({
                               active={f.path === selectedPath}
                               editable={f.path === specPath}
                               onSelect={onSelect}
+                              checked={selectable ? checkedSpecs!.has(f.path) : undefined}
+                              onToggle={selectable ? onToggleSpec : undefined}
                             />
                           ))}
                         </div>
@@ -104,19 +119,30 @@ export function ProjectFileTree({
 }
 
 /** One file row. Extracted so the ticket-grouped and flat branches cannot drift
- *  apart — the lock, the active style and the tooltip must be identical. */
+ *  apart — the lock, the active style and the tooltip must be identical.
+ *
+ *  The checkbox is a **sibling** of the open-file button, not a child of it: a
+ *  button inside a button is invalid HTML and the nested control would never
+ *  receive its own click. Ticking a spec therefore never opens it, and opening
+ *  one never changes the selection — two independent actions on one row. */
 function FileRow({
   file,
   active,
   editable,
   onSelect,
+  checked,
+  onToggle,
 }: {
   file: ProjectFileMeta;
   active: boolean;
   editable: boolean;
   onSelect: (path: string) => void;
+  /** `undefined` when this row is not selectable — no checkbox is rendered. */
+  checked?: boolean;
+  onToggle?: (path: string) => void;
 }) {
-  return (
+  const { t } = useTranslation("pipeline");
+  const row = (
     <PathTooltip label={file.path}>
       <button
         type="button"
@@ -133,5 +159,19 @@ function FileRow({
       </button>
     </PathTooltip>
   );
+  if (checked === undefined || !onToggle) return row;
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={() => onToggle(file.path)}
+        aria-label={t("projectFiles.selectSpec", { name: baseName(file.path) })}
+        data-testid="spec-checkbox"
+        data-path={file.path}
+        className="ml-1 h-3.5 w-3.5 shrink-0 accent-violet"
+      />
+      <div className="min-w-0 flex-1">{row}</div>
+    </div>
+  );
 }
-

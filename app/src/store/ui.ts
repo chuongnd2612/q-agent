@@ -80,6 +80,24 @@ interface UIState {
   setTicketEpic: (e: string | null) => void;
   setTicketPage: (p: number) => void;
 
+  /**
+   * Project Automation tab (#800) — which spec paths are ticked for a
+   * project-scoped execution, and the repo that selection belongs to.
+   *
+   * Selection is UI-only state, so per CLAUDE.md it lives here and NOT in the
+   * URL: `?repo=` / `?file=` stay the only automation params. `specSelRepo` is
+   * what makes the selection safe when the user switches repo — a path is only
+   * meaningful inside the repo it came from, so a selection stamped with a
+   * different repo id is treated as absent rather than silently posted.
+   */
+  specSelRepo: number | null;
+  specSel: Record<string, boolean>;
+  /** Replace the selection wholesale for `repoId` (the derived default). */
+  setSpecSel: (repoId: number, paths: string[]) => void;
+  /** Tick/untick one spec path inside the already-stamped repo. */
+  toggleSpecSel: (path: string) => void;
+  clearSpecSel: () => void;
+
   // runs page — status filter tab + multi-select for bulk actions
   runFilter: RunFilter;
   runSel: Record<number, boolean>;
@@ -174,6 +192,13 @@ export const useUI = create<UIState>((set) => ({
   setTicketPriority: (p) => set({ ticketPriority: p, ticketPage: 1 }),
   setTicketEpic: (e) => set({ ticketEpic: e, ticketPage: 1 }),
   setTicketPage: (p) => set({ ticketPage: p }),
+
+  specSelRepo: null,
+  specSel: {},
+  setSpecSel: (repoId, paths) =>
+    set({ specSelRepo: repoId, specSel: Object.fromEntries(paths.map((p) => [p, true])) }),
+  toggleSpecSel: (path) => set((s) => ({ specSel: { ...s.specSel, [path]: !s.specSel[path] } })),
+  clearSpecSel: () => set({ specSelRepo: null, specSel: {} }),
 
   runFilter: "all",
   runSel: {},

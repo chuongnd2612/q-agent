@@ -1,11 +1,21 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GitCommitHorizontal, Info, Layers } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { ErrorState, Spinner } from "@/components/ui/misc";
 import { timeAgo } from "@/components/dashboard/runStatus";
-import { api } from "@/lib/api";
-import { useAutomationFile, useAutomationRepos, useAutomationTree } from "@/hooks/queries";
+import { ApiError, api } from "@/lib/api";
+import { toast } from "@/lib/toast";
+import {
+  useAutomationFile,
+  useAutomationRepos,
+  useAutomationTree,
+  useProjectExecution,
+  useRuns,
+  useStartProjectExecution,
+} from "@/hooks/queries";
+import { useProjectExecutionSocket } from "@/hooks/useProjectExecutionSocket";
+import { useUI } from "@/store/ui";
 import { useProjectRoute } from "@/screens/ProjectDetail";
 import { ExportProjectPanel } from "@/screens/automation/ExportProjectPanel";
 import { ProjectFilePanel } from "@/screens/automation/ProjectFilePanel";
@@ -18,6 +28,8 @@ import {
   NoRepoEmpty,
   ScaffoldOnlyEmpty,
 } from "./ProjectAutomationEmpty";
+import { defaultSpecSelection } from "./defaultSpecSelection";
+import { ProjectSuiteBar } from "./ProjectSuiteBar";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { RepoSelector } from "./RepoSelector";
 
@@ -60,6 +72,20 @@ import { RepoSelector } from "./RepoSelector";
  * tree the user just browsed. The header says so in one line instead, and slice
  * #772's provenance panel is what names the run and project behind any individual
  * spec.
+ *
+ * ## Running a selection (#800)
+ *
+ * The tree gains checkboxes on **spec rows only** — a page object or fixture is
+ * not runnable on its own and the server refuses one — and `ProjectSuiteBar`
+ * starts a project-scoped execution from exactly what is ticked. The default
+ * selection is this project's own specs (see {@link defaultSpecSelection}), never
+ * the whole shared repo, and the selection itself is UI-only state in
+ * `store/ui.ts`: `?repo=` / `?file=` stay the only params this tab writes.
+ *
+ * Live progress comes from the project channel (`project:<repoId>`, #796) plus a
+ * poll while the row is non-terminal — **not** from `useRunSocket`. There is no
+ * run here and no socket provider on this route, and per CLAUDE.md there is no
+ * "resolve the current run" fallback to lean on.
  */
 export function ProjectAutomationTab() {
   const { t } = useTranslation("projects");
@@ -106,7 +132,12 @@ export function ProjectAutomationTab() {
 
   // Switching repos drops the open file: a path is only meaningful inside the
   // repo it came from, and keeping it would ask for a file that isn't there.
-  const selectRepo = (id: number) => patchParams({ repo: String(id), file: null });
+  // Switching repo also drops the execution shown in the bar: it ran the *other*
+  // repo's specs and its channel is that repo's.
+  const selectRepo = (id: number) => {
+    setExecutionId(null);
+    patchParams({ repo: String(id), file: null });
+  };
   const selectFile = (path: string) => patchParams({ file: path });
 
   const groups = useMemo(
@@ -114,6 +145,74 @@ export function ProjectAutomationTab() {
     [tree.data],
   );
   const hasSpecs = groups.some((g) => g.kind === "spec");
+
+  // ---------------------------------------------------------------- #800
+  // This project's runs, for the default selection only. It is the `Run` leg of
+  // the provenance join (`AutomationSpec -> TestCase -> Run.project_guid`); the
+  // other leg is the `tests/<TICKET>/` path convention. See
+  // `defaultSpecSelection` for why this is reconstructed rather than read off
+  // the provenance endpoint, which answers one file at a time.
+  const projectRuns = useRuns(guid || undefined);
+
+  const specSelRepo = useUI((s) => s.specSelRepo);
+  const specSel = useUI((s) => s.specSel);
+  const setSpecSel = useUI((s) => s.setSpecSel);
+  const toggleSpecSel = useUI((s) => s.toggleSpecSel);
+
+  // Seed the selection once per (repo, runs) — and never again, so a refetch
+  // cannot silently re-tick a spec the user just unticked. `seededFor` holds the
+  // repo the store's selection was seeded for; switching repo re-seeds, because
+  // a path is only meaningful inside the repo it came from.
+  const seededFor = useRef<number | null>(null);
+  useEffect(() => {
+    const repoId = selectedRepo?.id ?? null;
+    if (repoId == null || !tree.data || projectRuns.data === undefined) return;
+    if (seededFor.current === repoId && specSelRepo === repoId) return;
+    seededFor.current = repoId;
+    setSpecSel(repoId, defaultSpecSelection(tree.data.files, projectRuns.data));
+  }, [selectedRepo?.id, tree.data, projectRuns.data, specSelRepo, setSpecSel]);
+
+  // The store's selection only counts when it was stamped for the repo on
+  // screen; a stale stamp reads as an empty selection rather than as another
+  // repo's paths.
+  const checkedSpecs = useMemo(() => {
+    if (selectedRepo == null || specSelRepo !== selectedRepo.id) return new Set<string>();
+    return new Set(Object.keys(specSel).filter((p) => specSel[p]));
+  }, [specSel, specSelRepo, selectedRepo]);
+
+  const specCount = useMemo(
+    () => (tree.data?.files ?? []).filter((f) => f.kind === "spec").length,
+    [tree.data],
+  );
+
+  // The execution started from this tab, this visit. Deliberately NOT "the most
+  // recent execution of this repo": that would be another project's run as often
+  // as it is this user's, and resurrecting one on mount is the "resolve the
+  // current run" anti-pattern in miniature.
+  const [executionId, setExecutionId] = useState<number | null>(null);
+  const execution = useProjectExecution(executionId);
+  useProjectExecutionSocket(selectedRepo?.id ?? null, executionId);
+
+  const start = useStartProjectExecution(guid || null, selectedRepo?.id ?? null);
+  const runSuite = () => {
+    // Tree order, not click order — the list reads like the tree it came from.
+    const paths = (tree.data?.files ?? [])
+      .filter((f) => f.kind === "spec" && checkedSpecs.has(f.path))
+      .map((f) => f.path);
+    if (paths.length === 0) return;
+    start.mutate(
+      { specPaths: paths },
+      {
+        onSuccess: (created) => setExecutionId(created.id),
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError && error.message
+              ? error.message
+              : t("automation.runSuite.startFailed"),
+          ),
+      },
+    );
+  };
 
   if (repos.isLoading) {
     return (
@@ -154,6 +253,20 @@ export function ProjectAutomationTab() {
         download={() => api.exportProjectAutomationZip(guid, selectedRepo.id)}
       />
 
+      {/* Selection + start (#800). Only once there are specs: a repo with no
+          spec has nothing runnable, and a bar permanently disabled for a reason
+          the user cannot act on is noise — the missing-Specs note below says it
+          better. */}
+      {tree.data && !scaffoldOnly && hasSpecs && (
+        <ProjectSuiteBar
+          selectedCount={checkedSpecs.size}
+          specCount={specCount}
+          pending={start.isPending}
+          execution={execution.data ?? null}
+          onRun={runSuite}
+        />
+      )}
+
       {tree.isLoading && (
         <div className="flex items-center justify-center py-16">
           <Spinner size={20} />
@@ -193,6 +306,8 @@ export function ProjectAutomationTab() {
               specPath=""
               selectedPath={selectedPath ?? ""}
               onSelect={selectFile}
+              checkedSpecs={checkedSpecs}
+              onToggleSpec={toggleSpecSel}
             />
           </div>
 

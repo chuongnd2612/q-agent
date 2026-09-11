@@ -515,7 +515,8 @@
       "util": "Utilities",
       "config": "Config",
       "other": "Other"
-    }
+    },
+    "selectSpec": "Select {{name}} to run"
   },
   "export": {
     "title": "Export automation project",

@@ -273,6 +273,22 @@
       "copySha": "Sao chép sha256 đầy đủ",
       "shaCopied": "Đã sao chép sha256",
       "gitNote": "Lịch sử git của kho có câu trả lời theo từng commit; việc đưa nó ra qua HTTP (git log --follow) là một việc tiếp theo, không thuộc phạm vi màn hình này."
+    },
+    "runSuite": {
+      "label_one": "Chạy {{count}} spec",
+      "label_other": "Chạy {{count}} spec",
+      "description_one": "Chạy song song {{count}} spec đã chọn trong repo này",
+      "description_other": "Chạy song song {{count}} spec đã chọn trong repo này",
+      "noneSelected": "Chưa chọn spec nào — hãy tích chọn spec trong cây thư mục",
+      "sharedRepoNote": "Đã chọn {{selected}}/{{total}} spec trong repo này. Repo này dùng chung cho nhiều dự án của bạn, nên các spec do run của dự án khác sinh ra vẫn được liệt kê nhưng không được chọn.",
+      "startFailed": "Không thể bắt đầu chạy",
+      "status": {
+        "running": "đang chạy",
+        "finished": "đã xong"
+      },
+      "passed": "{{count}} đạt",
+      "failed": "{{count}} lỗi",
+      "ofTotal": "trên {{count}}"
     }
   }
 }
