@@ -107,6 +107,70 @@ test("postEvidence sends a multipart form with the right fields", async () => {
   assert.ok(form.get("file") instanceof Blob);
 });
 
+test("postEvidence omits specPath for a run job, and sends it for a project job", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmpFile = path.join(os.tmpdir(), `qagent-test-${Date.now()}-sp.png`);
+  fs.writeFileSync(tmpFile, "fake-png-bytes");
+
+  mockFetch(() => new Response(null, { status: 200 }));
+  await api.postEvidence(cfg, 42, {
+    ticketExternalId: "SUR-1428", caseCode: "TC-01", kind: "screenshot", filePath: tmpFile, filename: "shot.png",
+  });
+  await api.postEvidence(cfg, 43, {
+    ticketExternalId: "", caseCode: "", kind: "screenshot", filePath: tmpFile, filename: "shot.png",
+    specPath: "tests/checkout/smoke.spec.ts",
+  });
+  fs.rmSync(tmpFile);
+
+  const runForm = calls[0].init.body as FormData;
+  assert.equal(runForm.get("specPath"), null);
+  assert.equal(runForm.get("spec_path"), null);
+
+  const projectForm = calls[1].init.body as FormData;
+  // Both spellings: the contract pins `specPath`, the endpoint's other fields
+  // are snake_case, and guessing wrong would 404 the upload silently.
+  assert.equal(projectForm.get("specPath"), "tests/checkout/smoke.spec.ts");
+  assert.equal(projectForm.get("spec_path"), "tests/checkout/smoke.spec.ts");
+});
+
+test("postReport sends the report body through untouched", async () => {
+  mockFetch(() => new Response(null, { status: 200 }));
+  // Whitespace and a top-level `stats` key that parsePlaywrightReport discards:
+  // the viewer needs them, so the body must be byte-identical to report.json.
+  const raw = '{\n  "stats": {"expected": 2, "unexpected": 1},\n  "suites": []\n}\n';
+  await api.postReport(cfg, 42, raw);
+  assert.equal(calls[0].url, "http://127.0.0.1:8787/agent/jobs/42/report");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.body, raw);
+  assert.equal((calls[0].init.headers as Record<string, string>).Authorization, "Bearer test-token");
+});
+
+test("postReport throws ApiError when the server rejects the report", async () => {
+  mockFetch(() => new Response("too big", { status: 413 }));
+  await assert.rejects(() => api.postReport(cfg, 42, "{}"), api.ApiError);
+});
+
+test("claimNextJob carries projectScoped and per-spec specPath through", async () => {
+  const payload = {
+    executionId: 77,
+    runCode: "checkout-suite",
+    env: "Staging",
+    browser: "chromium",
+    workers: 2,
+    headless: true,
+    baseUrl: "https://app.example.com",
+    manualAuth: false,
+    authOrigins: [],
+    projectScoped: true,
+    specs: [{ filename: "tests/checkout/smoke.spec.ts", code: "// spec", specPath: "tests/checkout/smoke.spec.ts" }],
+  };
+  mockFetch(() => Response.json(payload));
+  const job = await api.claimNextJob(cfg);
+  assert.deepEqual(job, payload);
+});
+
 test("postComplete sends the aggregate body", async () => {
   mockFetch(() => new Response(null, { status: 200 }));
   await api.postComplete(cfg, 42, { passed: 3, failed: 1, log: "tail" });

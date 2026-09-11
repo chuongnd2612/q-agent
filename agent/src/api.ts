@@ -33,6 +33,11 @@ export interface JobSpec {
   code: string;
   ticketExternalId?: string;
   caseCode?: string;
+  /** Repo-relative POSIX path of the spec inside the automation project, for a
+   * PROJECT-SCOPED job (#799). Identical in value to `filename` on that payload;
+   * it exists as its own field because it is the server's matching key for a
+   * result that has no ticket/case identity at all. Absent on a run job. */
+  specPath?: string;
 }
 
 /** The `/agent/jobs/next` claim payload. */
@@ -50,6 +55,12 @@ export interface Job {
   manualAuth: boolean;
   authOrigins: string[];
   specs: JobSpec[];
+  /** True when this execution was started from a project's Automation tab rather
+   * than from a Run (#795): there is no ticket, no case code and no run behind
+   * it, so every per-case identity degrades to the spec path and `runCode`
+   * carries the project/repo label instead of a run code. Absent (falsy) on a
+   * run-scoped claim, which is unchanged. */
+  projectScoped?: boolean;
   /** The persistent automation project shipped wholesale with the claim (#541).
    * Present only for layered runs; absent for legacy self-contained specs, in
    * which case `specs[].filename` is a bare filename as before. `files[].path`
@@ -279,6 +290,10 @@ export interface EvidenceUpload {
   kind: string;
   filePath: string;
   filename: string;
+  /** Repo-relative spec path, sent for a project-scoped job (#799). A project
+   * result carries no ticket/case, so this is the only key the server can match
+   * it by. Omitted for a run job, where ticket + case still identify the row. */
+  specPath?: string;
 }
 
 /** Multipart-upload one evidence artifact (screenshot/video/trace). */
@@ -288,6 +303,15 @@ export async function postEvidence(cfg: AgentConfig, executionId: number, ev: Ev
   form.set("ticket_external_id", ev.ticketExternalId);
   form.set("case_code", ev.caseCode);
   form.set("kind", ev.kind);
+  if (ev.specPath) {
+    // Sent under BOTH spellings on purpose. The cross-slice contract pins the
+    // field as `specPath`, while every other field on this endpoint is
+    // snake_case (`ticket_external_id`, `case_code`) — so a server that declares
+    // it either way matches. An unexpected extra form field is ignored, and the
+    // alternative (guessing wrong) is a silently-404ing screenshot upload.
+    form.set("specPath", ev.specPath);
+    form.set("spec_path", ev.specPath);
+  }
   form.set("file", new Blob([data]), ev.filename);
   const res = await fetchWithTimeout(
     `${cfg.serverUrl}/agent/jobs/${executionId}/evidence`,
@@ -295,6 +319,40 @@ export async function postEvidence(cfg: AgentConfig, executionId: number, ev: Ev
       method: "POST",
       headers: authHeaders(cfg.deviceToken),
       body: form,
+    },
+    EVIDENCE_UPLOAD_TIMEOUT_MS
+  );
+  await throwIfNotOk(res);
+}
+
+/**
+ * Upload the run's raw Playwright JSON report for one execution (#799).
+ *
+ * The body is the **verbatim** contents of `report.json` — deliberately NOT
+ * parsed and re-serialized here. The Automation tab's report viewer (#801)
+ * renders the full structure (per-step tree, per-retry results, stdout/stderr,
+ * annotations, `stats`), all of which `parsePlaywrightReport` flattens away on
+ * its way to one row per spec. Round-tripping it through the agent's parser
+ * would therefore ship exactly the data the viewer exists to show, minus the
+ * data the viewer exists to show.
+ *
+ * Uses the long evidence timeout: a report for a big suite is multi-MB.
+ *
+ * @param cfg Agent config (server URL + device token).
+ * @param executionId The execution this report belongs to.
+ * @param reportJson Raw `report.json` text, exactly as Playwright wrote it.
+ */
+export async function postReport(
+  cfg: AgentConfig,
+  executionId: number,
+  reportJson: string
+): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${cfg.serverUrl}/agent/jobs/${executionId}/report`,
+    {
+      method: "POST",
+      headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
+      body: reportJson,
     },
     EVIDENCE_UPLOAD_TIMEOUT_MS
   );

@@ -480,13 +480,18 @@ function logColor(t){
   if (t === "authoring-step") return "#c3c3d0";
   return "#8b8b9e";
 }
+// How to name one spec in a log line: "SUR-1428 TC-01" for a run job, and the
+// repo-relative spec path for a project-scoped one, which has neither (#799).
+function specLabel(ev){ return ev.label || ((ev.ticket||"") + " " + (ev.caseCode||"")).trim(); }
 function logMsg(ev){
   switch (ev.type){
-    case "job-claimed": return "claimed execution #" + ev.executionId + " \\u00b7 run " + ev.runCode + " (" + ev.total + " spec" + (ev.total===1?"":"s") + ")";
+    // A project-scoped job (#799) has no run: ev.runCode carries the project/repo
+    // label instead, and ev.label carries the spec path where a ticket+case would be.
+    case "job-claimed": return "claimed execution #" + ev.executionId + " \\u00b7 " + (ev.projectScoped?"project ":"run ") + ev.runCode + " (" + ev.total + " spec" + (ev.total===1?"":"s") + ")";
     case "auth-waiting": return "waiting for manual login\\u2026" + (ev.url?" ("+ev.url+")":"");
     case "auth-captured": return "login captured \\u00b7 session saved locally";
-    case "case-running": return "running " + ev.index + "/" + ev.total + " \\u00b7 " + (ev.ticket||"") + " " + (ev.caseCode||"");
-    case "case-result": return (ev.status==="pass"?"\\u2713":"\\u2717") + " " + (ev.ticket||"") + " " + (ev.caseCode||"");
+    case "case-running": return "running " + ev.index + "/" + ev.total + " \\u00b7 " + specLabel(ev);
+    case "case-result": return (ev.status==="pass"?"\\u2713":"\\u2717") + " " + specLabel(ev);
     case "progress": return null;
     case "job-complete": return "execution #" + ev.executionId + " complete \\u00b7 " + ev.passed + " passed, " + ev.failed + " failed";
     case "error": return ev.message || "error";
