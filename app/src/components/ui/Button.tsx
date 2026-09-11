@@ -13,17 +13,26 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 const base =
   "inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-[filter,background,border-color] cursor-pointer border select-none disabled:opacity-50 disabled:cursor-not-allowed";
 
+/**
+ * Every variant reads tokens, never a hex (#784), so the family follows both
+ * `data-accent` and `data-mode`.
+ *
+ * Two are worth a note:
+ *  - `primary` puts `text-p-on` on the accent gradient rather than `text-white`.
+ *    White is right on purple and red, and unreadable on Metallic Steel; `--pOn`
+ *    is the token that knows which.
+ *  - `white` is the *inverted* button, not a white one — `bg-txt text-bg` keeps
+ *    it near-white on dark and near-black on light, which is what "inverted"
+ *    meant all along. A literal `bg-white` would vanish into a light page.
+ */
 const variants: Record<Variant, string> = {
   primary:
-    "border-transparent text-white accent-gradient hover:brightness-110 shadow-[0_8px_22px_-8px_rgba(139,92,246,.8)]",
-  glass:
-    "border-white/10 bg-white/[0.05] text-ink-soft hover:bg-white/[0.1]",
-  ghost: "border-transparent bg-transparent text-ink-dim hover:bg-white/[0.06]",
-  white: "border-transparent bg-white text-[#12121a] font-bold hover:brightness-95",
-  success:
-    "border-[rgba(16,185,129,.3)] bg-[rgba(16,185,129,.16)] text-[#6ee7b7] hover:bg-[rgba(16,185,129,.24)]",
-  danger:
-    "border-[rgba(244,63,94,.28)] bg-[rgba(244,63,94,.13)] text-[#fb7185] hover:bg-[rgba(244,63,94,.2)]",
+    "border-transparent text-p-on accent-gradient hover:brightness-110 shadow-[0_8px_22px_-8px_var(--pglow)]",
+  glass: "border-bd2 bg-card2 text-txt3 hover:bg-card3",
+  ghost: "border-transparent bg-transparent text-txt4 hover:bg-card3",
+  white: "border-transparent bg-txt text-bg font-bold hover:brightness-95",
+  success: "border-ok/30 bg-ok-tint text-ok hover:bg-ok/20",
+  danger: "border-danger/30 bg-danger-tint text-danger hover:bg-danger/20",
 };
 
 const sizes: Record<Size, string> = {

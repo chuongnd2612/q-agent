@@ -42,7 +42,7 @@ export function ConfirmDialog({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
-          className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/60 p-5"
+          className="fixed inset-0 z-[1100] flex items-center justify-center bg-scrim p-5"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && !loading) onClose();
           }}
@@ -52,8 +52,7 @@ export function ConfirmDialog({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ duration: 0.16 }}
-            className="w-full max-w-[380px] rounded-2xl border border-white/[0.12] p-5 shadow-[0_30px_70px_-20px_rgba(0,0,0,.8)]"
-            style={{ background: "rgb(24,24,32)" }}
+            className="w-full max-w-[380px] rounded-2xl border border-bd2 bg-pop p-5 shadow-pop"
           >
             <div className="mb-1.5 text-[15px] font-bold text-ink">{title}</div>
             <div className="mb-5 text-[13px] leading-[1.5] text-ink-dim">{message}</div>

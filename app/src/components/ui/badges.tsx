@@ -4,19 +4,24 @@ import i18n from "@/i18n";
 /** Colour maps shared across screens (ticket status, priority, approval, exec).
  * Human labels are localized via the `status` i18n namespace and resolved
  * through the i18next singleton (consumers already call `useTranslation`, so
- * they re-render on language switch). */
+ * they re-render on language switch).
+ *
+ * Every value here is a `var(--token)` rather than a hex (#784): these strings
+ * are handed to inline `style`, so the browser resolves them per element and
+ * they follow `data-mode` / `data-accent` for free. A frozen `#6ee7b7` would be
+ * a light-mode contrast failure that nothing in the type system could catch. */
 
 export const statusColors: Record<string, [string, string]> = {
-  "Ready for QA": ["#6ee7b7", "rgba(16,185,129,.14)"],
-  "In Progress": ["#fbbf24", "rgba(251,191,36,.13)"],
-  Blocked: ["#fb7185", "rgba(244,63,94,.14)"],
-  Done: ["#6ee7b7", "rgba(16,185,129,.14)"],
+  "Ready for QA": ["var(--ok)", "var(--okTint)"],
+  "In Progress": ["var(--warn)", "var(--warnTint)"],
+  Blocked: ["var(--danger)", "var(--dangerTint)"],
+  Done: ["var(--ok)", "var(--okTint)"],
 };
 
 const approvalColor: Record<string, [string, string]> = {
-  pending: ["#fbbf24", "rgba(251,191,36,.14)"],
-  approved: ["#6ee7b7", "rgba(16,185,129,.14)"],
-  rejected: ["#fb7185", "rgba(244,63,94,.14)"],
+  pending: ["var(--warn)", "var(--warnTint)"],
+  approved: ["var(--ok)", "var(--okTint)"],
+  rejected: ["var(--danger)", "var(--dangerTint)"],
 };
 
 /** `[color, label, bg]` for a test-case approval state. */
@@ -26,11 +31,11 @@ export function approvalStyle(approval: string): [string, string, string] {
 }
 
 const execColor: Record<string, string> = {
-  pending: "#6b7280",
-  running: "#f59e0b",
-  pass: "#10b981",
-  fail: "#f43f5e",
-  skipped: "#6b7280",
+  pending: "var(--paused)",
+  running: "var(--warn)",
+  pass: "var(--ok)",
+  fail: "var(--danger)",
+  skipped: "var(--paused)",
 };
 
 /** `[color, label]` for an execution result status. */
@@ -40,30 +45,33 @@ export function execStyle(status: string): [string, string] {
 
 /**
  * Visual token ([color, label]) for a confirmed product defect — a failed case
- * whose `failureClass === "product_defect"`. Deliberately fuchsia (#d946ef), NOT
- * the script-fail red (#f43f5e), so a genuine product bug reads distinctly from a
- * plain test failure. Kept in sync with the Automation slice's product-defect hue.
+ * whose `failureClass === "product_defect"`. Deliberately fuchsia (`--defect`),
+ * NOT the script-fail red (`--danger`), so a genuine product bug reads distinctly
+ * from a plain test failure. Kept in sync with the Automation slice's
+ * product-defect hue — which is now the same token, not a matching literal.
  */
 export function productDefectStyle(): [string, string] {
-  return ["#d946ef", i18n.t("status:productDefect")];
+  return ["var(--defect)", i18n.t("status:productDefect")];
 }
 
 export function priorityColor(p: string): string {
-  return p === "High" ? "#fb7185" : p === "Medium" ? "#fbbf24" : "#94a3b8";
+  return p === "High" ? "var(--danger)" : p === "Medium" ? "var(--warn)" : "var(--neutral)";
 }
 export function priorityBg(p: string): string {
   return p === "High"
-    ? "rgba(251,113,133,.14)"
+    ? "var(--dangerTint)"
     : p === "Medium"
-      ? "rgba(251,191,36,.14)"
-      : "rgba(148,163,184,.14)";
+      ? "var(--warnTint)"
+      : "var(--neutralTint)";
 }
 
-/** Provider glyph + brand colour. */
+/** Provider glyph + brand colour. Brand marks, so they deliberately do NOT
+ * darken in light mode — an Azure DevOps blue that shifts per theme stops
+ * being the provider's colour. */
 export const providerGlyph: Record<string, [string, string]> = {
-  ado: ["A", "#0078d4"],
-  jira: ["J", "#2684ff"],
-  github: ["G", "#e5e7eb"],
+  ado: ["A", "var(--azure)"],
+  jira: ["J", "var(--jira)"],
+  github: ["G", "var(--github)"],
 };
 
 interface PillProps {
@@ -87,7 +95,7 @@ export function Pill({ children, color, bg, dot }: PillProps) {
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  const [color, bg] = statusColors[status] ?? ["#a0a0b2", "rgba(255,255,255,.06)"];
+  const [color, bg] = statusColors[status] ?? ["var(--neutral)", "var(--neutralTint)"];
   return (
     <Pill color={color} bg={bg}>
       {status}

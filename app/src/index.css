@@ -78,8 +78,12 @@
   --scroll: rgba(255, 255, 255, 0.09);
   --scroll2: rgba(255, 255, 255, 0.18);
   --brandSoft: #c4b5fd;
+  --cyan: #22d3ee;
   --cyanSoft: #a5f3fc;
   --terra: #e0a58c;
+  /* Modal/dialog backdrop. A flat black/60 is right on a near-black app and far
+     too heavy over paper, so it is a token rather than `bg-black/60`. */
+  --scrim: rgba(0, 0, 0, 0.6);
 }
 
 /* ---------------------------------------------------------------------------
@@ -118,10 +122,12 @@
   --scroll: rgba(18, 22, 36, 0.16);
   --scroll2: rgba(18, 22, 36, 0.3);
   --brandSoft: #5b3fc4;
+  --cyan: #0e7490;
   --cyanSoft: #0d6a7a;
   /* Terracotta darkened just enough to clear 4.5:1 on the Claude explainer
      banner's composited background while staying the same hue. */
   --terra: #984c26;
+  --scrim: rgba(18, 22, 36, 0.4);
 
   /* Derived accent tokens, re-stated here so one [data-mode] flip carries both.
      --pOn = text ON an accent fill; --psText = accent text on a surface. */
@@ -215,6 +221,11 @@
   --neutralTint: rgba(255, 255, 255, 0.07);
   --paused: #8b8b9e;
   --pausedTint: rgba(255, 255, 255, 0.07);
+  /* A CONFIRMED product defect, deliberately fuchsia and NOT the script-fail
+     red: a genuine product bug has to read differently from a broken test, or
+     the one signal a QA run exists to produce is indistinguishable from noise. */
+  --defect: #d946ef;
+  --defectTint: rgba(217, 70, 239, 0.14);
 
   --claude: #d97757;
   --claudeTint: rgba(217, 119, 87, 0.14);
@@ -237,6 +248,8 @@
   --neutralTint: rgba(18, 22, 36, 0.07);
   --paused: #5c6273;
   --pausedTint: rgba(18, 22, 36, 0.07);
+  --defect: #a21caf;
+  --defectTint: rgba(217, 70, 239, 0.15);
 
   --claudeTint: rgba(217, 119, 87, 0.15);
 }
@@ -263,7 +276,7 @@
   --color-accent: var(--p);
   --color-accent-2: var(--p);
   --color-violet: var(--pl);
-  --color-cyan: #22d3ee;
+  --color-cyan: var(--cyan);
   --color-cyan-soft: var(--cyanSoft);
   /* The old solid/soft status pairs collapse onto one mode-aware token each.
      `--color-success` was a flat #10b981 and `--color-success-soft` #6ee7b7;
@@ -562,6 +575,9 @@ select:-webkit-autofill {
   --color-neutral-tint: var(--neutralTint);
   --color-paused: var(--paused);
   --color-paused-tint: var(--pausedTint);
+  --color-defect: var(--defect);
+  --color-defect-tint: var(--defectTint);
+  --color-scrim: var(--scrim);
 
   /* providers */
   --color-claude: var(--claude);
@@ -581,7 +597,7 @@ select:-webkit-autofill {
   --color-accent: var(--p);
   --color-accent-2: var(--p);
   --color-violet: var(--pl);
-  --color-cyan: #22d3ee;
+  --color-cyan: var(--cyan);
   --color-success: var(--ok);
   --color-success-soft: var(--ok);
   --color-warning: var(--warn);
