@@ -42,6 +42,7 @@
   "tabs": {
     "overview": "Tổng quan",
     "knowledge": "Tri thức dự án",
+    "business": "Tri thức nghiệp vụ",
     "tickets": "Phiếu công việc",
     "runs": "Lượt chạy",
     "connection": "Kết nối",
@@ -66,6 +67,58 @@
     "manageRepositories": "Quản lý kho mã",
     "repositories": "KHO MÃ",
     "manage": "Quản lý"
+  },
+  "businessTab": {
+    "title": "Tri thức nghiệp vụ",
+    "subtitle": "Sản phẩm phải làm gì — các quy tắc, thuật ngữ và quyết định mà một trường hợp kiểm thử được viết ra từ đó. Đây là nguồn ngang hàng với Tri thức dự án, vốn mô tả sản phẩm được xây dựng như thế nào.",
+    "addSource": "Thêm nguồn",
+    "cancel": "Hủy",
+    "emptyTitle": "Chưa có tài liệu nghiệp vụ nào",
+    "emptyBody": "Trường hợp kiểm thử được viết từ quy tắc và thuật ngữ của sản phẩm — hãy thêm những tài liệu mô tả chúng. Một trang yêu cầu, một bảng thuật ngữ nghiệp vụ, một tài liệu chính sách, một nhật ký quyết định: bất cứ thứ gì nói sản phẩm phải làm gì, thay vì nó được lập trình ra sao.",
+    "emptyCta": "Thêm nguồn đầu tiên",
+    "form": {
+      "kind": "Loại nguồn",
+      "kindPlaceholder": "Chọn loại nguồn",
+      "title": "Tiêu đề",
+      "titlePlaceholder": "Quy tắc điều kiện hưởng",
+      "titleHint": "Cách tài liệu này hiển thị trong danh sách. Tài liệu tải lên được nhận diện bằng tiêu đề của nó.",
+      "url": "Đường dẫn",
+      "urlPlaceholder": "https://wiki.example.com/eligibility",
+      "submit": "Thêm nguồn",
+      "submitting": "Đang thêm…",
+      "created": "Đã thêm “{{title}}”",
+      "error": "Không thêm được nguồn này"
+    },
+    "kinds": {
+      "upload": "Tài liệu tải lên",
+      "url": "Trang web",
+      "github_md": "Markdown trên GitHub",
+      "ado_wiki": "Wiki Azure DevOps"
+    },
+    "status": {
+      "pending": "Chưa tải nội dung",
+      "syncing": "Đang tải…",
+      "synced": "Sẵn sàng",
+      "error": "Thất bại"
+    },
+    "pendingNote": "Hiện tại nguồn chỉ được đăng ký ở đây; việc tải nội dung sẽ có trong bản phát hành sau, nên nguồn mới vẫn ở trạng thái “Chưa tải nội dung”.",
+    "sources_one": "{{count}} nguồn",
+    "sources_other": "{{count}} nguồn",
+    "excluded": "Đã loại trừ",
+    "excludedHint": "Vẫn giữ để truy xuất nguồn gốc, nhưng không còn được dùng cho trường hợp kiểm thử mới.",
+    "exclude": "Loại khỏi ngữ cảnh",
+    "include": "Đưa lại vào ngữ cảnh",
+    "excludedToast": "Đã loại “{{title}}” khỏi ngữ cảnh",
+    "includedToast": "Đã đưa “{{title}}” lại vào ngữ cảnh",
+    "updateError": "Không cập nhật được nguồn này",
+    "delete": "Xóa",
+    "deleteTitle": "Xóa nguồn này?",
+    "deleteMessage": "“{{title}}” và bản lưu nội dung của nó sẽ bị xóa vĩnh viễn. Nếu chỉ muốn ngừng dùng nó cho trường hợp kiểm thử mới mà không mất dữ liệu, hãy loại trừ thay vì xóa.",
+    "deleted": "Đã xóa “{{title}}”",
+    "deleteError": "Không xóa được nguồn này",
+    "docCount_one": "{{count}} tài liệu",
+    "docCount_other": "{{count}} tài liệu",
+    "noProject": "Dự án này đang được tải — nguồn nghiệp vụ sẽ hiển thị ngay sau đó."
   },
   "repoKnowledge": {
     "buildingTitle": "Đang xây dựng tri thức cho {{repo}}…",

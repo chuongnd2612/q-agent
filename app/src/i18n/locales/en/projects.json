@@ -42,6 +42,7 @@
   "tabs": {
     "overview": "Overview",
     "knowledge": "Project Knowledge",
+    "business": "Business Knowledge",
     "tickets": "Tickets",
     "runs": "Runs",
     "connection": "Connection",
@@ -66,6 +67,58 @@
     "manageRepositories": "Manage repositories",
     "repositories": "REPOSITORIES",
     "manage": "Manage"
+  },
+  "businessTab": {
+    "title": "Business Knowledge",
+    "subtitle": "What the product is supposed to do — the rules, the vocabulary and the decisions a test case is written from. A peer of Project Knowledge, which describes how it is built.",
+    "addSource": "Add source",
+    "cancel": "Cancel",
+    "emptyTitle": "No business documents yet",
+    "emptyBody": "Test cases are written from your product's rules and vocabulary — add the documents that describe them. A requirements page, a domain glossary, a policy document, a decision log: anything that says what the product must do rather than how it is coded.",
+    "emptyCta": "Add your first source",
+    "form": {
+      "kind": "Source type",
+      "kindPlaceholder": "Choose a source type",
+      "title": "Title",
+      "titlePlaceholder": "Eligibility rules",
+      "titleHint": "How this document appears in the list. An uploaded document is identified by its title.",
+      "url": "URL",
+      "urlPlaceholder": "https://wiki.example.com/eligibility",
+      "submit": "Add source",
+      "submitting": "Adding…",
+      "created": "Added “{{title}}”",
+      "error": "Could not add that source"
+    },
+    "kinds": {
+      "upload": "Uploaded document",
+      "url": "Web page",
+      "github_md": "GitHub Markdown",
+      "ado_wiki": "Azure DevOps wiki"
+    },
+    "status": {
+      "pending": "Not fetched yet",
+      "syncing": "Fetching…",
+      "synced": "Ready",
+      "error": "Failed"
+    },
+    "pendingNote": "Sources are registered here now; fetching their content lands in a later release, so a new source stays “Not fetched yet”.",
+    "sources_one": "{{count}} source",
+    "sources_other": "{{count}} sources",
+    "excluded": "Excluded",
+    "excludedHint": "Kept for provenance, but no longer fed into new test cases.",
+    "exclude": "Exclude from context",
+    "include": "Include in context",
+    "excludedToast": "“{{title}}” is out of context",
+    "includedToast": "“{{title}}” is back in context",
+    "updateError": "Could not update that source",
+    "delete": "Delete",
+    "deleteTitle": "Delete this source?",
+    "deleteMessage": "“{{title}}” and its stored snapshot are removed for good. To stop it grounding new test cases without losing it, exclude it instead.",
+    "deleted": "Deleted “{{title}}”",
+    "deleteError": "Could not delete that source",
+    "docCount_one": "{{count}} document",
+    "docCount_other": "{{count}} documents",
+    "noProject": "This project is still resolving — business sources load once it has."
   },
   "repoKnowledge": {
     "buildingTitle": "Building knowledge for {{repo}}…",

@@ -6,6 +6,7 @@ import { ProjectHeader } from "./projectDetail/ProjectHeader";
 import { ProjectTabsBar } from "./projectDetail/ProjectTabsBar";
 import { Overview } from "./projectDetail/Overview";
 import { KnowledgeTab } from "./projectDetail/KnowledgeTab";
+import { BusinessTab } from "./projectDetail/BusinessTab";
 import { ConnectionTab } from "./projectDetail/connection/ConnectionTab";
 import {
   DEFAULT_PROJECT_TAB,
@@ -177,6 +178,16 @@ export function ProjectKnowledgeTab() {
       onManageRepos={() => goTab("connection")}
     />
   );
+}
+
+/** The Business Knowledge tab (#817, epic #813, ADR 0016) — the project's DOMAIN
+ * grounding, a peer of Project Knowledge rather than a section of it. Keyed on
+ * the GUID, which is what the endpoints take; `projectKey` (a name, for a
+ * pre-#587 deep link) is deliberately NOT passed, because the business rows are
+ * keyed on `project_guid` and a name would resolve to a different column. */
+export function ProjectBusinessTab() {
+  const { projectGuid } = useProjectRoute();
+  return <BusinessTab projectGuid={projectGuid} />;
 }
 
 /** The Connection tab — the project's three connection roles (ADR 0015 §3, #732):
