@@ -8,8 +8,8 @@ from app.services import claude_cli, settings_store
 def test_mechanical_skills_default_to_haiku(monkeypatch):
     monkeypatch.setattr(settings_store, "load_settings", lambda: {"claudeModel": "claude-sonnet-5"})
     # Small/mechanical actions default to the cheaper model...
-    assert claude_cli._resolve_model("execution-analyzer") == "claude-haiku-4-5-20251001"
-    assert claude_cli._resolve_model("screenshot-annotator") == "claude-haiku-4-5-20251001"
+    assert claude_cli._resolve_model("execution-analyzer") == "claude-haiku-4-5"
+    assert claude_cli._resolve_model("screenshot-annotator") == "claude-haiku-4-5"
     # ...while heavy actions and the skill-less path inherit the global model.
     assert claude_cli._resolve_model("test-case-generator") == "claude-sonnet-5"
     assert claude_cli._resolve_model() == "claude-sonnet-5"
