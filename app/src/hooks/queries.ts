@@ -1302,6 +1302,51 @@ export const useSyncBusinessSource = (projectGuid: string | null) => {
   });
 };
 
+/**
+ * Upload a `.md`/`.txt` document — the create path for the `upload` kind (#848).
+ *
+ * Not `useCreateBusinessSource` with a title: an upload's content IS the source,
+ * so the row and its snapshot are made together by the multipart endpoint and
+ * the response comes back already `synced`. There is nothing to sync afterwards
+ * (the server 400s a sync on an upload — it has no address to re-fetch from).
+ */
+export const useUploadBusinessDocument = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, title }: { file: File; title?: string }) =>
+      api.uploadBusinessDocument(projectGuid as string, file, title),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/**
+ * Store a wiki-scoped PAT on an Azure DevOps wiki source (#822, wired #848).
+ *
+ * The server preflights the token against the wiki before storing it, so a
+ * rejection here is the specific reason (wrong scope, expired, no such wiki) and
+ * the row never carries a credential that was known-bad when it was saved.
+ */
+export const useSetBusinessAdoCredential = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, pat }: { id: number; pat: string }) =>
+      api.setBusinessAdoCredential(projectGuid as string, id, pat),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/**
+ * Test a wiki URL + PAT before the source exists. Stores nothing, so it is safe
+ * to fire from a Test button on every attempt.
+ */
+export const usePreflightBusinessAdoWiki = (projectGuid: string | null) =>
+  useMutation({
+    mutationFn: ({ url, pat }: { url: string; pat: string }) =>
+      api.preflightBusinessAdoWiki(projectGuid as string, url, pat),
+  });
+
 // ------------------------------------------- project automation repos (#765)
 //
 // The project-scoped twin of the run overlay's automation reads: same repos,

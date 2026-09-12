@@ -42,6 +42,35 @@ def test_create_connection_and_group_counts(client):
     assert groups["ado"]["connections"][0]["id"] == conn["id"]
 
 
+def test_connection_reports_whether_it_is_hub_backed(client, db_session):
+    """`hubBacked` is on the wire, because the SPA must be able to say so (#848).
+
+    A hub-backed connection is *healthy* — it syncs tickets fine — but it holds
+    no PAT and never will (#501), so anything needing the raw token (an Azure
+    DevOps **wiki** read) cannot use it. The Business tab refuses that
+    combination at the field the user is looking at, which it can only do if the
+    flag is visible here.
+    """
+    from app.models.provider_connection import ProviderConnection
+
+    local = _create(client, "ado", "Local ADO")
+    mirrored = _create(client, "ado", "Hub ADO")
+    row = db_session.get(ProviderConnection, mirrored["id"])
+    row.hub_connection_id = "hub-conn-42"
+    db_session.commit()
+
+    by_id = {
+        c["id"]: c
+        for g in client.get("/providers").json()
+        if g["kind"] == "ado"
+        for c in g["connections"]
+    }
+    assert by_id[mirrored["id"]]["hubBacked"] is True
+    # The negative control: an ordinary connection must NOT report hub-backed,
+    # or the flag would refuse every wiki source rather than the ones it means.
+    assert by_id[local["id"]]["hubBacked"] is False
+
+
 def test_create_connection_unknown_kind_404(client):
     resp = client.post("/providers/bogus/connections", json={"name": "x"})
     assert resp.status_code == 404

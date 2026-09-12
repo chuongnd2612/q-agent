@@ -85,6 +85,7 @@ def _to_connection_out(conn: ProviderConnection) -> ConnectionOut:
         secret_fields=sorted((conn.secrets or {}).keys()),
         last_sync=conn.last_sync,
         last_tested_at=conn.last_tested_at,
+        hub_backed=conn.is_hub_backed,
     )
 
 
