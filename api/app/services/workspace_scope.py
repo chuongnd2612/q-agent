@@ -12,7 +12,7 @@ the ``workspace/claude-config/<owner_id|"shared">/`` pattern already used by
 - owner absent (``owner_id is None``) -> ``workspace/shared/``
 
 Every per-owner artifact tree (``specs``, ``evidence``, ``knowledge``, ``repos``,
-``auth``, ``automation``) lives under the scope root. This module is a pure new library: it does
+``auth``, ``automation``, ``reports``, ``business``) lives under the scope root. This module is a pure new library: it does
 not change any existing call site (those migrate in later slices per ADR 0009).
 """
 
@@ -33,13 +33,23 @@ __all__ = [
     "scoped_auth_dir",
     "scoped_automation_dir",
     "scoped_reports_dir",
+    "scoped_business_dir",
     "served_evidence_path",
     "slug",
 ]
 
 # The artifact kinds every scope holds (mirrors the flat `workspace/<kind>/`
 # dirs config.py has historically exposed as `specs_dir`/`evidence_dir`/etc).
-_KINDS = ("specs", "evidence", "knowledge", "repos", "auth", "automation", "reports")
+_KINDS = (
+    "specs",
+    "evidence",
+    "knowledge",
+    "repos",
+    "auth",
+    "automation",
+    "reports",
+    "business",
+)
 
 
 def scope_for(owner_id: int | None) -> str:
@@ -61,7 +71,7 @@ def scoped_dir(kind: str, owner_id: int | None) -> Path:
     """Return the scoped directory for artifact ``kind`` owned by ``owner_id``.
 
     ``kind`` is one of ``"specs"``, ``"evidence"``, ``"knowledge"``, ``"repos"``,
-    ``"auth"``, ``"automation"``, ``"reports"``. The path is not created on disk here — callers ``mkdir`` as
+    ``"auth"``, ``"automation"``, ``"reports"``, ``"business"``. The path is not created on disk here — callers ``mkdir`` as
     needed, matching the existing (unscoped) ``Settings.*_dir`` properties.
 
     Returns ``get_settings().workspace_dir / scope_for(owner_id) / kind``.
@@ -114,6 +124,22 @@ def scoped_reports_dir(owner_id: int | None) -> Path:
     ``GET /executions/{id}/report`` endpoint.
     """
     return scoped_dir("reports", owner_id)
+
+
+def scoped_business_dir(owner_id: int | None) -> Path:
+    """Scoped ``business`` directory for ``owner_id`` — see :func:`scoped_dir`.
+
+    Holds the Business Knowledge document snapshots (#815, epic #813), one
+    subdirectory per project: ``workspace/<scope>/business/<project-slug>/``,
+    with the raw fetched bytes and the normalized markdown derived from them
+    (``BusinessSource.raw_path`` / ``normalized_path``).
+
+    Like ``reports``, this is deliberately **not** under ``evidence``: the
+    ``/artifacts`` static mount serves the workspace root and ``auth_guard``
+    admits only paths containing ``/evidence/`` (``app/main.py``), so a document
+    stored here cannot be reached by URL at all.
+    """
+    return scoped_dir("business", owner_id)
 
 
 def served_evidence_path(owner_id: int | None, relative_path: str) -> str:
