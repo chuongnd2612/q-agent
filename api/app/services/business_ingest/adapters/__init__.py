@@ -14,6 +14,13 @@ from app.services.business_ingest.base import SourceAdapter, SourceFetchError
 __all__ = ["get_adapter", "register", "registered_kinds"]
 
 _REGISTRY: dict[str, SourceAdapter] = {}
+#: Whether :func:`_load_builtin` has run. A separate flag rather than
+#: ``if not _REGISTRY``, because "the registry is empty" and "the builtins have
+#: not been loaded" are not the same statement: anything that puts an entry in
+#: first — a test substituting one kind, a future plugin registering its own —
+#: would otherwise suppress the built-in load entirely and make *every other*
+#: kind resolve to "cannot be ingested by this version".
+_loaded = False
 
 
 def register(adapter: SourceAdapter) -> None:
@@ -26,12 +33,21 @@ def register(adapter: SourceAdapter) -> None:
 
 
 def _load_builtin() -> None:
-    """Instantiate the built-in adapters. Lazy, to avoid import cycles."""
+    """Instantiate the built-in adapters once. Lazy, to avoid import cycles.
+
+    Idempotent, and it never overwrites an entry already registered under the
+    same kind — so a deliberate substitution stays substituted.
+    """
+    global _loaded
+    if _loaded:
+        return
+    _loaded = True
+
     from app.services.business_ingest.adapters.upload import UploadAdapter
     from app.services.business_ingest.adapters.url import UrlAdapter
 
     for adapter in (UploadAdapter(), UrlAdapter()):
-        register(adapter)
+        _REGISTRY.setdefault(adapter.kind, adapter)
 
 
 def get_adapter(kind: str) -> SourceAdapter:
@@ -43,8 +59,7 @@ def get_adapter(kind: str) -> SourceAdapter:
         deployment cannot ingest is a legible error on the row, not a crash in
         the worker thread.
     """
-    if not _REGISTRY:
-        _load_builtin()
+    _load_builtin()
     adapter = _REGISTRY.get(kind)
     if adapter is None:
         raise SourceFetchError(f"'{kind}' sources cannot be ingested by this version")
@@ -53,6 +68,5 @@ def get_adapter(kind: str) -> SourceAdapter:
 
 def registered_kinds() -> tuple[str, ...]:
     """The source kinds this deployment can ingest, sorted."""
-    if not _REGISTRY:
-        _load_builtin()
+    _load_builtin()
     return tuple(sorted(_REGISTRY))
