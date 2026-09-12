@@ -84,6 +84,12 @@
   /* Modal/dialog backdrop. A flat black/60 is right on a near-black app and far
      too heavy over paper, so it is a token rather than `bg-black/60`. */
   --scrim: rgba(0, 0, 0, 0.6);
+  /* The veil that damps the animated backdrop before the shell draws over it
+     (#722, `AppBackground`). It is the SAME readability lever in both modes, so
+     it has to flip with them: a near-black veil over a light backdrop repaints
+     the whole content area dark and the page's own ink becomes unreadable on
+     it (#844). */
+  --backdropVeil: rgba(9, 9, 14, 0.55);
 }
 
 /* ---------------------------------------------------------------------------
@@ -128,6 +134,7 @@
      banner's composited background while staying the same hue. */
   --terra: #984c26;
   --scrim: rgba(18, 22, 36, 0.4);
+  --backdropVeil: rgba(238, 240, 245, 0.72);
 
   /* Derived accent tokens, re-stated here so one [data-mode] flip carries both.
      --pOn = text ON an accent fill; --psText = accent text on a surface. */

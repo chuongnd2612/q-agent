@@ -25,13 +25,19 @@ export const KNOWLEDGE_STEPS = [
 ] as const;
 
 /** [label, color, bg, dot] for a knowledge status pill. Label is localized via
- * the `status` i18n namespace (resolved through the i18next singleton). */
+ * the `status` i18n namespace (resolved through the i18next singleton).
+ *
+ * The colours are theme tokens, not literals (#844): the previous hex pairs were
+ * the dark-mode ramp, so on the light backdrop the pill rendered pale-on-pale —
+ * the "not indexed" pill in the project header measured under 2.5:1. Each status
+ * maps onto the semantic token the theme layer already defines for it, and text
+ * and dot share one token because the light column darkens the pair together. */
 export function knowledgeStatusStyle(status: string): [string, string, string, string] {
-  if (status === "indexed") return [i18n.t("status:knowledge.indexed"), "#6ee7b7", "rgba(16,185,129,.12)", "#10b981"];
-  if (status === "indexing") return [i18n.t("status:knowledge.indexing"), "#a78bfa", "rgba(139,92,246,.12)", "#8b5cf6"];
-  if (status === "stale") return [i18n.t("status:knowledge.stale"), "#fbbf24", "rgba(251,191,36,.1)", "#f59e0b"];
-  if (status === "error") return [i18n.t("status:knowledge.error"), "#fb7185", "rgba(244,63,94,.12)", "#f43f5e"];
-  return [i18n.t("status:knowledge.none"), "#8b93a7", "rgba(148,163,184,.12)", "#6b7280"];
+  if (status === "indexed") return [i18n.t("status:knowledge.indexed"), "var(--ok)", "var(--okTint)", "var(--ok)"];
+  if (status === "indexing") return [i18n.t("status:knowledge.indexing"), "var(--p)", "var(--pt)", "var(--p)"];
+  if (status === "stale") return [i18n.t("status:knowledge.stale"), "var(--warn)", "var(--warnTint)", "var(--warn)"];
+  if (status === "error") return [i18n.t("status:knowledge.error"), "var(--danger)", "var(--dangerTint)", "var(--danger)"];
+  return [i18n.t("status:knowledge.none"), "var(--neutral)", "var(--neutralTint)", "var(--neutral)"];
 }
 
 export function confidenceColor(c: number): string {

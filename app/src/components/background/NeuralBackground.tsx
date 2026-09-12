@@ -477,7 +477,7 @@ export function NeuralBackground({ density = 140, glow = true }: Props) {
 
   return (
     <>
-      <div className="fixed inset-0 z-0" style={{ background: "#0a0a0f" }} />
+      <div className="fixed inset-0 z-0" style={{ background: "var(--bg)" }} />
       <div ref={mount} className="pointer-events-none fixed inset-0 z-[1]" />
       {glow && (
         <>
