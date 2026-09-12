@@ -31,7 +31,8 @@ import pytest
 
 from app.models.business import BusinessSource
 from app.models.project import Project
-from app.services import workspace_scope
+from app.models.user import User
+from app.services import auth_service, workspace_scope
 from app.services.business_ingest import (
     MIN_READABLE_CHARS,
     SPA_SHELL_MESSAGE,
@@ -873,3 +874,162 @@ def test_sync_endpoint_404s_for_a_source_of_another_project(
     response = client.post(f"/projects/{other.guid}/business/sources/{url_source.id}/sync")
     assert response.status_code == 404
     assert url_source.status == "pending"
+
+
+# ==========================================================================
+# 7. The seams #845 closed: one resolver, one response model
+# ==========================================================================
+#
+# Both endpoints below used to carry their own copy of the #585 GUID-or-name
+# bridge and their own `IngestedSourceOut`. Folding each into the one shared
+# version (`business_source_service.resolve_project` / `schemas.BusinessSourceOut`)
+# is only safe if something fails when the fold is wrong — and nothing in this
+# file exercised the *name* branch, the owner filter or the response shape, so
+# the refactor could have dropped any of the three and stayed green. These are
+# that missing control.
+
+
+def test_upload_endpoint_resolves_a_project_name_to_its_guid(
+    client, db_session, project, workspace_dir
+):
+    """The path may carry the project NAME; the stored column still holds a GUID.
+
+    The #585 bridge. Pinned by the row, not by the 201: a resolver that returned
+    the raw path string would answer 201 just the same and poison
+    ``project_guid`` with a name, which every GUID-keyed read then misses.
+    """
+    response = client.post(
+        f"/projects/{project.name}/business/sources/upload",
+        files={"file": ("policy.md", _MARKDOWN.encode("utf-8"), "text/markdown")},
+    )
+    assert response.status_code == 201, response.text
+
+    row = db_session.get(BusinessSource, response.json()["id"])
+    assert row.project_guid == project.guid
+    assert row.project_key == project.name
+
+
+def test_sync_endpoint_resolves_a_project_name_to_its_guid(
+    client, db_session, project, url_source, scripted_adapter, workspace_dir
+):
+    """Same bridge on the sync path, where getting it wrong is a 404, not a bad row.
+
+    ``source_or_404`` compares ``row.project_guid`` against whatever the resolver
+    returned, so a resolver that handed back the name would make every
+    name-addressed sync unreachable.
+    """
+    scripted_adapter([_html_doc(REAL_PAGE_HTML)])
+
+    response = client.post(
+        f"/projects/{project.name}/business/sources/{url_source.id}/sync"
+    )
+    assert response.status_code == 202, response.text
+
+    deadline = time.time() + 10
+    while pipeline.is_syncing(url_source.id) and time.time() < deadline:
+        time.sleep(0.02)
+    assert not pipeline.is_syncing(url_source.id), "ingestion thread did not finish"
+    db_session.expire_all()
+    assert db_session.get(BusinessSource, url_source.id).status == "synced"
+
+
+def test_the_ingestion_endpoints_answer_with_the_shared_source_model(
+    client, db_session, project, workspace_dir
+):
+    """The upload response is a full ``BusinessSourceOut``, not the old projection.
+
+    ``IngestedSourceOut`` carried nine fields and omitted ``projectGuid`` /
+    ``projectKey`` / ``connectionId`` / ``excluded``; the SPA types every source
+    row as one shape, so a response missing those reads as ``undefined`` in the
+    list the moment an upload is rendered beside a link. Asserted field by field
+    (never ``==`` a whole body, #579) — including the ingestion-specific ones, so
+    this cannot pass by having swapped the model and lost the ingestion state.
+    """
+    response = client.post(
+        f"/projects/{project.guid}/business/sources/upload",
+        files={"file": ("policy.md", _MARKDOWN.encode("utf-8"), "text/markdown")},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert body["projectGuid"] == project.guid
+    assert body["projectKey"] == project.name
+    assert body["excluded"] is False
+    assert body["connectionId"] is None
+    # ...and the ingestion half that used to be this endpoint's whole model.
+    assert body["status"] == "synced"
+    assert body["docCount"] == 1
+    assert body["byteSize"] > 0
+    assert body["contentHash"] and body["fetchedAt"]
+    assert body["lastError"] == ""
+
+
+def _make_user(db_session, email: str) -> User:
+    """One active member, enough to mint a bearer token for."""
+    user = User(
+        email=email,
+        first_name="Test",
+        last_name="User",
+        role="member",
+        password_hash=auth_service.hash_password("password123"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+def _auth_headers(user: User) -> dict:
+    return {"Authorization": f"Bearer {auth_service.create_access_token(user, sid='test-sid')}"}
+
+
+@pytest.fixture
+def auth_on(monkeypatch):
+    """Turn the global auth guard on for one test.
+
+    The suite runs with ``auth_required = False`` (``tests/conftest.py``), which
+    makes ``current_user`` resolve to ``None`` and every ownership helper a
+    passthrough — the #91 bridge. An ownership test that did not flip this would
+    be asserting against the bridge and would pass however the guard behaved.
+    """
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module.settings, "auth_required", True)
+    yield
+
+
+def test_the_ingestion_endpoints_refuse_another_users_project(
+    client, db_session, auth_on, workspace_dir
+):
+    """Owner scoping survives the shared resolver — with a negative control.
+
+    The whole point of resolving centrally is that the owner filter cannot drift
+    between the two routers, and #817's suite is the only place it was ever
+    asserted. Both halves are needed: B is refused, and A (the control) is not,
+    so a resolver that 404'd for *everyone* could not pass this.
+    """
+    user_a = _make_user(db_session, "ingest-a@example.com")
+    user_b = _make_user(db_session, "ingest-b@example.com")
+    owned = Project(
+        provider_kind="ado",
+        external_id="ext-owned",
+        name="A Product",
+        active=True,
+        owner_id=user_a.id,
+    )
+    db_session.add(owned)
+    db_session.commit()
+    db_session.refresh(owned)
+
+    def upload(headers):
+        return client.post(
+            f"/projects/{owned.guid}/business/sources/upload",
+            files={"file": ("policy.md", _MARKDOWN.encode("utf-8"), "text/markdown")},
+            headers=headers,
+        )
+
+    assert upload(_auth_headers(user_b)).status_code == 404
+    assert db_session.query(BusinessSource).count() == 0, "B's refused upload wrote a row"
+
+    assert upload(_auth_headers(user_a)).status_code == 201

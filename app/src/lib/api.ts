@@ -1060,8 +1060,8 @@ export const api = {
   // business knowledge sources (#817, epic #813) — the project's DOMAIN, as
   // opposed to the code knowledge base's "how it is built". Keyed by project
   // GUID like the automation endpoints above, and CRUD-only in this slice:
-  // nothing here triggers a fetch, so a created source stays `pending` until
-  // the ingestion pipeline (#818) lands behind the same row shape.
+  // Registering never fetches, so a created source stays `pending` until
+  // `syncBusinessSource` (or an upload, which ingests inline) moves it on.
   listBusinessSources: (projectGuid: string) =>
     get<BusinessSourceOut[]>(
       `/projects/${encodeURIComponent(projectGuid)}/business/sources`,
@@ -1084,6 +1084,18 @@ export const api = {
   deleteBusinessSource: (projectGuid: string, sourceId: number) =>
     del<void>(
       `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}`,
+    ),
+  /**
+   * Start (or re-start) the ingestion of a link-backed source (#818, wired #845).
+   *
+   * Answers 202 with the row already flipped to `syncing`; the fetch itself
+   * runs server-side and the outcome arrives as the row's next `status`, so the
+   * caller polls the list rather than awaiting a result here. 400 for an upload
+   * (no address to re-fetch from), 409 when a sync is already in flight.
+   */
+  syncBusinessSource: (projectGuid: string, sourceId: number) =>
+    post<BusinessSourceOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/sync`,
     ),
 
   exploreStatus: (projectKey: string, repo: string) =>

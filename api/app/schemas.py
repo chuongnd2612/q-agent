@@ -1646,8 +1646,15 @@ class BusinessSourceOut(ApiModel):
     their own rows rather than a field on ``ProjectKnowledge``: "3 of 40 wiki
     pages failed" is not expressible in one project-wide status.
 
-    In this slice nothing ever fetches, so every new row reads ``pending``. That
-    is the truth about an unsynced source, not a placeholder for #818.
+    A newly registered source reads ``pending``: registering is not fetching, and
+    the ingestion endpoints (#818) are what move a row on. This is the response
+    model for *both* Business Knowledge routers — the registry and ingestion —
+    since #845 folded ingestion's local stand-in into it.
+
+    ``last_error`` is populated on a **synced** source too. That is not a
+    contradiction: a multi-document source whose readable pages landed is
+    genuinely usable, and the "N documents could not be read" detail is how the
+    drop is kept visible instead of silent.
     """
 
     id: int
