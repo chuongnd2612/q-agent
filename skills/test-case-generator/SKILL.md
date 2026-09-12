@@ -144,11 +144,48 @@ Recommend only deterministic, stable happy-path scenarios suitable for Playwrigh
 
 ---
 
+# Voice
+
+Write as a QC hand-writing a manual test **for another person to execute**. The
+reader is a tester sitting in front of the running product — not a developer with
+the codebase open.
+
+- **Steps are what a person does in the UI**, in the product's own words: the
+  screen names, button labels, field labels, tabs and menu items the user actually
+  sees.
+- **Expected results are what that person sees** — a message, a state, a row, a
+  screen. If it cannot be observed on screen, it is not an expected result.
+- Use the product's vocabulary, not the implementation's.
+
+**Never** write any of the following into a title, objective, precondition, step,
+expected result, or test-data field name:
+
+- CSS / XPath / test-id selectors — `#login-submit`, `[data-testid="save-btn"]`, `button.primary`
+- Routes, endpoints, or URLs — `/admin/users`, `GET /api/v1/agencies`, `/admin/groups/:id`
+- Request or response payloads, and the field names inside them
+- HTTP status codes — "returns 403", "HTTP 404", "201 Created"
+- Database artifacts — tables, columns, rows, SQL statements, stored procedures, keys
+- IDs and internal identifiers — UUIDs, `id: 8842`, record numbers, hashes
+- Code identifiers in any casing — `userId`, `broker_agency_id`, `BrokerAgencyList`, `submitForm()`
+- Bare technical nouns — endpoint, payload, selector, locator, DOM, API, webhook, network tab
+- Unresolved template placeholders — `{{admin_user}}`, `${BASE_URL}`, `<USER NAME>`
+
+Before and after:
+
+- BAD — `Navigate to /admin/users and assert [data-testid="save-btn"] is enabled`
+- GOOD — `Open the User Management screen and check that the Save button can be clicked`
+
+The one legitimate exception is a domain word that is genuinely the product's own
+name for a thing — `eClaims`, `FSA_Card`, `COBRA`. Those come from Business
+Knowledge and are the vocabulary a tester already uses, so write them as-is.
+
+---
+
 # Quality Rules
 
 - Favor clarity over completeness.
 - One measurable expected result per step.
-- Reuse terminology from the Knowledge Base.
+- Reuse terminology from **Business Knowledge** first, then the Knowledge Base — and never quote the Knowledge Base's technical detail (selectors, routes, field names, table or column names) into a step or an expected result.
 - Do not invent screens, routes, credentials, or business rules.
 - Keep the number of test cases as small as possible while still covering every Acceptance Criterion.
 - Merge duplicate user journeys whenever practical.
