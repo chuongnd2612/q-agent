@@ -21,6 +21,7 @@ from app.models.agent_device import AgentDevice
 from app.models.automation_project import AutomationFile, AutomationProject
 from app.models.agent_authoring import AgentAuthoringSession
 from app.models.agent_capture import AgentCaptureRequest
+from app.models.business import BusinessFact, BusinessSource
 
 __all__ = [
     "AuditLog",
@@ -33,6 +34,8 @@ __all__ = [
     "AgentCaptureRequest",
     "AutomationProject",
     "AutomationFile",
+    "BusinessFact",
+    "BusinessSource",
     "Provider",
     "ProviderConnection",
     "Project",

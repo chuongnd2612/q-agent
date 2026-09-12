@@ -52,6 +52,17 @@ def test_scoped_dir_wrappers_match_scoped_dir(workspace_dir):
     assert workspace_scope.scoped_auth_dir(3) == workspace_scope.scoped_dir("auth", 3)
 
 
+def test_scoped_business_dir_is_a_peer_kind_under_the_scope_root(workspace_dir):
+    """Business Knowledge snapshots land beside every other kind (#815, ADR 0009).
+
+    Asserted against the literal path rather than ``scoped_dir("business", ...)``
+    alone, so a typo in the kind string cannot make both sides wrong together.
+    """
+    assert workspace_scope.scoped_business_dir(7) == workspace_dir / "users" / "7" / "business"
+    assert workspace_scope.scoped_business_dir(None) == workspace_dir / "shared" / "business"
+    assert "business" in workspace_scope._KINDS
+
+
 # --------------------------------------------------------------------- slug
 def test_slug_matches_old_helper_for_various_inputs():
     for value in [

@@ -78,6 +78,15 @@ class ProjectConfig(Base):
     # Arbitrary project-specific config values downstream generation may reference.
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
 
+    # Project-level Business Knowledge digest (#815, epic #813):
+    # ``{brief, hash, built_at, status, last_error}``. A *brief*, not an index —
+    # there is no vector store in this codebase, so the summarization layer is a
+    # short distilled document that is rendered into prompts wholesale.
+    # It lives here rather than in a third table because ProjectConfig is already
+    # project-keyed, already owner-scoped, and already carried by the ADR 0009 §4
+    # project clone, so the digest follows a cloned project for free.
+    business_brief: Mapped[dict] = mapped_column(JSON, default=dict)
+
     # When True, a run captures a real (headed) browser login before executing
     # specs (if no saved session exists) and reuses the saved storageState.
     manual_auth: Mapped[bool] = mapped_column(default=False)
