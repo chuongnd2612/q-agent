@@ -173,3 +173,79 @@ def test_other_user_rejected_on_run_ws(client, db_session, auth_on, two_users):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(f"/ws/runs/{run.id}?token={_token(user_b)}"):
             pass
+
+
+def _make_owned_automation_project(db_session, owner: User, project_key: str = "PROJ-A"):
+    """An automation repo owned by ``owner`` — the subject of the project WS channel."""
+    from app.models.automation_project import AutomationProject
+
+    project = AutomationProject(
+        owner_id=owner.id,
+        project_key=project_key,
+        repo="",
+        slug=f"{project_key.lower()}/",
+    )
+    db_session.add(project)
+    db_session.commit()
+    db_session.refresh(project)
+    return project
+
+
+def test_owner_can_subscribe_to_project_execution_ws(client, db_session, auth_on, two_users):
+    """The owner reaches ``/ws/projects/{id}`` AND receives what a run-less
+    Execution publishes (#808).
+
+    Asserting only "the socket opened" would still pass if the route subscribed
+    to the wrong hub channel, which is the exact bug this fixes — so the channel
+    key comes from ``execution_service.channel_key`` on a real run-less row, and
+    the event has to arrive through it.
+    """
+    from app.models.execution import Execution
+    from app.services import execution_service
+    from app.ws import hub
+
+    user_a, _ = two_users
+    project = _make_owned_automation_project(db_session, user_a)
+    execution = Execution(
+        run_id=None, owner_id=user_a.id, automation_project_id=project.id, status="running"
+    )
+    db_session.add(execution)
+    db_session.commit()
+
+    # Published before connecting so the hub's catch-up replay delivers it
+    # deterministically, with no dependence on cross-thread broadcast timing.
+    hub.publish(execution_service.channel_key(execution), "exec.progress", {"progress": 42})
+
+    with client.websocket_connect(f"/ws/projects/{project.id}?token={_token(user_a)}") as ws:
+        message = ws.receive_json()
+
+    assert message["event"] == "exec.progress"
+    assert message["payload"]["progress"] == 42
+    # The hub stamps the channel it fanned out on, so this pins the route to the
+    # key the publisher uses rather than to any channel that happens to deliver.
+    assert message["runId"] == f"project:{project.id}"
+
+
+def test_other_user_rejected_on_project_execution_ws(client, db_session, auth_on, two_users):
+    """A non-owner is refused the repo's channel, exactly as on the run channel."""
+    from starlette.websockets import WebSocketDisconnect
+
+    user_a, user_b = two_users
+    project = _make_owned_automation_project(db_session, user_a, project_key="PROJ-B")
+
+    with client.websocket_connect(f"/ws/projects/{project.id}?token={_token(user_a)}"):
+        pass  # negative control: the owner really does get in
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/ws/projects/{project.id}?token={_token(user_b)}"):
+            pass
+
+
+def test_unknown_project_rejected_on_project_execution_ws(client, auth_on, two_users):
+    """An id that resolves to no repo is refused rather than silently subscribed."""
+    from starlette.websockets import WebSocketDisconnect
+
+    user_a, _ = two_users
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/ws/projects/987654?token={_token(user_a)}"):
+            pass

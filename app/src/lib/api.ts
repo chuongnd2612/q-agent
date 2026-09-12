@@ -1160,6 +1160,10 @@ export const api = {
   // (same as WebSocket URLs), so append it here or images 401.
   artifactUrl: (path: string) => `${API_BASE}/artifacts/${path}${wsToken()}`,
   wsUrl: (runId: number | string) => `${wsBase()}/ws/runs/${runId}${wsToken()}`,
+  // A project-scoped (run-less) execution publishes on `project:<repoId>`
+  // (execution_service.channel_key, #796); /ws/projects/{id} is the route that
+  // serves that channel, with the same owner check as the run socket (#808).
+  wsProjectUrl: (repoId: number) => `${wsBase()}/ws/projects/${repoId}${wsToken()}`,
 };
 
 /** `?token=<accessToken>` query suffix for WebSocket URLs (WS can't carry an
