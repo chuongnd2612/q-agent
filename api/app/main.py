@@ -26,6 +26,7 @@ from app.routers import (
     auth,
     automation,
     automation_projects,
+    business_ingest,
     business_knowledge,
     comments,
     evidence,
@@ -490,6 +491,10 @@ def create_app() -> FastAPI:
         comments,
         agent,
         readiness,
+        # Business Knowledge ingestion (#818). Shares the
+        # `/projects/{project_guid}/business` prefix with the source registry
+        # router (#817) — one URL space, two concerns, no path declared twice.
+        business_ingest,
     ):
         app.include_router(module.router, dependencies=[Depends(bind_audit_actor)])
 

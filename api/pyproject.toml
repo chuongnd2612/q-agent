@@ -21,6 +21,7 @@ dependencies = [
     "pyjwt>=2.10.0",
     "pyotp>=2.9.0",
     "psycopg[binary]>=3.2",
+    "markdownify>=1.2.3",
 ]
 
 [project.optional-dependencies]
