@@ -8,6 +8,9 @@ import { BASE_PREFIX, stripBase, withBase } from "@/lib/basePath";
 import type { PwJsonReport } from "@/lib/playwrightReport";
 import { useAuth } from "@/store/auth";
 import type {
+  BusinessSourceCreate,
+  BusinessSourceOut,
+  BusinessSourceUpdate,
   HubClaudeCredential,
   AdminUser,
   AgentDeviceOut,
@@ -1052,6 +1055,35 @@ export const api = {
   exportProjectAutomationZip: (projectGuid: string, projectId: number) =>
     getFile(
       `/projects/${encodeURIComponent(projectGuid)}/automation/repos/${projectId}/export/zip`,
+    ),
+
+  // business knowledge sources (#817, epic #813) — the project's DOMAIN, as
+  // opposed to the code knowledge base's "how it is built". Keyed by project
+  // GUID like the automation endpoints above, and CRUD-only in this slice:
+  // nothing here triggers a fetch, so a created source stays `pending` until
+  // the ingestion pipeline (#818) lands behind the same row shape.
+  listBusinessSources: (projectGuid: string) =>
+    get<BusinessSourceOut[]>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources`,
+    ),
+  createBusinessSource: (projectGuid: string, body: BusinessSourceCreate) =>
+    post<BusinessSourceOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources`,
+      body,
+    ),
+  updateBusinessSource: (
+    projectGuid: string,
+    sourceId: number,
+    body: BusinessSourceUpdate,
+  ) =>
+    patch<BusinessSourceOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}`,
+      body,
+    ),
+  /** Removes the row AND its snapshot files under the owner's workspace scope. */
+  deleteBusinessSource: (projectGuid: string, sourceId: number) =>
+    del<void>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}`,
     ),
 
   exploreStatus: (projectKey: string, repo: string) =>

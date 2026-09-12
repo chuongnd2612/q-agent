@@ -1635,3 +1635,55 @@ class ClaudeCredentialsTestOut(ApiModel):
     # "ok" | "invalid" | "no_credential" | "error"
     result: str = "error"
     message: str = ""
+
+
+# ------------------------------------------------------- Business Knowledge (#817)
+class BusinessSourceOut(ApiModel):
+    """One registered Business Knowledge source (epic #813, ADR 0016).
+
+    Carries the per-source ingestion state — ``status`` / ``lastError`` /
+    ``fetchedAt`` — because per-source legibility is the whole reason these are
+    their own rows rather than a field on ``ProjectKnowledge``: "3 of 40 wiki
+    pages failed" is not expressible in one project-wide status.
+
+    In this slice nothing ever fetches, so every new row reads ``pending``. That
+    is the truth about an unsynced source, not a placeholder for #818.
+    """
+
+    id: int
+    project_guid: str | None = None
+    project_key: str = ""
+    kind: str
+    title: str = ""
+    #: ``None`` for an upload — an uploaded file has no address.
+    url: str | None = None
+    connection_id: int | None = None
+    status: str = "pending"
+    last_error: str = ""
+    fetched_at: datetime | None = None
+    content_hash: str = ""
+    byte_size: int = 0
+    doc_count: int = 0
+    excluded: bool = False
+
+
+class BusinessSourceCreate(ApiModel):
+    """Register a source. ``url`` is required for every kind but ``upload``."""
+
+    kind: str = "url"
+    title: str = ""
+    url: str | None = None
+    connection_id: int | None = None
+
+
+class BusinessSourceUpdate(ApiModel):
+    """Rename a source, or take it out of context.
+
+    Only these two fields: everything else on the row is ingestion-owned
+    provenance, and a human editing ``contentHash`` or ``fetchedAt`` would break
+    the attribution that :class:`BusinessSourceOut` exists to carry. Both are
+    optional — an omitted field is left alone, a ``null`` is not a clear.
+    """
+
+    title: str | None = None
+    excluded: bool | None = None

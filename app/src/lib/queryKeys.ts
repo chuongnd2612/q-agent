@@ -46,6 +46,12 @@ export const queryKeys = {
    * failure screenshot, which `evidence(runId)` cannot serve for a run-less
    * execution. */
   resultEvidence: (resultId: number) => ["results", resultId, "evidence"] as const,
+  /** The project's Business Knowledge sources (#817). Keyed on the GUID — the
+   *  identifier the endpoint takes — under the same `projects` prefix as every
+   *  other project-scoped query, so one `["projects", guid]` invalidation still
+   *  reaches it. */
+  businessSources: (projectGuid: string) =>
+    ["projects", projectGuid, "business", "sources"] as const,
   repoKnowledge: (key: string, repo: string) =>
     ["projects", key, "repos", repo, "knowledge"] as const,
   tickets: (filters?: Record<string, string | number | undefined>) =>
