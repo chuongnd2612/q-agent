@@ -26,6 +26,7 @@ import { ProjectAutomationTab } from "@/screens/projectAutomation/ProjectAutomat
 import {
   ProjectConnectionTab,
   ProjectDetail,
+  ProjectBusinessTab,
   ProjectKnowledgeTab,
   ProjectOverviewTab,
   ProjectTabIndex,
@@ -114,6 +115,7 @@ const ROUTES = [
               { path: "tickets/:externalId", element: <TicketDetail /> },
               { path: "runs", element: <Runs /> },
               { path: "knowledge", element: <ProjectKnowledgeTab /> },
+              { path: "business", element: <ProjectBusinessTab /> },
               { path: "connection", element: <ProjectConnectionTab /> },
               { path: "reports", element: <Reports /> },
               { path: "automation", element: <ProjectAutomationTab /> },

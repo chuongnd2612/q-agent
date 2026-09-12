@@ -26,6 +26,7 @@ from app.routers import (
     auth,
     automation,
     automation_projects,
+    business_knowledge,
     comments,
     evidence,
     execution,
@@ -479,6 +480,10 @@ def create_app() -> FastAPI:
         # `/projects/{project_guid}/automation`, so it shares no path shape with
         # `projects` (keyed on the project *name*) or `automation` (run-keyed).
         automation_projects,
+        # Business Knowledge sources (#817). Prefixed
+        # `/projects/{project_guid}/business`, keyed on the GUID like
+        # `automation_projects` and unlike `projects` (keyed on the name).
+        business_knowledge,
         execution,
         evidence,
         reports,
