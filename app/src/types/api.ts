@@ -1505,3 +1505,47 @@ export interface HubClaudeCredential {
   scopes?: string[] | null;
   subscriptionType?: string | null;
 }
+
+/**
+ * One Business Knowledge source (`GET /projects/{guid}/business/sources`, #817).
+ *
+ * `url` is `null` for an upload — an uploaded file has no address — which is
+ * also why the server's unique key de-duplicates links only and uploads are
+ * de-duplicated on their title in the service layer.
+ *
+ * `status` is per SOURCE, not per project: "3 of 40 wiki pages failed" is the
+ * state these rows exist to be able to express. Nothing fetches yet in this
+ * slice, so every row reads `pending` until the ingestion pipeline (#818) lands.
+ */
+export interface BusinessSourceOut {
+  id: number;
+  projectGuid: string | null;
+  projectKey: string;
+  kind: BusinessSourceKind;
+  title: string;
+  url: string | null;
+  connectionId: number | null;
+  status: "pending" | "syncing" | "synced" | "error";
+  lastError: string;
+  fetchedAt: string | null;
+  contentHash: string;
+  byteSize: number;
+  docCount: number;
+  excluded: boolean;
+}
+
+/** The v1 source kinds. `notion` is deferred to v2 (#832). */
+export type BusinessSourceKind = "upload" | "url" | "github_md" | "ado_wiki";
+
+export interface BusinessSourceCreate {
+  kind: BusinessSourceKind;
+  title?: string;
+  url?: string | null;
+  connectionId?: number | null;
+}
+
+/** An omitted field is left alone; this is a patch, not a replace. */
+export interface BusinessSourceUpdate {
+  title?: string;
+  excluded?: boolean;
+}

@@ -44,6 +44,8 @@ import type {
   KnowledgeStatus,
   ProjectKnowledgeOut,
   ProjectOut,
+  BusinessSourceCreate,
+  BusinessSourceUpdate,
 } from "@/types/api";
 
 // -------------------------------------------------------------- health
@@ -1221,6 +1223,56 @@ export const useExportAutomationProject = (runId: number | string) => {
       qc.invalidateQueries({
         queryKey: queryKeys.automationExport(runId, body.projectId ?? null),
       }),
+  });
+};
+
+// ------------------------------------------ business knowledge sources (#817)
+//
+// The project's DOMAIN grounding — a peer of the code knowledge base, not a
+// section of it (ADR 0016). CRUD only in this slice: nothing here starts a
+// fetch, so a created source stays `pending`.
+//
+// All three mutations invalidate the one list query rather than patching the
+// cache by hand: the server owns `status`, `projectKey` and the ordering, and a
+// hand-rolled optimistic row would be guessing at all three.
+
+/** Every source grounding this project, newest first. */
+export const useBusinessSources = (projectGuid: string | null) =>
+  useQuery({
+    queryKey: queryKeys.businessSources(projectGuid ?? ""),
+    queryFn: () => api.listBusinessSources(projectGuid as string),
+    enabled: !!projectGuid,
+  });
+
+/** Register a document or link. Rejects a bad kind/URL and a duplicate (409). */
+export const useCreateBusinessSource = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BusinessSourceCreate) =>
+      api.createBusinessSource(projectGuid as string, body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/** Rename a source, or take it out of context (`excluded` — not a delete). */
+export const useUpdateBusinessSource = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: BusinessSourceUpdate }) =>
+      api.updateBusinessSource(projectGuid as string, id, body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/** Delete a source and its stored snapshot. Irreversible — the caller confirms. */
+export const useDeleteBusinessSource = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteBusinessSource(projectGuid as string, id),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
   });
 };
 

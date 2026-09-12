@@ -68,6 +68,26 @@ Required:
 8. **Requirement coverage plan** — map each AC to proposed testing areas; highlight covered vs
    uncovered requirements and suggest additional scenarios.
 
+## Voice
+
+This analysis is not read only by you. Its **business rules** and **validation
+rules** are carried almost verbatim into the manual test cases that
+`test-case-generator` writes for a human tester to execute, so a rule worded in
+implementation terms leaks straight into a test step.
+
+Write every rule as a statement about the **product and the person using it**, in
+the vocabulary of **Business Knowledge** and the ticket — not about the code that
+implements it. Keep selectors, routes, endpoints, payload and column names, HTTP
+status codes and code identifiers out of the rule text; if a technical detail is
+genuinely necessary to understand a risk or a dependency, put it under Risks,
+Assumptions or Domain Mapping, where it stays out of the case text.
+
+- BAD — `expirationDate must be set before POST /brokers/agencies returns 201`
+- GOOD — `An agency cannot be saved until its next expiration date is filled in`
+
+Domain words that are the product's own name for a thing — `eClaims`, `FSA_Card`,
+`COBRA` — are vocabulary, not leakage, and should be reused as-is.
+
 ## Output
 
 Populate `templates/requirement-analysis.md` with: Executive Summary, Business Objective,
@@ -79,7 +99,8 @@ Requirement Coverage Plan.
 
 - **Do not** generate test cases or automation code — that is downstream work.
 - Clearly distinguish **facts** (stated in the ticket/KB) from **assumptions** (inferred).
-- Reuse business terminology from the Project Knowledge Base; never invent domain concepts.
+- Reuse business terminology from **Business Knowledge** first, then the Project Knowledge Base; never invent domain concepts.
+- Word every business rule and validation rule in business terms (see **Voice**) — they become test-case text downstream.
 - **Identify ambiguity instead of guessing** — put unknowns under Missing Information.
 - Assign risk levels; make expected behavior explicit for every AC.
 
