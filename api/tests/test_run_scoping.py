@@ -249,3 +249,105 @@ def test_unknown_project_rejected_on_project_execution_ws(client, auth_on, two_u
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(f"/ws/projects/987654?token={_token(user_a)}"):
             pass
+
+
+def _make_project_execution(db_session, owner, spec_path="tests/1377/1377-TC-01.spec.ts"):
+    """A run-less, project-scoped Execution (#795) owned by ``owner``.
+
+    ``run_id`` is NULL — the whole point of #796 — so ownership can only come
+    from ``Execution.owner_id``.
+    """
+    from app.models.execution import Execution, ExecutionResult
+
+    execution = Execution(run_id=None, owner_id=owner.id, status="done")
+    db_session.add(execution)
+    db_session.flush()
+    db_session.add(
+        ExecutionResult(
+            execution_id=execution.id,
+            test_case_id=0,  # a project-scoped result has no TestCase; see project_execution.create
+            spec_path=spec_path,
+            ticket_external_id="",
+            case_code="",
+            status="fail",
+        )
+    )
+    db_session.commit()
+    return execution
+
+
+def _write_project_evidence(owner, execution, name="test-failed-1.png"):
+    """Put a file exactly where ``evidence_service`` puts a project execution's
+    screenshot: ``<scope>/evidence/projexec-<id>/<spec path parts>/<name>``."""
+    evidence_dir = (
+        scoped_evidence_dir(owner.id)
+        / f"projexec-{execution.id}"
+        / "tests"
+        / "1377"
+        / "1377-TC-01.spec.ts"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / name).write_bytes(b"fake-png")
+    return (
+        f"/artifacts/{scope_for(owner.id)}/evidence/projexec-{execution.id}"
+        f"/tests/1377/1377-TC-01.spec.ts/{name}"
+    )
+
+
+def test_owner_can_read_a_project_execution_screenshot(
+    client, db_session, auth_on, two_users
+):
+    """The regression this fixes: the guard resolved the segment after
+    ``evidence/`` as a ``Run.code``, so ``projexec-<id>`` matched no row and
+    EVERY project-scoped artifact 404'd — the report viewer's attachment
+    rendered as a broken image."""
+    user_a, _ = two_users
+    execution = _make_project_execution(db_session, user_a)
+    url = _write_project_evidence(user_a, execution)
+
+    assert client.get(url, params={"token": _token(user_a)}).status_code == 200
+
+
+def test_other_user_rejected_on_a_project_execution_screenshot(
+    client, db_session, auth_on, two_users
+):
+    """Ownership still holds without a Run behind it — it comes from
+    ``Execution.owner_id``. The owner's 200 in the same test is the control, so
+    a guard that refused everything could not pass this."""
+    user_a, user_b = two_users
+    execution = _make_project_execution(db_session, user_a)
+    url = _write_project_evidence(user_a, execution)
+
+    assert client.get(url, params={"token": _token(user_a)}).status_code == 200
+    assert client.get(url, params={"token": _token(user_b)}).status_code == 404
+
+
+def test_forged_scope_prefix_on_a_project_execution_is_rejected(
+    client, db_session, auth_on, two_users
+):
+    """Defense in depth, same rule as the RUN-CODE case: a valid
+    ``projexec-<id>`` behind the wrong scope prefix 404s even for its real
+    owner."""
+    user_a, user_b = two_users
+    execution = _make_project_execution(db_session, user_b)
+    _write_project_evidence(user_b, execution)
+
+    forged_url = (
+        f"/artifacts/{scope_for(user_a.id)}/evidence/projexec-{execution.id}"
+        f"/tests/1377/1377-TC-01.spec.ts/test-failed-1.png"
+    )
+    assert client.get(forged_url, params={"token": _token(user_a)}).status_code == 404
+    assert client.get(forged_url, params={"token": _token(user_b)}).status_code == 404
+
+
+def test_unknown_project_execution_id_is_rejected(client, db_session, auth_on, two_users):
+    """A well-formed ``projexec-<id>`` that resolves to no Execution is refused,
+    rather than falling through to the RUN-CODE branch and being treated as an
+    unowned (pre-ownership, #91) run."""
+    user_a, _ = two_users
+    evidence_dir = scoped_evidence_dir(user_a.id) / "projexec-999999"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "shot.png").write_bytes(b"fake-png")
+
+    url = f"/artifacts/{scope_for(user_a.id)}/evidence/projexec-999999/shot.png"
+    assert client.get(url, params={"token": _token(user_a)}).status_code == 404

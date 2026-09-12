@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,7 @@ from app.config import settings
 from app.db import init_db
 from app.logging import logger, setup_logging
 from app.models.automation_project import AutomationProject
+from app.models.execution import Execution
 from app.models.run import Run
 from app.services.audit_context import bind_audit_actor
 from app.routers import (
@@ -113,6 +115,19 @@ def _run_owner_allows(owner_id: int | None, user_id: int) -> bool:
     return owner_id is None or owner_id == user_id
 
 
+_PROJECT_EXECUTION_DIR = re.compile(r"^projexec-(\d+)$")
+
+
+def _project_execution_id(code: str) -> int | None:
+    """The execution id if ``code`` is a project-scoped evidence directory.
+
+    Project-scoped executions stage evidence under ``projexec-<execution_id>``
+    instead of a ``Run.code``; see ``project_execution.staging_label``.
+    """
+    match = _PROJECT_EXECUTION_DIR.match(code)
+    return int(match.group(1)) if match else None
+
+
 def _artifact_access_allowed(path: str, token: str | None) -> bool:
     """True if the token's user may fetch this ``/artifacts/<scope>/evidence/<RUN-CODE>/...`` path.
 
@@ -124,8 +139,12 @@ def _artifact_access_allowed(path: str, token: str | None) -> bool:
     unique, so the lookup resolves regardless of where the scope prefix sits.
     Applies the same owner check as ``app.services.ownership.get_owned_or_404``
     (#92 — run domain scoping), then — defense in depth — cross-checks that the
-    URL's scope segment actually matches the resolved run's owner (a forged or
-    stale scope prefix in front of a valid RUN-CODE is rejected too).
+    URL's scope segment actually matches the resolved owner (a forged or stale
+    scope prefix in front of a valid RUN-CODE is rejected too).
+
+    The segment after ``evidence/`` is a ``Run.code`` for run-scoped evidence and
+    ``projexec-<execution_id>`` for a project-scoped execution (#795), which has
+    no Run at all; the latter is authorized through ``Execution.owner_id``.
     """
     user_id = _token_user_id(token)
     if user_id is None:
@@ -143,16 +162,29 @@ def _artifact_access_allowed(path: str, token: str | None) -> bool:
     # per-test engine rebind (see conftest.workspace_dir) is honored.
     from app.db import SessionLocal
 
+    # A project-scoped execution (#795) has no Run, so its evidence is keyed on
+    # `projexec-<execution_id>` (project_execution.staging_label) rather than a
+    # RUN-CODE. Resolve those through the Execution's own owner_id — the column
+    # #796 added precisely so ownership no longer has to go through a Run.
+    project_execution_id = _project_execution_id(code)
+
     db = SessionLocal()
     try:
-        run = db.query(Run).filter(Run.code == code).first()
+        if project_execution_id is not None:
+            execution = db.get(Execution, project_execution_id)
+            owner_id = execution.owner_id if execution is not None else None
+            found = execution is not None
+        else:
+            run = db.query(Run).filter(Run.code == code).first()
+            owner_id = run.owner_id if run is not None else None
+            found = run is not None
     finally:
         db.close()
-    if run is None:
+    if not found:
         return False
-    if not _run_owner_allows(run.owner_id, user_id):
+    if not _run_owner_allows(owner_id, user_id):
         return False
-    return scope == scope_for(run.owner_id)
+    return scope == scope_for(owner_id)
 
 
 def _run_ws_access_allowed(run_id: str, token: str | None) -> bool:
