@@ -81,12 +81,51 @@
       "kindPlaceholder": "Choose a source type",
       "title": "Title",
       "titlePlaceholder": "Eligibility rules",
-      "titleHint": "How this document appears in the list. An uploaded document is identified by its title.",
       "url": "URL",
-      "urlPlaceholder": "https://wiki.example.com/eligibility",
+      "urlPlaceholder": {
+        "url": "https://wiki.example.com/eligibility",
+        "github_md": "https://github.com/acme/handbook/tree/main/docs",
+        "ado_wiki": "https://dev.azure.com/acme/Payments/_wiki/wikis/Payments.wiki"
+      },
+      "addressHint": {
+        "url": "One page is fetched, once. Links on it are not followed, and no credential is used.",
+        "github_md": "A repository, a folder, or a single .md file — paste the address as it appears in the GitHub URL bar.",
+        "ado_wiki": "Paste the address of any page in the wiki you want. Every page under it is fetched."
+      },
+      "upload": {
+        "file": "Document",
+        "choose": "Choose a file",
+        "none": "No file chosen",
+        "hint": "This version accepts .md and .txt files only, up to 10 MB each. The file is read and stored as you add it, so there is nothing to sync afterwards."
+      },
+      "github": {
+        "connection": "GitHub connection",
+        "public": "Public repository — no token needed",
+        "noConnections": "No GitHub connections yet",
+        "hubOption": "{{name}} (managed by EmeHub)",
+        "publicNote": "A public repository needs no token at all. Attach a GitHub connection only if the repository is private — its token needs the contents:read scope.",
+        "hubNote": "This connection is managed by EmeHub, which never releases its token, so the repository is read anonymously. That is fine for a public repository; a private one will report that it may be private and needs contents:read.",
+        "refNote": "A branch name containing a slash, such as release/2024, is read as its first segment only — a GitHub web address cannot tell that apart from a folder. Link the folder on a branch without a slash, or link the file itself."
+      },
+      "ado": {
+        "pat": "Wiki-scoped access token",
+        "patPlaceholder": "Personal access token with Wiki (Read)",
+        "test": "Test this wiki",
+        "testing": "Testing…",
+        "testOk": "Reads the wiki “{{wiki}}”",
+        "testFailed": "That token could not read the wiki",
+        "connection": "Azure DevOps connection (optional)",
+        "noConnection": "None — use the token above",
+        "noConnections": "No Azure DevOps connections yet",
+        "hubRefusal": "Wiki pages can't be read through the shared EmeHub connection — it never releases its Azure DevOps token. Add a wiki-scoped token for this project.",
+        "missing": "This Azure DevOps wiki needs a token. Add a personal access token with Wiki (Read) scope above, or pick a connection that holds one.",
+        "connectionNote": "This source will use the connection's token. If the sync fails with a scope error, add a wiki-scoped token above instead — a connection made for work items carries no Wiki (Read) scope.",
+        "sourceNote": "This token is stored encrypted on this source alone, and is never shown again."
+      },
       "submit": "Add source",
       "submitting": "Adding…",
       "created": "Added “{{title}}”",
+      "uploaded": "Uploaded “{{title}}”",
       "error": "Could not add that source"
     },
     "kinds": {

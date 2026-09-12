@@ -37,6 +37,13 @@ class ConnectionOut(ApiModel):
     secret_fields: list[str] = Field(default_factory=list)
     last_sync: datetime | None = None
     last_tested_at: datetime | None = None
+    #: True when this row mirrors a connection EmeHub owns. Such a connection
+    #: works perfectly for the tickets it was made for, but holds no credential
+    #: and never will (#501) — so anything that needs the raw PAT (an Azure
+    #: DevOps *wiki* read) cannot use it. Exposed so the SPA can say that at the
+    #: field the user is looking at, instead of letting them configure a source
+    #: that could only ever fail (#848).
+    hub_backed: bool = False
 
 
 class ProviderGroupOut(ApiModel):

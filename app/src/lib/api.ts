@@ -8,6 +8,8 @@ import { BASE_PREFIX, stripBase, withBase } from "@/lib/basePath";
 import type { PwJsonReport } from "@/lib/playwrightReport";
 import { useAuth } from "@/store/auth";
 import type {
+  BusinessAdoCredentialOut,
+  BusinessAdoPreflightOut,
   BusinessSourceCreate,
   BusinessSourceOut,
   BusinessSourceUpdate,
@@ -362,7 +364,13 @@ async function request<T>(
   const token = useAuth.getState().accessToken;
   const csrf = getCookie("qagent_csrf");
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // A multipart body must NOT carry a hand-set Content-Type: only the browser
+    // can append the `boundary=` parameter, and a JSON header here makes the
+    // server parse the parts as a JSON document and 422. Every other body is
+    // JSON, so the default stays.
+    ...(init?.body instanceof FormData
+      ? {}
+      : { "Content-Type": "application/json" }),
     ...((init?.headers as Record<string, string> | undefined) ?? {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -516,6 +524,11 @@ const post = <T>(p: string, body?: unknown) =>
     method: "POST",
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+/** A multipart POST. Rides `request` — and therefore the bearer token, the
+ *  401→refresh replay, the timeout and the reachability flag — which a raw
+ *  `fetch` would have none of (CLAUDE.md's standing trap). */
+const postForm = <T>(p: string, form: FormData) =>
+  request<T>(p, { method: "POST", body: form });
 const put = <T>(p: string, body?: unknown) =>
   request<T>(p, { method: "PUT", body: JSON.stringify(body ?? {}) });
 const patch = <T>(p: string, body?: unknown) =>
@@ -1096,6 +1109,41 @@ export const api = {
   syncBusinessSource: (projectGuid: string, sourceId: number) =>
     post<BusinessSourceOut>(
       `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/sync`,
+    ),
+  /**
+   * Upload one `.md`/`.txt` document and ingest it inline (#818, wired #848).
+   *
+   * The one kind whose "address" is a file, so it does not go through
+   * `createBusinessSource` at all: the row and its snapshot are created together
+   * by this multipart call, and the response is already `synced`. Re-uploading
+   * the same filename replaces the snapshot and keeps the row id.
+   */
+  uploadBusinessDocument: (projectGuid: string, file: File, title?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (title) form.append("title", title);
+    return postForm<BusinessSourceOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/upload`,
+      form,
+    );
+  },
+  /** Where this wiki source's token would come from, before any fetch (#822). */
+  businessAdoCredential: (projectGuid: string, sourceId: number) =>
+    get<BusinessAdoCredentialOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/ado-credential`,
+    ),
+  /** Store a wiki-scoped PAT on the source. The server preflights it first and
+   *  400s with the specific refusal rather than saving a known-bad token. */
+  setBusinessAdoCredential: (projectGuid: string, sourceId: number, pat: string) =>
+    put<BusinessAdoCredentialOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/ado-credential`,
+      { pat },
+    ),
+  /** Test a wiki URL + PAT **before** the source exists. Stores nothing. */
+  preflightBusinessAdoWiki: (projectGuid: string, url: string, pat: string) =>
+    post<BusinessAdoPreflightOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/ado/preflight`,
+      { url, pat },
     ),
 
   exploreStatus: (projectKey: string, repo: string) =>

@@ -14,15 +14,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Select } from "@/components/ui/Dropdown";
 import { timeAgo } from "@/components/dashboard/runStatus";
 import {
   useBusinessSources,
-  useCreateBusinessSource,
   useDeleteBusinessSource,
   useSyncBusinessSource,
   useUpdateBusinessSource,
 } from "@/hooks/queries";
+import { BusinessSourceForm } from "./BusinessSourceForm";
 import { toast } from "@/lib/toast";
 import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
 
@@ -61,6 +60,13 @@ import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
  * would stay near-black over a paper page. Every other colour is an appearance
  * token too (#783/#784), so the panel follows `data-mode` and `data-accent`.
  *
+ * ## The add form lives in its own module
+ *
+ * Each kind is addressed and credentialed differently — a file, a page, a repo
+ * address, a wiki plus a wiki-scoped token — so the form is `BusinessSourceForm`
+ * (#848) rather than a generic kind/title/URL block that could register a
+ * `github_md` or `ado_wiki` row and never supply what makes it work.
+ *
  * ## Local form state
  *
  * Whether the add form is open is `useState`, not a query param: it is a
@@ -68,9 +74,6 @@ import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
  * half-typed form on reload would be a URL that lies. Navigation stays in the
  * path (the tab itself is `projects/:projectGuid/business`), per CLAUDE.md.
  */
-
-/** The v1 kinds, in the order the picker offers them. `notion` is v2 (#832). */
-const KINDS: BusinessSourceKind[] = ["url", "github_md", "ado_wiki", "upload"];
 
 const KIND_ICON: Record<BusinessSourceKind, typeof Globe> = {
   url: Globe,
@@ -90,45 +93,25 @@ const STATUS_STYLE: Record<BusinessSourceOut["status"], [string, string]> = {
 export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
   const { t } = useTranslation("projects");
   const sources = useBusinessSources(projectGuid);
-  const create = useCreateBusinessSource(projectGuid);
   const update = useUpdateBusinessSource(projectGuid);
   const remove = useDeleteBusinessSource(projectGuid);
   const sync = useSyncBusinessSource(projectGuid);
 
   const [adding, setAdding] = useState(false);
-  const [kind, setKind] = useState<BusinessSourceKind>("url");
-  const [title, setTitle] = useState("");
-  const [url, setUrl] = useState("");
   const [confirming, setConfirming] = useState<BusinessSourceOut | null>(null);
 
   const rows = sources.data ?? [];
 
-  const closeForm = () => {
+  /**
+   * A source was registered: close the composer and start its fetch.
+   *
+   * Quietly, and only for a link: the row's own status is where the outcome
+   * belongs, and an upload arrives already ingested (the server 400s a sync on
+   * one — it has no address to re-fetch from).
+   */
+  const onCreated = (row: BusinessSourceOut) => {
     setAdding(false);
-    setTitle("");
-    setUrl("");
-  };
-
-  const submit = () => {
-    // An upload carries no URL at all (the server drops one that is sent), and
-    // its title is its identity — so that is the field the form requires.
-    const body =
-      kind === "upload"
-        ? { kind, title: title.trim() }
-        : { kind, title: title.trim() || undefined, url: url.trim() };
-    create.mutate(body, {
-      onSuccess: (row) => {
-        toast.success(t("businessTab.form.created", { title: row.title }));
-        closeForm();
-        // A link the user just added starts fetching without a second click.
-        // Quietly: the row's own status is where the outcome belongs, and a
-        // second toast about a fetch they did not explicitly ask for would be
-        // noise stacked on the "Added" one.
-        if (row.kind !== "upload") sync.mutate(row.id);
-      },
-      onError: (e) =>
-        toast.error(e instanceof Error ? e.message : t("businessTab.form.error")),
-    });
+    if (row.kind !== "upload") sync.mutate(row.id);
   };
 
   const toggleExcluded = (row: BusinessSourceOut) =>
@@ -179,9 +162,6 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
     );
   }
 
-  const canSubmit =
-    kind === "upload" ? title.trim().length > 0 : url.trim().length > 0;
-
   return (
     <div className="flex flex-col gap-3.5">
       <section className="overflow-hidden rounded-2xl border border-bd2 bg-pop">
@@ -204,7 +184,7 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
             <Button
               variant={adding ? "ghost" : "primary"}
               size="sm"
-              onClick={() => (adding ? closeForm() : setAdding(true))}
+              onClick={() => setAdding(!adding)}
               data-testid="business-add-toggle"
             >
               {adding ? <X size={14} strokeWidth={2.4} /> : <Plus size={14} strokeWidth={2.4} />}
@@ -214,66 +194,11 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
         </header>
 
         {adding && (
-          <div
-            className="flex flex-col gap-3 border-b border-bd3 px-5 py-4"
-            data-testid="business-add-form"
-          >
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <Field label={t("businessTab.form.kind")}>
-                <Select
-                  value={kind}
-                  options={KINDS.map((k) => ({
-                    value: k,
-                    label: t(`businessTab.kinds.${k}`),
-                  }))}
-                  placeholder={t("businessTab.form.kindPlaceholder")}
-                  allowClear={false}
-                  fullWidth
-                  onChange={(v) => v && setKind(v as BusinessSourceKind)}
-                />
-              </Field>
-              <Field label={t("businessTab.form.title")}>
-                <input
-                  className={inputCls}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={t("businessTab.form.titlePlaceholder")}
-                  data-testid="business-title-input"
-                />
-              </Field>
-            </div>
-            {kind === "upload" ? (
-              <p className="m-0 text-[11.5px] leading-relaxed text-faint">
-                {t("businessTab.form.titleHint")}
-              </p>
-            ) : (
-              <Field label={t("businessTab.form.url")}>
-                <input
-                  className={inputCls}
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder={t("businessTab.form.urlPlaceholder")}
-                  data-testid="business-url-input"
-                />
-              </Field>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={closeForm}>
-                {t("businessTab.cancel")}
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={!canSubmit || create.isPending}
-                onClick={submit}
-                data-testid="business-submit"
-              >
-                {create.isPending
-                  ? t("businessTab.form.submitting")
-                  : t("businessTab.form.submit")}
-              </Button>
-            </div>
-          </div>
+          <BusinessSourceForm
+            projectGuid={projectGuid}
+            onCreated={onCreated}
+            onCancel={() => setAdding(false)}
+          />
         )}
 
         {sources.isLoading ? (
@@ -314,18 +239,6 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
         onClose={() => setConfirming(null)}
       />
     </div>
-  );
-}
-
-const inputCls =
-  "w-full rounded-[10px] border border-bd2 bg-card px-3 py-2 text-[13px] text-txt3 outline-none placeholder:text-label focus:border-p";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-[11.5px] font-semibold text-txt4">{label}</span>
-      {children}
-    </label>
   );
 }
 

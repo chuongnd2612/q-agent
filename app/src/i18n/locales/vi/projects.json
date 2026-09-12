@@ -81,12 +81,51 @@
       "kindPlaceholder": "Chọn loại nguồn",
       "title": "Tiêu đề",
       "titlePlaceholder": "Quy tắc điều kiện hưởng",
-      "titleHint": "Cách tài liệu này hiển thị trong danh sách. Tài liệu tải lên được nhận diện bằng tiêu đề của nó.",
       "url": "Đường dẫn",
-      "urlPlaceholder": "https://wiki.example.com/eligibility",
+      "urlPlaceholder": {
+        "url": "https://wiki.example.com/eligibility",
+        "github_md": "https://github.com/acme/handbook/tree/main/docs",
+        "ado_wiki": "https://dev.azure.com/acme/Payments/_wiki/wikis/Payments.wiki"
+      },
+      "addressHint": {
+        "url": "Chỉ tải đúng một trang, đúng một lần. Các liên kết trên trang đó không được đi theo, và không dùng thông tin đăng nhập nào.",
+        "github_md": "Một kho mã, một thư mục, hoặc một tệp .md — hãy dán đường dẫn đúng như nó hiển thị trên thanh địa chỉ của GitHub.",
+        "ado_wiki": "Dán đường dẫn của bất kỳ trang nào trong wiki bạn muốn. Mọi trang nằm dưới nó đều sẽ được tải."
+      },
+      "upload": {
+        "file": "Tài liệu",
+        "choose": "Chọn tệp",
+        "none": "Chưa chọn tệp nào",
+        "hint": "Phiên bản này chỉ nhận tệp .md và .txt, tối đa 10 MB mỗi tệp. Tệp được đọc và lưu ngay khi thêm, nên sau đó không cần tải lại."
+      },
+      "github": {
+        "connection": "Kết nối GitHub",
+        "public": "Kho mã công khai — không cần token",
+        "noConnections": "Chưa có kết nối GitHub nào",
+        "hubOption": "{{name}} (do EmeHub quản lý)",
+        "publicNote": "Kho mã công khai hoàn toàn không cần token. Chỉ gắn kết nối GitHub nếu kho mã ở chế độ riêng tư — token của nó cần phạm vi contents:read.",
+        "hubNote": "Kết nối này do EmeHub quản lý và EmeHub không bao giờ trả token ra ngoài, nên kho mã sẽ được đọc ẩn danh. Điều đó vẫn ổn với kho mã công khai; còn kho mã riêng tư sẽ báo rằng nó có thể là riêng tư và cần phạm vi contents:read.",
+        "refNote": "Tên nhánh có dấu gạch chéo, ví dụ release/2024, chỉ được đọc phần đầu tiên — đường dẫn web của GitHub không phân biệt được nó với một thư mục. Hãy liên kết thư mục trên một nhánh không có dấu gạch chéo, hoặc liên kết thẳng tệp."
+      },
+      "ado": {
+        "pat": "Token có phạm vi đọc wiki",
+        "patPlaceholder": "Personal access token có quyền Wiki (Read)",
+        "test": "Kiểm tra wiki này",
+        "testing": "Đang kiểm tra…",
+        "testOk": "Đọc được wiki “{{wiki}}”",
+        "testFailed": "Token này không đọc được wiki",
+        "connection": "Kết nối Azure DevOps (tùy chọn)",
+        "noConnection": "Không dùng — lấy token ở trên",
+        "noConnections": "Chưa có kết nối Azure DevOps nào",
+        "hubRefusal": "Không thể đọc trang wiki qua kết nối EmeHub dùng chung — EmeHub không bao giờ trả token Azure DevOps ra ngoài. Hãy thêm một token có phạm vi đọc wiki cho dự án này.",
+        "missing": "Wiki Azure DevOps này cần một token. Hãy thêm personal access token có quyền Wiki (Read) ở trên, hoặc chọn một kết nối đang giữ token.",
+        "connectionNote": "Nguồn này sẽ dùng token của kết nối. Nếu việc tải thất bại vì thiếu phạm vi, hãy thêm token có phạm vi đọc wiki ở trên — kết nối tạo ra cho work item không có quyền Wiki (Read).",
+        "sourceNote": "Token này được mã hóa và chỉ lưu cho riêng nguồn này, và sẽ không bao giờ hiển thị lại."
+      },
       "submit": "Thêm nguồn",
       "submitting": "Đang thêm…",
       "created": "Đã thêm “{{title}}”",
+      "uploaded": "Đã tải lên “{{title}}”",
       "error": "Không thêm được nguồn này"
     },
     "kinds": {

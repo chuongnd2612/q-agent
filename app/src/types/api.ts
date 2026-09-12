@@ -24,6 +24,18 @@ export interface ConnectionOut {
   secretFields: string[];
   lastSync: string | null;
   lastTestedAt: string | null;
+  /**
+   * True when this connection mirrors one EmeHub owns (#501).
+   *
+   * It is a *healthy* connection — tickets and repos work through it — but it
+   * holds no credential of its own and never will, because the hub answers
+   * `hasPat` and never releases the PAT. Anything that needs the raw token
+   * (reading an Azure DevOps **wiki**) therefore cannot use it, which is why
+   * this is on the wire: the Business tab says so at the field the user is
+   * looking at rather than letting them add a source that could only ever fail
+   * (#848). Mirrors `ProviderConnection.is_hub_backed`.
+   */
+  hubBacked: boolean;
 }
 
 /** Grouped provider catalog entry: one kind with its N connections. */
@@ -1536,6 +1548,31 @@ export interface BusinessSourceOut {
 
 /** The v1 source kinds. `notion` is deferred to v2 (#832). */
 export type BusinessSourceKind = "upload" | "url" | "github_md" | "ado_wiki";
+
+/**
+ * Where an Azure DevOps wiki source's token comes from
+ * (`GET /projects/{guid}/business/sources/{id}/ado-credential`, #822).
+ *
+ * `origin` is the backend's own `credentials.credential_origin` verdict —
+ * `source` | `connection` | `hub` | `missing` | `none` — exposed so the UI
+ * reports the branch rather than inferring it from a status.
+ */
+export interface BusinessAdoCredentialOut {
+  sourceId: number;
+  origin: "source" | "connection" | "hub" | "missing" | "none";
+  hasToken: boolean;
+  /** True only when a sync can actually be attempted. */
+  canSync: boolean;
+  message: string;
+}
+
+/** What a wiki-scoped PAT proved it could see, before anything was stored. */
+export interface BusinessAdoPreflightOut {
+  ok: boolean;
+  project: string;
+  wiki: string;
+  wikis: string[];
+}
 
 export interface BusinessSourceCreate {
   kind: BusinessSourceKind;
