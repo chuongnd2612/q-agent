@@ -35,7 +35,7 @@ from loguru import logger
 from app import db as db_module
 from app.db import utcnow
 from app.models.business import BusinessSource
-from app.services.business_ingest import adapters, storage
+from app.services.business_ingest import adapters, credentials, storage
 from app.services.business_ingest.base import (
     BusinessIngestError,
     FetchedDoc,
@@ -158,6 +158,12 @@ def sync_source(
     source.status = "syncing"
     source.last_error = ""
     db.commit()
+    # The adapter never resolves its own secret (that is what lets it be tested
+    # with a literal token), so the lookup happens here, once, from the source's
+    # own ``connection_id`` — #821. ``None`` stays ``None`` for the
+    # credential-free kinds, and an explicit credential always wins.
+    if credential is None:
+        credential = credentials.resolve_credential(db, source)
     try:
         documents = adapters.get_adapter(source.kind).fetch(source, credential)
     except SourceFetchError as exc:
