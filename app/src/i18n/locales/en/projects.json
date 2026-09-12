@@ -101,7 +101,10 @@
       "synced": "Ready",
       "error": "Failed"
     },
-    "pendingNote": "Sources are registered here now; fetching their content lands in a later release, so a new source stays “Not fetched yet”.",
+    "pendingNote": "Registering a source does not fetch it. A new link starts fetching as soon as it is added, and “Sync now” on any row fetches it again — the row’s status is the fetch.",
+    "syncNow": "Sync now",
+    "syncStarted": "Fetching “{{title}}”…",
+    "syncError": "Could not start that sync",
     "sources_one": "{{count}} source",
     "sources_other": "{{count}} sources",
     "excluded": "Excluded",
