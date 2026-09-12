@@ -26,6 +26,7 @@ from app.routers import (
     auth,
     automation,
     automation_projects,
+    business_ado,
     business_ingest,
     business_knowledge,
     comments,
@@ -495,6 +496,12 @@ def create_app() -> FastAPI:
         # `/projects/{project_guid}/business` prefix with the source registry
         # router (#817) — one URL space, two concerns, no path declared twice.
         business_ingest,
+        # Azure DevOps wiki credentials (#822). Same `/projects/{guid}/business`
+        # prefix again, and again no path shared with the other two: the
+        # credential for a wiki source is a third concern with a third failure
+        # surface, and it is the surface that tells a user *why* their existing
+        # ADO connection cannot read the wiki (#501).
+        business_ado,
     ):
         app.include_router(module.router, dependencies=[Depends(bind_audit_actor)])
 

@@ -46,6 +46,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     ForeignKey,
     Integer,
@@ -148,6 +149,16 @@ class BusinessSource(Base):
     #: Out of context, **not** deleted — the snapshot and its provenance survive
     #: so an artifact generated from it stays attributable.
     excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    #: Encrypted secret values for *this* source, in exactly the shape and with
+    #: exactly the helpers ``ProviderConnection.secrets`` already uses
+    #: (:mod:`app.crypto`) — one credential mechanism in the codebase, not two.
+    #: It exists because a project's Azure DevOps connection frequently *cannot*
+    #: supply one: a hub-backed connection holds no PAT and never will (#501),
+    #: and a local one is scoped to work items rather than wikis. So a
+    #: wiki-scoped token per source is the path that always works (#822). NULL /
+    #: empty for every credential-free kind, and never serialized to a client.
+    secrets: Mapped[dict] = mapped_column(JSON, default=dict)
 
     #: Workspace-relative paths under ``scoped_business_dir(owner_id)``: the raw
     #: bytes as fetched, and the normalized markdown derived from them.

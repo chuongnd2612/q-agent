@@ -142,10 +142,18 @@ def test_orm_and_migration_agree_on_columns(tmp_path, monkeypatch, model, table)
     Downstream slices build against the ORM; the running database is built by
     Alembic. Comparing the two column sets here is what keeps a column added in
     one place from being missing in the other.
+
+    Upgraded to **head** rather than to :data:`UNDER_TEST`, unlike every other
+    test in this file: the ORM is only ever a snapshot of the *latest* schema, so
+    pinning it against one revision makes this fail on the next correct column
+    anybody adds (#822's ``business_source.secrets`` was the first). The rest of
+    the file stays pinned, because those assertions really are about what
+    ``c5e9b3a71d84`` itself does.
     """
     import app.models.business as business_models
 
-    engine = _upgraded(tmp_path, monkeypatch, f"orm-{table}.db")
+    engine = _temp_db(tmp_path, monkeypatch, f"orm-{table}.db")
+    command.upgrade(_alembic_cfg(), "heads")
     orm_columns = {col.name for col in getattr(business_models, model).__table__.columns}
 
     assert orm_columns == _columns(engine, table)
