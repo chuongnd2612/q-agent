@@ -43,10 +43,11 @@ def _load_builtin() -> None:
         return
     _loaded = True
 
+    from app.services.business_ingest.adapters.ado_wiki import AdoWikiAdapter
     from app.services.business_ingest.adapters.upload import UploadAdapter
     from app.services.business_ingest.adapters.url import UrlAdapter
 
-    for adapter in (UploadAdapter(), UrlAdapter()):
+    for adapter in (UploadAdapter(), UrlAdapter(), AdoWikiAdapter()):
         _REGISTRY.setdefault(adapter.kind, adapter)
 
 

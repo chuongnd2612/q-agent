@@ -35,7 +35,7 @@ from loguru import logger
 from app import db as db_module
 from app.db import utcnow
 from app.models.business import BusinessSource
-from app.services.business_ingest import adapters, storage
+from app.services.business_ingest import adapters, credentials, storage
 from app.services.business_ingest.base import (
     BusinessIngestError,
     FetchedDoc,
@@ -159,6 +159,13 @@ def sync_source(
     source.last_error = ""
     db.commit()
     try:
+        if credential is None:
+            # Resolved here rather than by the caller, because the only caller
+            # that *has* a request context (the sync endpoint) is owned by a
+            # different slice. The adapter still never resolves its own secret
+            # — the contract in `base` is intact — and a caller that already
+            # holds one passes it and skips this entirely.
+            credential = credentials.resolve_credential(db, source)
         documents = adapters.get_adapter(source.kind).fetch(source, credential)
     except SourceFetchError as exc:
         source.status = "error"
