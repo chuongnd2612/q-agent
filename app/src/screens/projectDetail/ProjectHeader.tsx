@@ -30,7 +30,7 @@ export function ProjectHeader({
     <>
       <button
         onClick={onBack}
-        className="mb-3.5 flex cursor-pointer items-center gap-[7px] border-none bg-transparent p-0 text-[12.5px] font-semibold text-ink-dim hover:text-[#c7c7d4]"
+        className="mb-3.5 flex cursor-pointer items-center gap-[7px] border-none bg-transparent p-0 text-[12.5px] font-semibold text-ink-dim hover:text-txt"
       >
         <ArrowLeft size={14} strokeWidth={2.2} /> {t("header.back")}
       </button>

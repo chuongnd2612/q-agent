@@ -13,8 +13,12 @@ import { useSettings } from "@/hooks/queries";
  *
  * The value is a readability decision, not a taste one: the constellation was bleeding
  * through panels far enough to compete with body text.
+ *
+ * It is a theme token rather than a literal (#844): the same near-black veil over the
+ * LIGHT backdrop repainted the whole content area dark, so the page's own ink — the
+ * project header title among it — became unreadable on it.
  */
-const BACKDROP_VEIL = "rgba(9,9,14,.55)";
+const BACKDROP_VEIL = "var(--backdropVeil)";
 
 /**
  * Chooses the app backdrop based on the user's "3D background" setting. When on
@@ -44,5 +48,5 @@ export function AppBackground() {
       </>
     );
   }
-  return <div className="fixed inset-0 z-0" style={{ background: "#0a0a0f" }} />;
+  return <div className="fixed inset-0 z-0" style={{ background: "var(--bg)" }} />;
 }
