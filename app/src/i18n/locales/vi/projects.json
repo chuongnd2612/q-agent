@@ -101,7 +101,10 @@
       "synced": "Sẵn sàng",
       "error": "Thất bại"
     },
-    "pendingNote": "Hiện tại nguồn chỉ được đăng ký ở đây; việc tải nội dung sẽ có trong bản phát hành sau, nên nguồn mới vẫn ở trạng thái “Chưa tải nội dung”.",
+    "pendingNote": "Đăng ký một nguồn không tự tải nội dung. Một đường dẫn mới sẽ bắt đầu tải ngay khi được thêm, và “Tải lại ngay” trên bất kỳ dòng nào sẽ tải lại nó — trạng thái của dòng chính là kết quả tải.",
+    "syncNow": "Tải lại ngay",
+    "syncStarted": "Đang tải “{{title}}”…",
+    "syncError": "Không bắt đầu được việc tải nội dung",
     "sources_one": "{{count}} nguồn",
     "sources_other": "{{count}} nguồn",
     "excluded": "Đã loại trừ",

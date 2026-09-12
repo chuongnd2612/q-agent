@@ -8,6 +8,7 @@ import {
   Globe,
   Eye,
   Plus,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
   useBusinessSources,
   useCreateBusinessSource,
   useDeleteBusinessSource,
+  useSyncBusinessSource,
   useUpdateBusinessSource,
 } from "@/hooks/queries";
 import { toast } from "@/lib/toast";
@@ -31,14 +33,23 @@ import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
  * PEER of Project Knowledge rather than a section of it, which is why it is its
  * own tab beside it rather than another panel inside it.
  *
- * ## CRUD only in this slice
+ * ## Syncing is explicit on the server, automatic in the UI (#845)
  *
- * Nothing here starts a fetch. A registered source stays `pending` until the
- * ingestion pipeline (#818) lands behind exactly this row shape, so the panel
- * says so in as many words (`pendingNote`) instead of leaving the user to read
- * "Not fetched yet" as a stuck job. `excluded` is likewise a context switch, not
- * a soft delete: the snapshot and its provenance survive so an artifact already
- * generated from the source stays attributable.
+ * `POST /sources` deliberately does not fetch: registering a document should not
+ * make its 201 depend on a remote host being reachable, and #821/#822 add kinds
+ * whose fetch needs a connection that may be picked after the row exists. But a
+ * source that sits at `pending` with nothing able to advance it reads as a
+ * broken feature — so the panel fires the sync itself on the create it just
+ * made, and every link row carries a **Sync now** action for the re-fetch and
+ * the retry. The side effect stays where the user can see it (the row goes to
+ * `Fetching…`) instead of hiding inside a POST.
+ *
+ * An upload has no address to re-fetch from, so it gets no sync action at all
+ * rather than one that 400s — the server enforces the same rule.
+ *
+ * `excluded` is a context switch, not a soft delete: the snapshot and its
+ * provenance survive so an artifact already generated from the source stays
+ * attributable.
  *
  * ## Opaque surface, not GlassCard
  *
@@ -82,6 +93,7 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
   const create = useCreateBusinessSource(projectGuid);
   const update = useUpdateBusinessSource(projectGuid);
   const remove = useDeleteBusinessSource(projectGuid);
+  const sync = useSyncBusinessSource(projectGuid);
 
   const [adding, setAdding] = useState(false);
   const [kind, setKind] = useState<BusinessSourceKind>("url");
@@ -108,6 +120,11 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
       onSuccess: (row) => {
         toast.success(t("businessTab.form.created", { title: row.title }));
         closeForm();
+        // A link the user just added starts fetching without a second click.
+        // Quietly: the row's own status is where the outcome belongs, and a
+        // second toast about a fetch they did not explicitly ask for would be
+        // noise stacked on the "Added" one.
+        if (row.kind !== "upload") sync.mutate(row.id);
       },
       onError: (e) =>
         toast.error(e instanceof Error ? e.message : t("businessTab.form.error")),
@@ -128,6 +145,13 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
           toast.error(e instanceof Error ? e.message : t("businessTab.updateError")),
       },
     );
+
+  /** Fetch this source now — the affordance that moves a row off `pending`. */
+  const syncNow = (row: BusinessSourceOut) =>
+    sync.mutate(row.id, {
+      onSuccess: () => toast.success(t("businessTab.syncStarted", { title: row.title })),
+      onError: (e) => toast.error(e instanceof Error ? e.message : t("businessTab.syncError")),
+    });
 
   const confirmDelete = () => {
     const row = confirming;
@@ -263,7 +287,9 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
                 key={row.id}
                 row={row}
                 busy={update.isPending && update.variables?.id === row.id}
+                syncing={row.status === "syncing" || (sync.isPending && sync.variables === row.id)}
                 onToggle={() => toggleExcluded(row)}
+                onSync={() => syncNow(row)}
                 onDelete={() => setConfirming(row)}
               />
             ))}
@@ -333,12 +359,16 @@ function EmptyState({ onAdd, formOpen }: { onAdd: () => void; formOpen: boolean 
 function SourceRow({
   row,
   busy,
+  syncing,
   onToggle,
+  onSync,
   onDelete,
 }: {
   row: BusinessSourceOut;
   busy: boolean;
+  syncing: boolean;
   onToggle: () => void;
+  onSync: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation("projects");
@@ -403,6 +433,18 @@ function SourceRow({
         >
           {row.excluded ? t("businessTab.excluded") : t(`businessTab.status.${row.status}`)}
         </span>
+        {row.kind !== "upload" && (
+          <button
+            onClick={onSync}
+            disabled={syncing}
+            title={t("businessTab.syncNow")}
+            aria-label={t("businessTab.syncNow")}
+            data-testid="business-sync"
+            className="cursor-pointer rounded-lg p-1.5 text-txt4 hover:bg-card3 hover:text-p disabled:cursor-default disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={syncing ? "animate-spin" : undefined} />
+          </button>
+        )}
         <button
           onClick={onToggle}
           disabled={busy}

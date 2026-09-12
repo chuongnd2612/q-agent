@@ -13,9 +13,19 @@ Why a separate module, for the same reasons ``automation_projects.py`` is one:
 * File-disjointness is what lets #818 (ingestion) and #823 (the QC voice gate)
   land in parallel with this slice.
 
-**This slice registers sources; it never fetches one.** Every created row reads
-``status="pending"`` and stays there. The ingestion pipeline that moves it to
-``syncing``/``synced``/``error`` is #818 and lands behind exactly this row shape.
+**This router registers sources; it never fetches one.** Every created row reads
+``status="pending"`` until something starts an ingestion — which is the sync
+endpoint in :mod:`app.routers.business_ingest` (#818), deliberately still an
+explicit act rather than a side effect of ``POST /sources``: registering a
+document should not make its 201 depend on a remote host being up, and #821/#822
+add kinds whose fetch needs a connection that may be chosen after the row exists.
+The SPA fires that sync itself right after a successful create, so a link the
+user just added starts fetching without a second click (#845).
+
+The two helpers this router shares with the ingestion one — the #585
+GUID-or-name bridge and the per-source ownership check — live in
+:mod:`app.services.business_source_service`, not here: two copies of an identity
+rule drift, and a drift there is an authorisation bug (#845).
 """
 
 from __future__ import annotations
@@ -26,84 +36,12 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps_auth import current_user
 from app.models.business import BUSINESS_SOURCE_KINDS, BusinessSource
-from app.models.project import Project
 from app.models.user import User
 from app.schemas import BusinessSourceCreate, BusinessSourceOut, BusinessSourceUpdate
 from app.services import business_source_service as sources
-from app.services import project_config_service
-from app.services.ownership import check_owned_or_404, stamp_owner
+from app.services.ownership import stamp_owner
 
 router = APIRouter(prefix="/projects/{project_guid}/business", tags=["business"])
-
-
-def _resolve_project(db: Session, project_guid: str, user: User | None) -> tuple[str, str]:
-    """The ``(guid, name)`` of the project the path addresses.
-
-    Accepts a GUID **or** a name, the same #585 bridge every other project route
-    carries: the SPA sends GUIDs, but an older deep link or a test fixture may
-    send the name, and a row keyed on whichever string arrived would put names
-    into ``project_guid``. Resolving here means the column always holds a GUID.
-
-    Owner-scoped: a GUID resolves only to a project the caller may see, so it
-    cannot be used to discover another user's project name.
-
-    Args:
-        db: Active session.
-        project_guid: The path identifier — GUID or name.
-        user: The caller, or ``None`` under the #91 ownership bridge.
-
-    Returns:
-        The project's GUID and its display name.
-
-    Raises:
-        HTTPException: 404 when no project the caller may see matches.
-    """
-    query = db.query(Project)
-    if project_config_service.looks_like_guid(project_guid):
-        query = query.filter(Project.guid == project_guid)
-    else:
-        query = query.filter(Project.name == project_guid)
-    if user is not None:
-        # Own rows or shared/legacy ones (owner_id NULL), matching
-        # `ownership._ownership_mismatch` — never someone else's.
-        query = query.filter((Project.owner_id == user.id) | (Project.owner_id.is_(None)))
-    project = query.first()
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"Project '{project_guid}' not found")
-    return project.guid, project.name
-
-
-def _source_or_404(
-    db: Session, guid: str, source_id: int, user: User | None
-) -> BusinessSource:
-    """The source ``source_id``, proven to belong to ``guid`` and to ``user``.
-
-    Three checks, and all three have to be here rather than at the call sites:
-
-    1. The row exists.
-    2. It belongs to the project named in the path — so a source id that exists
-       under a *different* project cannot be reached by naming this one.
-    3. ``check_owned_or_404`` rejects another user's row. Missing and forbidden
-       are indistinguishable (both 404, per ADR 0008/0009): a 403 would confirm
-       the row exists to somebody not allowed to know that.
-
-    Args:
-        db: Active session.
-        guid: The resolved project GUID.
-        source_id: The ``BusinessSource`` id, from the path.
-        user: The caller, or ``None`` under the #91 ownership bridge.
-
-    Returns:
-        The resolved :class:`BusinessSource`.
-
-    Raises:
-        HTTPException: 404 in every failing case.
-    """
-    row = db.get(BusinessSource, source_id)
-    if row is None or row.project_guid != guid:
-        raise HTTPException(status_code=404, detail="Business source not found")
-    check_owned_or_404(row, user, not_found="Business source not found")
-    return row
 
 
 @router.get("/sources", response_model=list[BusinessSourceOut])
@@ -117,7 +55,7 @@ def list_business_sources(
     Scoped to ``user`` (#93): another user's sources are not listed, and there is
     no "all sources" view to fall back to.
     """
-    guid, _ = _resolve_project(db, project_guid, user)
+    guid, _ = sources.resolve_project(db, project_guid, user)
     return sources.visible_sources(db, guid, user)
 
 
@@ -149,7 +87,7 @@ def create_business_source(
         HTTPException: 400 on a bad ``kind`` or URL, 409 on a duplicate, 404
             when the project is not the caller's to add to.
     """
-    guid, name = _resolve_project(db, project_guid, user)
+    guid, name = sources.resolve_project(db, project_guid, user)
 
     kind = (body.kind or "").strip()
     if kind not in BUSINESS_SOURCE_KINDS:
@@ -212,8 +150,8 @@ def update_business_source(
     so an artifact already generated from this source remains attributable while
     the source stops feeding new ones (epic #813).
     """
-    guid, _ = _resolve_project(db, project_guid, user)
-    row = _source_or_404(db, guid, source_id, user)
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    row = sources.source_or_404(db, guid, source_id, user)
 
     if body.title is not None:
         title = body.title.strip()
@@ -242,6 +180,6 @@ def delete_business_source(
     :func:`business_source_service.delete_source`, which also explains why the
     distilled facts deliberately survive.
     """
-    guid, _ = _resolve_project(db, project_guid, user)
-    row = _source_or_404(db, guid, source_id, user)
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    row = sources.source_or_404(db, guid, source_id, user)
     sources.delete_source(db, row)

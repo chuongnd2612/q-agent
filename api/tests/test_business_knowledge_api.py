@@ -326,7 +326,7 @@ def test_a_source_cannot_be_reached_through_another_project_of_the_same_owner(
     """Naming a different project in the path does not hop to someone else's row.
 
     Both projects here belong to **A**, so ownership alone cannot refuse this —
-    only the `project_guid` check in `_source_or_404` can, which is exactly what
+    only the `project_guid` check in `source_or_404` can, which is exactly what
     this pins.
     """
     user_a, headers_a, project_a = two_projects["a"]

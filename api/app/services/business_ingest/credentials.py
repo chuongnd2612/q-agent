@@ -48,6 +48,7 @@ from app.services.business_ingest.base import SourceCredential, SourceFetchError
 
 __all__ = [
     "CREDENTIAL_FREE_KINDS",
+    "OPTIONAL_CREDENTIAL_KINDS",
     "HUB_BACKED_MESSAGE",
     "NO_CREDENTIAL_MESSAGE",
     "CONNECTION_MISSING_MESSAGE",
@@ -63,6 +64,14 @@ __all__ = [
 #: Kinds that are fetched without any secret. Stated as the exception list so a
 #: new credentialed kind (#821's ``github_md``) needs no edit here at all.
 CREDENTIAL_FREE_KINDS = ("upload", "url")
+
+#: Kinds that *can* use a token but do not require one. A public GitHub
+#: repository needs no credential at all, and that is the common case (#821), so
+#: a missing token here is not a refusal — the adapter's own 404 is what tells
+#: the user to connect an account when the repo turns out to be private.
+#: ``ado_wiki`` is deliberately NOT in this set: an unauthenticated wiki read
+#: gets a login page, not a 404, so guessing would hand the distiller HTML.
+OPTIONAL_CREDENTIAL_KINDS = ("github_md",)
 
 #: The key inside ``BusinessSource.secrets``. Mirrors ``ProviderConnection``'s
 #: ``secrets["pat"]`` so there is one spelling for "the Azure DevOps token".
@@ -160,8 +169,16 @@ def credential_origin(db: Session, source: BusinessSource) -> str:
             return "missing"
         if connection.is_hub_backed:
             return "hub"
+        owner_id = getattr(source, "owner_id", None)
+        if owner_id is not None and connection.owner_id not in (None, owner_id):
+            return "missing"
         if crypto.decrypt((connection.secrets or {}).get(_TOKEN_KEY)):
             return "connection"
+    elif source.kind in OPTIONAL_CREDENTIAL_KINDS:
+        # Anonymous is a legitimate, working state for a public repository, so
+        # it reports as "none" rather than "missing" — the UI must not nag about
+        # a token the common case does not need.
+        return "none"
     return "missing"
 
 
@@ -184,15 +201,37 @@ def resolve_credential(db: Session, source: BusinessSource) -> SourceCredential 
     if token:
         return SourceCredential(token=token, extra={"origin": "source"})
 
+    def refuse(message: str) -> None:
+        """Refuse, or fall through to anonymous when the kind allows it.
+
+        The two slices that built this module disagreed, and both were right
+        about their own kind. A GitHub source that cannot produce a token should
+        try anonymously: the common case is a PUBLIC repository, and if it turns
+        out to be private the adapter's own 404 names the fix (#821). A wiki read
+        without a token answers with a LOGIN PAGE rather than a 404, so falling
+        through there would hand the distiller a sign-in screen and call it
+        business knowledge (#822). Hence the refusal is keyed on whether the kind
+        can work anonymously at all, not on which refusal it is.
+        """
+        if source.kind in OPTIONAL_CREDENTIAL_KINDS:
+            return None
+        raise SourceFetchError(message)
+
     if source.connection_id:
         connection = db.get(ProviderConnection, source.connection_id)
         if connection is None:
-            raise SourceFetchError(CONNECTION_MISSING_MESSAGE)
+            return refuse(CONNECTION_MISSING_MESSAGE)
+        # ADR 0009 (#821): a per-user source never borrows another user's
+        # connection. Inheriting a credential from another row is how a private
+        # repository ends up read through somebody else's token.
+        owner_id = getattr(source, "owner_id", None)
+        if owner_id is not None and connection.owner_id not in (None, owner_id):
+            return refuse(CONNECTION_MISSING_MESSAGE)
         if connection.is_hub_backed:
-            raise SourceFetchError(HUB_BACKED_MESSAGE)
+            return refuse(HUB_BACKED_MESSAGE)
         stored = crypto.decrypt((connection.secrets or {}).get(_TOKEN_KEY))
         if not stored:
-            raise SourceFetchError(CONNECTION_HAS_NO_TOKEN_MESSAGE)
+            return refuse(CONNECTION_HAS_NO_TOKEN_MESSAGE)
         return SourceCredential(token=stored, extra={"origin": "connection"})
 
-    raise SourceFetchError(NO_CREDENTIAL_MESSAGE)
+    return refuse(NO_CREDENTIAL_MESSAGE)

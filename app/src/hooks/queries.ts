@@ -1229,19 +1229,29 @@ export const useExportAutomationProject = (runId: number | string) => {
 // ------------------------------------------ business knowledge sources (#817)
 //
 // The project's DOMAIN grounding — a peer of the code knowledge base, not a
-// section of it (ADR 0016). CRUD only in this slice: nothing here starts a
-// fetch, so a created source stays `pending`.
+// section of it (ADR 0016). Registering a source never fetches it: a created
+// row reads `pending` until `useSyncBusinessSource` starts the ingestion.
 //
-// All three mutations invalidate the one list query rather than patching the
-// cache by hand: the server owns `status`, `projectKey` and the ordering, and a
+// Every mutation invalidates the one list query rather than patching the cache
+// by hand: the server owns `status`, `projectKey` and the ordering, and a
 // hand-rolled optimistic row would be guessing at all three.
 
-/** Every source grounding this project, newest first. */
+/**
+ * Every source grounding this project, newest first.
+ *
+ * Polls **only while something is actually syncing** (#845). Ingestion runs in a
+ * server-side thread and reports itself through the row's `status`, so without
+ * this a source the user just synced would sit at `Fetching…` until they
+ * navigated away and back. A fixed interval would poll a settled list forever;
+ * the predicate makes the poll stop the moment the last row leaves `syncing`.
+ */
 export const useBusinessSources = (projectGuid: string | null) =>
   useQuery({
     queryKey: queryKeys.businessSources(projectGuid ?? ""),
     queryFn: () => api.listBusinessSources(projectGuid as string),
     enabled: !!projectGuid,
+    refetchInterval: (query) =>
+      query.state.data?.some((row) => row.status === "syncing") ? 2500 : false,
   });
 
 /** Register a document or link. Rejects a bad kind/URL and a duplicate (409). */
@@ -1271,6 +1281,22 @@ export const useDeleteBusinessSource = (projectGuid: string | null) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.deleteBusinessSource(projectGuid as string, id),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/**
+ * Fetch a link-backed source now — the affordance that moves a row off `pending`.
+ *
+ * Invalidating on success is what starts `useBusinessSources` polling: the 202
+ * leaves the row at `syncing`, the refetch picks that up, and the predicate on
+ * the list query keeps refetching until the pipeline settles it.
+ */
+export const useSyncBusinessSource = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.syncBusinessSource(projectGuid as string, id),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
   });

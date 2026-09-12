@@ -44,10 +44,11 @@ def _load_builtin() -> None:
     _loaded = True
 
     from app.services.business_ingest.adapters.ado_wiki import AdoWikiAdapter
+    from app.services.business_ingest.adapters.github_md import GitHubMarkdownAdapter
     from app.services.business_ingest.adapters.upload import UploadAdapter
     from app.services.business_ingest.adapters.url import UrlAdapter
 
-    for adapter in (UploadAdapter(), UrlAdapter(), AdoWikiAdapter()):
+    for adapter in (UploadAdapter(), UrlAdapter(), GitHubMarkdownAdapter(), AdoWikiAdapter()):
         _REGISTRY.setdefault(adapter.kind, adapter)
 
 
