@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from app.config import settings
 from app.db import init_db
 from app.logging import logger, setup_logging
+from app.models.automation_project import AutomationProject
 from app.models.run import Run
 from app.services.audit_context import bind_audit_actor
 from app.routers import (
@@ -176,6 +177,34 @@ def _run_ws_access_allowed(run_id: str, token: str | None) -> bool:
     if run is None:
         return False
     return _run_owner_allows(run.owner_id, user_id)
+
+
+def _project_ws_access_allowed(project_id: int, token: str | None) -> bool:
+    """True if the token's user may subscribe to an automation repo's WS channel (#808).
+
+    The project-scoped counterpart of :func:`_run_ws_access_allowed`, for the
+    channel a run-less Execution publishes on — ``execution_service.channel_key``
+    returns ``project:<automation_project_id>`` when ``run_id`` is ``NULL`` (#796).
+
+    ``project_id`` is the numeric :class:`AutomationProject.id` used by
+    ``/ws/projects/{project_id}``. Ownership is decided exactly as the run route
+    decides it, via :func:`_run_owner_allows`: an unowned repo (the shared /
+    auth-disabled namespace, ``owner_id`` NULL) is reachable by any authenticated
+    user, an owned one only by its owner.
+    """
+    user_id = _token_user_id(token)
+    if user_id is None:
+        return False
+    from app.db import SessionLocal  # see _artifact_access_allowed
+
+    db = SessionLocal()
+    try:
+        project = db.get(AutomationProject, project_id)
+    finally:
+        db.close()
+    if project is None:
+        return False
+    return _run_owner_allows(project.owner_id, user_id)
 
 
 def _recover_orphaned_runs() -> None:
@@ -455,6 +484,30 @@ def create_app() -> FastAPI:
                 await websocket.receive_text()
         except WebSocketDisconnect:
             hub.disconnect(run_id, websocket)
+
+    @app.websocket("/ws/projects/{project_id}")
+    async def project_execution_progress(websocket: WebSocket, project_id: int) -> None:
+        """Live progress for a project-scoped (run-less) Execution (#808).
+
+        Mirrors ``/ws/runs/{run_id}`` exactly — same token validation, same
+        ownership rule, same keep-alive loop — but resolves ownership through the
+        :class:`AutomationProject` and subscribes to the hub channel
+        ``project:<id>`` that ``execution_service.channel_key`` publishes on.
+        A non-integer ``project_id`` never reaches this handler at all: FastAPI
+        fails the path-param conversion and refuses the connection first.
+        """
+        if settings.auth_required:
+            token = websocket.query_params.get("token")
+            if not _token_accepted(token) or not _project_ws_access_allowed(project_id, token):
+                await websocket.close(code=1008)
+                return
+        channel = f"project:{project_id}"
+        await hub.connect(channel, websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            hub.disconnect(channel, websocket)
 
     @app.websocket("/ws/ai")
     async def ai_activity_ws(websocket: WebSocket) -> None:

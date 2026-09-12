@@ -1297,11 +1297,14 @@ export const useProjectExecutions = (
  * Polls **while the execution is still progressing**, for the same reason
  * `useRun` does (see {@link PROGRESSING_RUN_STATUSES}): the WS events that drive
  * the fast path are fire-and-forget, so a dropped one would otherwise freeze the
- * bar at "3 of 8" forever. Here the argument is stronger still — the project
- * channel (`project:<repoId>`) is served by `/ws/runs/{id}`, whose ownership
- * check parses the channel as an integer, so on an auth-required deployment the
- * socket is refused and polling is the *only* thing that moves the bar. Polling
- * stops the moment the row reaches a terminal status.
+ * bar at "3 of 8" forever. Polling stops the moment the row reaches a terminal
+ * status.
+ *
+ * Since #808 the project channel has a real WS route (`/ws/projects/{repoId}`),
+ * so the socket — not this — is what moves the bar, and the interval is a slow
+ * safety net for a dropped event or a socket that never connected. Kept rather
+ * than deleted because the events are still fire-and-forget; demoted from 2s so
+ * a working socket is not shadowed by a poll six times its update rate.
  */
 export const useProjectExecution = (executionId: number | null) =>
   useQuery({
@@ -1309,7 +1312,7 @@ export const useProjectExecution = (executionId: number | null) =>
     queryFn: () => api.getProjectExecution(executionId as number),
     enabled: executionId != null,
     refetchInterval: (query) =>
-      PROGRESSING_EXECUTION_STATUSES.has(query.state.data?.status ?? "") ? 2000 : false,
+      PROGRESSING_EXECUTION_STATUSES.has(query.state.data?.status ?? "") ? 15000 : false,
   });
 
 /**

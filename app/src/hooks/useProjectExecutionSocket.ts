@@ -18,18 +18,13 @@ import type { ExecCaseStatus, ProgressEvent, ProjectExecutionOut } from "@/types
  * rather than the project GUID precisely because the repo id is what the tab
  * already holds.
  *
- * The hub is keyed by an arbitrary string (`hub.connect("ai", …)`), so the
- * existing `/ws/runs/{id}` endpoint carries it unchanged.
- *
- * ## The socket is best-effort, and the caller must not depend on it
- *
- * `/ws/runs/{id}`'s ownership check (`_run_ws_access_allowed`) parses the
- * channel as an integer and refuses anything else, so on a deployment with
- * `auth_required` on, `project:<id>` is closed with 1008 and this hook delivers
- * nothing. That is why {@link useProjectExecution} polls while an execution is
- * progressing: the socket makes the bar move instantly where it connects, and
- * the poll is what guarantees it moves at all. A dedicated project WS route is
- * an API change and belongs to the API slice, not here.
+ * `/ws/projects/{repoId}` (#808) is the route that serves that channel: it
+ * subscribes to `project:<repoId>` and applies the same ownership check the run
+ * socket applies, through the `AutomationProject` instead of the `Run`. Before
+ * it existed the only endpoint was `/ws/runs/{id}`, whose check parses the
+ * channel as an integer, so `project:<id>` was closed with 1008 wherever
+ * `auth_required` was on and the bar moved only because {@link useProjectExecution}
+ * polled. That poll is now a slow safety net, not the mechanism.
  *
  * Reconnects with the same bounded backoff as `useRunSocket`.
  *
@@ -57,7 +52,7 @@ export function useProjectExecutionSocket(
 
     const connect = () => {
       if (closed) return;
-      ws = new WebSocket(api.wsUrl(`project:${repoId}`));
+      ws = new WebSocket(api.wsProjectUrl(repoId));
       ws.onopen = () => {
         retry = 0;
       };
