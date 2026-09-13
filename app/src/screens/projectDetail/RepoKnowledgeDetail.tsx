@@ -1,4 +1,4 @@
-import { ChevronRight, GitBranch, RotateCw, Sparkles } from "lucide-react";
+import { ChevronRight, GitBranch, Pencil, RotateCw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { confidenceColor } from "@/data/projects";
 import { useRepoKnowledge } from "@/hooks/queries";
 import type { KnowledgeBody, RepoKnowledgeOut } from "@/types/api";
+import { KnowledgeEditPanel } from "./KnowledgeEditPanel";
 
 /** Detail view for a single repo's knowledge base (loads it on demand). */
 export function RepoKnowledgeDetail({
@@ -26,6 +27,8 @@ export function RepoKnowledgeDetail({
   );
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  // The KB was rebuild-only until #828; this opens the per-entry edit panel.
+  const [editing, setEditing] = useState(false);
 
   if (repoMeta.status === "indexing") {
     return (
@@ -132,11 +135,23 @@ export function RepoKnowledgeDetail({
             )}
           </div>
         </div>
+        <Button variant="glass" onClick={() => setEditing((e) => !e)}>
+          <Pencil size={14} strokeWidth={2.2} /> {t("repoKnowledge.edit.open")}
+        </Button>
         <Button variant="glass" onClick={onBuild} disabled={building}>
           <RotateCw size={14} strokeWidth={2.2} />{" "}
           {building ? t("repoKnowledge.reindexing") : t("repoKnowledge.reindex")}
         </Button>
       </div>
+
+      {editing && (
+        <KnowledgeEditPanel
+          projectKey={projectKey}
+          repo={repoMeta.name}
+          knowledge={kn}
+          onClose={() => setEditing(false)}
+        />
+      )}
 
       {repoMeta.needsRefresh && (
         <div

@@ -90,6 +90,21 @@ export interface KnowledgeSelector {
   element: string;
   selector: string;
 }
+/** A human's per-entry corrections to a code knowledge base (#828).
+ *
+ *  Every field is optional and omitting one means **untouched** — this is a
+ *  PATCH. A submitted `routes`/`selectors` list is upserted entry by entry
+ *  (keyed on `path` / `selector`), and each entry comes back stamped
+ *  `{origin: "manual", pinned: true}` so it survives the next rebuild (#827). */
+export interface KnowledgePatchRequest {
+  /** `replaces` is the identity (`path` / `selector`) of the entry being
+   *  corrected. Without it, fixing a wrong selector would *add* the right one
+   *  and leave the wrong one standing in every prompt. */
+  routes?: Array<KnowledgeRoute & { replaces?: string }>;
+  selectors?: Array<KnowledgeSelector & { replaces?: string }>;
+  domain?: string;
+  businessEntities?: string[];
+}
 export interface KnowledgeBody {
   branch: string;
   stack: string[];

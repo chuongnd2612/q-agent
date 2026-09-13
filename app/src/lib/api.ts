@@ -60,6 +60,7 @@ import type {
   ConnectionProjectOut,
   ConnectionUpdate,
   KnowledgeBuildRequest,
+  KnowledgePatchRequest,
   ProjectConfigOut,
   ProjectExecutionOut,
   ProjectExecutionStart,
@@ -779,6 +780,17 @@ export const api = {
     getWithHubToken<ProjectKnowledgeOut>(
       `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge`,
       hubToken,
+    ),
+  // Per-entry corrections to the code knowledge base (#828). The KB used to be
+  // rebuild-only; edits made here are pinned and survive the next build.
+  patchRepoKnowledge: (
+    key: string,
+    repo: string,
+    body: KnowledgePatchRequest,
+  ) =>
+    patch<ProjectKnowledgeOut>(
+      `/projects/${encodeURIComponent(key)}/repos/${encodeURIComponent(repo)}/knowledge`,
+      body,
     ),
   buildRepoKnowledge: (
     key: string,

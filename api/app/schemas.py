@@ -251,6 +251,29 @@ class KnowledgeBuildRequest(ApiModel):
     framework: str | None = None
 
 
+class KnowledgePatchRequest(ApiModel):
+    """A human's per-entry corrections to a code knowledge base (#828).
+
+    Every field is optional and ``None`` means **untouched** — this is a PATCH, so
+    omitting ``routes`` leaves the routes alone rather than clearing them. A
+    submitted ``routes``/``selectors`` list is *upserted* entry by entry (keyed on
+    ``path`` / ``selector``), never a wholesale replacement of the section.
+
+    An entry may carry ``replaces`` — the identity of the entry it supersedes —
+    so a *correction* replaces the wrong value instead of adding a second entry
+    beside it.
+
+    Entries stay opaque ``dict``s rather than typed models so an entry keeps the
+    machine-discovered keys the edit form does not carry; the service normalises
+    the keys it owns (see ``knowledge_service._normalise_route``).
+    """
+
+    routes: list[dict] | None = None
+    selectors: list[dict] | None = None
+    domain: str | None = None
+    business_entities: list[str] | None = None
+
+
 # ------------------------------------------------------- Project repositories
 class AvailableRepoOut(ApiModel):
     """A repo discovered from the project's provider (for the picker)."""
