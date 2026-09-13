@@ -631,6 +631,10 @@ class CloneResultOut(ApiModel):
     config_cloned: bool = False
     knowledge_cloned: list[str] = Field(default_factory=list)
     artifacts_copied: list[str] = Field(default_factory=list)
+    #: Business Knowledge carried through the clone (#831, ADR 0016) — the
+    #: titles of the copied sources and how many distilled facts came with them.
+    business_sources_cloned: list[str] = Field(default_factory=list)
+    business_facts_cloned: int = 0
     doc_path: str = ""
     last_error: str = ""
 

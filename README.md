@@ -71,6 +71,20 @@ reference projects in a **shared namespace** that members **clone**, reusing the
 ~20-minute bootstrap instead of repeating it
 ([ADR 0009](docs/adr/0009-per-user-workspace-filesystem-and-cloning.md)).
 
+**Business Knowledge** — the code Knowledge Base answers *how the product is built*;
+**Business Knowledge** answers *what it is supposed to do*. It is a second, peer
+grounding source per project: wiki links and uploaded documents (`.md` / `.txt`,
+generic URL, GitHub markdown, Azure DevOps wiki) are **snapshotted** — raw bytes plus
+normalized markdown, with a content hash and `fetched_at` — then distilled into a short
+project **brief** and retrievable **facts** (glossary, rule, flow, actor, constraint,
+acceptance norm) that ground test-case authoring. Snapshots never live-sync: a changed
+upstream document surfaces as *stale* rather than silently shifting under a test case
+already generated from it, and a human correction is an **overlay row**, never a
+mutation, so a re-sync cannot destroy it. Business Knowledge is owned exactly like the
+code KB (per-user rows plus the admin shared namespace) and **travels through the
+project clone** — sources, facts, brief and document snapshots all land in the cloning
+member's own scope ([ADR 0016](docs/adr/0016-business-knowledge.md)).
+
 **Automation intelligence** — two authoring modes: `blind` (generate from the KB,
 then heal) and `live-harness` (an agentic Claude drives the real signed-in app via
 `browser-harness` and emits a spec from what it actually saw —
@@ -258,14 +272,26 @@ Once per project, on **Project Details**:
 - **Project Knowledge** — build a **Knowledge Base per repository**. Each
   `knowledge.md` + `knowledge.json` captures stack, routes, real selectors, auth flow
   and reusable assets, so generated specs run with little to no manual editing.
+- **Business Knowledge** — link or upload the project's domain documents, sync them
+  into snapshots, and review the distilled brief and facts. Unlike the code KB this
+  needs no repository at all, so a project with nothing checked out yet can still
+  author grounded test cases ([ADR 0016](docs/adr/0016-business-knowledge.md)).
 
 On-disk artifacts are **scoped per owner**
 ([ADR 0009](docs/adr/0009-per-user-workspace-filesystem-and-cloning.md)):
 
 ```
 api/workspace/
-├─ users/<owner_id>/{specs,evidence,knowledge,repos,auth}/
-└─ shared/{specs,evidence,knowledge,repos,auth}/     # admin-curated, cloned by members
+├─ users/<owner_id>/{specs,evidence,knowledge,repos,auth,business}/
+└─ shared/{specs,evidence,knowledge,repos,auth,business}/   # admin-curated, cloned by members
+```
+
+`business/<project-slug>/<source-id>/{raw,normalized}/` holds one Business Knowledge
+snapshot per source. Like `reports/`, it sits outside `evidence/` on purpose: the
+`/artifacts` mount only serves paths containing `/evidence/`, so a business document is
+not reachable by URL at all.
+
+```
 ```
 
 ### AI skills
@@ -427,3 +453,4 @@ Known gaps, so nobody has to discover them the hard way:
 | [0010](docs/adr/0010-dom-exploration-agent-kb-enrichment.md) | DOM Exploration Agent enriches the KB (it does not author tests) |
 | [0011](docs/adr/0011-frontend-internationalization-en-vi.md) | Frontend i18n — English + Vietnamese |
 | [0012](docs/adr/0012-live-spec-authoring-via-browser-harness.md) | Live spec-authoring via `browser-harness` |
+| [0016](docs/adr/0016-business-knowledge.md) | Business Knowledge as a first-class, project-scoped grounding source |

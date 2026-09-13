@@ -1,12 +1,25 @@
 """Clone a shared-namespace project into a member's own scope (ADR 0009 §4, #120).
 
 The admin-managed shared namespace (``owner_id IS NULL``) holds ready-built
-projects — config (incl. encrypted test accounts) and an AI-built Project
-Knowledge Base — that are expensive to (re)build (``project-bootstrap`` runs a
-real Claude pass with a 20-minute budget). Cloning copies those rows and their
-on-disk artifacts into the caller's own scope instead of rebuilding, re-
-stamping ``owner_id`` while keeping the same project ``key`` (composite-unique
-on ``(key, owner_id)`` since ADR 0009 §3).
+projects — config (incl. encrypted test accounts), an AI-built Project
+Knowledge Base, and the project's **Business Knowledge** (ADR 0016, #831) — that
+are expensive to (re)build (``project-bootstrap`` runs a real Claude pass with a
+20-minute budget; a business source costs a fetch, a normalize and a distil
+pass). Cloning copies those rows and their on-disk artifacts into the caller's
+own scope instead of rebuilding, re-stamping ``owner_id`` while keeping the same
+project ``key`` (composite-unique on ``(key, owner_id)`` since ADR 0009 §3) and
+the same ``project_guid`` (the Business Knowledge tables' half of the same
+composite key — ADR 0016 §3).
+
+**Hub mirroring is deliberately not implemented here.** A cloned project's
+Business Knowledge exists only in Q-Agent: nothing is pushed to EmeHub, and a
+document curated in the hub is not pulled in. Doing so needs a hub-side
+endpoint that does not exist — the hub's project payload carries config,
+connections and knowledge and has no business-document surface at all, nor a
+way to authorise one member reading another's snapshot. The ask is written
+down, in the shape ``docs/HUB-REQUESTS-project-config.md`` set:
+**``docs/HUB-REQUESTS-business-knowledge.md``**. Until it is answered this
+clone is Q-Agent-local by design rather than by omission.
 """
 
 from __future__ import annotations
@@ -18,11 +31,20 @@ from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.logging import logger
+from app.models.business import BusinessFact, BusinessSource
 from app.models.knowledge import ProjectKnowledge
 from app.models.project import Project
 from app.models.project_config import ProjectConfig
 from app.models.user import User
-from app.services.workspace_scope import scoped_auth_dir, scoped_knowledge_dir, scoped_repos_dir, slug
+from app.services import business_source_service
+from app.services.workspace_scope import (
+    scoped_auth_dir,
+    scoped_business_dir,
+    scoped_knowledge_dir,
+    scoped_repos_dir,
+    slug,
+)
 
 
 @dataclass
@@ -34,6 +56,10 @@ class CloneResult:
     config_cloned: bool = False
     knowledge_cloned: list[str] = field(default_factory=list)
     artifacts_copied: list[str] = field(default_factory=list)
+    #: Titles of the ``BusinessSource`` rows copied (#831).
+    business_sources_cloned: list[str] = field(default_factory=list)
+    #: How many ``BusinessFact`` rows were copied.
+    business_facts_cloned: int = 0
 
 
 def _shared_projects(db: Session, project_key: str) -> list[Project]:
@@ -58,6 +84,53 @@ def _shared_knowledge(db: Session, project_key: str) -> list[ProjectKnowledge]:
         for row in db.query(ProjectKnowledge).filter(ProjectKnowledge.owner_id.is_(None)).all()
         if row.key == project_key or row.key.startswith(prefix)
     ]
+
+
+def _shared_project_guids(projects: list[Project], config: ProjectConfig | None) -> list[str]:
+    """The project GUIDs the shared rows for this key are addressed by (#585).
+
+    Business Knowledge is keyed on ``project_guid``, not on the project name, so
+    the clone has to translate the key it was given into the identity those rows
+    carry. Both places a GUID can live are read — the shared ``Project`` row(s)
+    and the shared ``ProjectConfig`` — because the G1 bridge leaves
+    ``ProjectConfig.project_guid`` nullable and a config created before it was
+    stamped still points at a real project.
+
+    Args:
+        projects: The shared ``Project`` rows for the key.
+        config: The shared ``ProjectConfig``, if there is one.
+
+    Returns:
+        Distinct GUIDs, in a stable order (never ``None``).
+    """
+    guids = [p.guid for p in projects if p.guid]
+    if config is not None and config.project_guid:
+        guids.append(config.project_guid)
+    return list(dict.fromkeys(guids))
+
+
+def _shared_business_sources(db: Session, guids: list[str]) -> list[BusinessSource]:
+    """Shared (``owner_id IS NULL``) ``BusinessSource`` rows for ``guids`` (#831)."""
+    if not guids:
+        return []
+    return (
+        db.query(BusinessSource)
+        .filter(BusinessSource.project_guid.in_(guids), BusinessSource.owner_id.is_(None))
+        .order_by(BusinessSource.id)
+        .all()
+    )
+
+
+def _shared_business_facts(db: Session, guids: list[str]) -> list[BusinessFact]:
+    """Shared ``BusinessFact`` rows for ``guids`` — including source-less manual ones (#831)."""
+    if not guids:
+        return []
+    return (
+        db.query(BusinessFact)
+        .filter(BusinessFact.project_guid.in_(guids), BusinessFact.owner_id.is_(None))
+        .order_by(BusinessFact.id)
+        .all()
+    )
 
 
 def dest_already_has_project(db: Session, project_key: str, dest_owner_id: int | None) -> bool:
@@ -109,6 +182,185 @@ def _rescope_doc_path(doc_path: str, dest_owner_id: int | None) -> str:
     return str(scoped_knowledge_dir(dest_owner_id) / relative)
 
 
+def _rescope_business_path(relative_path: str, source_id: int, new_source_id: int) -> str:
+    """Rewrite one snapshot path for the cloned source's id (#831).
+
+    ``BusinessSource.raw_path`` / ``normalized_path`` are *scope-relative*
+    directories shaped ``<project-slug>/<source_id>/{raw,normalized}``
+    (``business_ingest.storage``), so re-scoping them is not a prefix swap like
+    :func:`_rescope_doc_path` — the owner is implied by the scope root, but the
+    **source id** is embedded and the clone is a new row with a new id.
+
+    Only the id segment is replaced, and only when it is where the layout says
+    it is; anything else is returned unchanged (defensive — a blank or legacy
+    value must not be turned into a path that points somewhere real).
+
+    Args:
+        relative_path: The stored scope-relative path.
+        source_id: The shared row's id, as it appears in the path.
+        new_source_id: The cloned row's id.
+
+    Returns:
+        The path the cloned row should carry.
+    """
+    if not relative_path:
+        return relative_path
+    parts = relative_path.replace("\\", "/").split("/")
+    if len(parts) < 2 or parts[1] != str(source_id):
+        return relative_path
+    parts[1] = str(new_source_id)
+    return "/".join(parts)
+
+
+def _copy_business_snapshot(
+    project_key: str, source_id: int, new_source_id: int, dest_owner_id: int | None
+) -> bool:
+    """Copy one shared source's snapshot directory into the destination scope.
+
+    ``<shared>/business/<slug>/<source_id>/`` → ``<dest>/business/<slug>/<new_source_id>/``,
+    which carries both the raw bytes and the normalized markdown in one pass.
+    No-op (returns ``False``) when the shared source never landed a snapshot —
+    a ``pending`` or ``error`` source is a legitimate row with no files behind it.
+    """
+    src = scoped_business_dir(None) / slug(project_key) / str(source_id)
+    if not src.exists():
+        return False
+    dst = scoped_business_dir(dest_owner_id) / slug(project_key) / str(new_source_id)
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+    return True
+
+
+def _clone_business_knowledge(
+    db: Session,
+    project_key: str,
+    sources: list[BusinessSource],
+    facts: list[BusinessFact],
+    dest_owner_id: int | None,
+    result: CloneResult,
+) -> bool:
+    """Copy the shared Business Knowledge rows and their snapshots (#831, ADR 0016).
+
+    Mirrors how ``ProjectKnowledge`` is cloned — new rows, ``owner_id``
+    re-stamped, the project identity (here ``project_guid``) unchanged — with
+    two differences the model forces:
+
+    * **Ids are part of the artifact layout**, so the rows must be flushed to
+      get their ids before the files can be copied, and each cloned row's
+      ``raw_path``/``normalized_path`` is rewritten onto the new id. The flush
+      is not a commit: a file-copy failure still leaves an uncommitted session,
+      exactly like the ProjectKnowledge path.
+    * **Nothing here de-duplicates itself.** ``uq_business_source_project_kind_url``
+      covers ``(project_guid, owner_id, kind, url)`` and ``url`` is NULL for an
+      upload — NULLs compare distinct — so a second clone of an upload would be
+      accepted by the database. :func:`business_source_service.find_duplicate`
+      is consulted per source instead, which is the same rule the registry
+      applies when a member adds one by hand.
+
+    ``connection_id`` is dropped for the same reason the config's provider
+    bindings are: it points at the admin's own connection, which the destination
+    owner cannot see. ``secrets`` (a wiki-scoped PAT, #822) is **not** copied —
+    ADR 0009 §4 copies the shared namespace's secrets because they are
+    project credentials the clone needs to be runnable, but a per-source wiki
+    token is the admin's own credential and a re-sync by the member should ask
+    for theirs. The snapshot is already copied, so the clone is complete
+    without it; only a *re-sync* needs the token.
+
+    ``superseded_by`` is remapped onto the cloned fact rows, so a human
+    correction that overrides an ingested fact still overrides the *clone's*
+    copy of it rather than dangling at the admin's row.
+
+    Args:
+        db: Active session — rows are added and flushed, never committed here.
+        project_key: The project name, for the on-disk slug.
+        sources: The shared ``BusinessSource`` rows to copy.
+        facts: The shared ``BusinessFact`` rows to copy.
+        dest_owner_id: The cloning user's id (``None`` when auth is disabled).
+        result: Mutated with what was copied.
+
+    Returns:
+        True if any snapshot files were copied (for ``artifacts_copied``).
+    """
+    source_id_map: dict[int, int] = {}
+    for row in sources:
+        if business_source_service.find_duplicate(
+            db, row.project_guid or "", dest_owner_id, row.kind, row.url, row.title
+        ):
+            logger.info(
+                "clone %s: business source %r already exists for owner %s — skipped",
+                project_key,
+                row.title,
+                dest_owner_id,
+            )
+            continue
+        clone = BusinessSource(
+            project_guid=row.project_guid,
+            project_key=row.project_key or project_key,
+            owner_id=dest_owner_id,
+            kind=row.kind,
+            title=row.title,
+            url=row.url,
+            connection_id=None,
+            status=row.status,
+            last_error=row.last_error,
+            fetched_at=row.fetched_at,
+            content_hash=row.content_hash,
+            byte_size=row.byte_size,
+            doc_count=row.doc_count,
+            excluded=row.excluded,
+            secrets={},
+        )
+        db.add(clone)
+        db.flush()
+        source_id_map[row.id] = clone.id
+        result.business_sources_cloned.append(row.title)
+
+    artifacts = False
+    for old_id, new_id in source_id_map.items():
+        if _copy_business_snapshot(project_key, old_id, new_id, dest_owner_id):
+            artifacts = True
+
+    for row in sources:
+        new_id = source_id_map.get(row.id)
+        if new_id is None:
+            continue
+        clone = db.get(BusinessSource, new_id)
+        clone.raw_path = _rescope_business_path(row.raw_path, row.id, new_id)
+        clone.normalized_path = _rescope_business_path(row.normalized_path, row.id, new_id)
+
+    fact_id_map: dict[int, int] = {}
+    for fact in facts:
+        clone_fact = BusinessFact(
+            project_guid=fact.project_guid,
+            owner_id=dest_owner_id,
+            # A fact whose source was skipped as a duplicate keeps no source
+            # link rather than pointing at the admin's row (the column is
+            # ON DELETE SET NULL, so NULL is already its "no source" state).
+            source_id=source_id_map.get(fact.source_id) if fact.source_id else None,
+            category=fact.category,
+            term=fact.term,
+            statement=fact.statement,
+            detail=fact.detail,
+            origin=fact.origin,
+            pinned=fact.pinned,
+            excluded=fact.excluded,
+            rank_text=fact.rank_text,
+        )
+        db.add(clone_fact)
+        db.flush()
+        fact_id_map[fact.id] = clone_fact.id
+        result.business_facts_cloned += 1
+
+    for fact in facts:
+        if not fact.superseded_by:
+            continue
+        clone_id = fact_id_map.get(fact.id)
+        if clone_id is None:
+            continue
+        db.get(BusinessFact, clone_id).superseded_by = fact_id_map.get(fact.superseded_by)
+
+    return artifacts
+
+
 def clone_shared_project(db: Session, project_key: str, dest_owner: User | None) -> CloneResult:
     """Clone a shared-namespace project into ``dest_owner``'s own scope.
 
@@ -124,8 +376,19 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
     point at the admin's own connections, which the destination owner cannot
     see or use.
 
-    On-disk ``knowledge/``, ``repos/`` and ``auth/`` subtrees are copied from
-    the shared scope to the destination scope, preserving the
+    The project's **Business Knowledge** (ADR 0016, #831) travels with it:
+    every shared ``BusinessSource`` and ``BusinessFact`` for the project's GUID
+    is copied with ``owner_id`` re-stamped, and each source's snapshot
+    directory under ``business/`` is copied into the destination scope — so the
+    clone is grounded in the same documents without re-fetching them. Sources
+    the destination already has are skipped
+    (:func:`business_source_service.find_duplicate`), and per-source
+    ``secrets``/``connection_id`` are dropped — see
+    :func:`_clone_business_knowledge`. **Hub mirroring is not implemented**;
+    see the module docstring.
+
+    On-disk ``knowledge/``, ``repos/``, ``auth/`` and ``business/`` subtrees are
+    copied from the shared scope to the destination scope, preserving the
     ``<slug(project_key)>/…`` structure; each cloned ``ProjectKnowledge``'s
     ``doc_path`` is rewritten to the copied destination directory.
 
@@ -133,7 +396,9 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
     until every row has been added — so a file-copy failure leaves the
     database untouched (nothing to roll back) and a DB failure hasn't left a
     dangling artifact tree behind that a caller might mistake for evidence of
-    a partial clone.
+    a partial clone. Business Knowledge is the one case that has to flush
+    first, because the cloned source's **id** is part of its snapshot path;
+    the guarantee is unchanged, since a flush is not a commit.
 
     Args:
         db: Active session (commits on success).
@@ -155,6 +420,9 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
     projects = _shared_projects(db, project_key)
     config = _shared_config(db, project_key)
     knowledge_rows = _shared_knowledge(db, project_key)
+    business_guids = _shared_project_guids(projects, config)
+    business_sources = _shared_business_sources(db, business_guids)
+    business_facts = _shared_business_facts(db, business_guids)
     if not projects and config is None and not knowledge_rows:
         raise HTTPException(status_code=404, detail=f"No shared project '{project_key}'")
 
@@ -210,6 +478,13 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
                 environments=[dict(e) for e in (config.environments or [])],
                 test_accounts=[dict(a) for a in (config.test_accounts or [])],  # ciphertext as-is
                 extra=dict(config.extra or {}),
+                # The Business Knowledge digest (#824) lives on the config, so it
+                # follows the clone the same way the rest of the row does —
+                # a cloned project's prompts are grounded without a re-distil.
+                business_brief=dict(config.business_brief or {}),
+                # Identity, not a binding: the clone addresses the same project
+                # (#585), which is also how its Business Knowledge rows are keyed.
+                project_guid=config.project_guid,
                 manual_auth=config.manual_auth,
                 work_item_connection_id=None,
                 repository_connection_id=None,
@@ -240,6 +515,11 @@ def clone_shared_project(db: Session, project_key: str, dest_owner: User | None)
             )
         )
         result.knowledge_cloned.append(row.key)
+
+    if _clone_business_knowledge(
+        db, project_key, business_sources, business_facts, dest_owner_id, result
+    ):
+        result.artifacts_copied.append("business")
 
     db.commit()
     return result
