@@ -380,11 +380,16 @@ def merge_facts(
     with an UN-verified entry upgrades it in place* — and this is the identical
     rule with ``pinned`` in place of ``verified_at_runtime``:
 
-    * A colliding **pinned** row is left exactly as it is. A human correction
-      survives every future re-sync; that is the whole point of the flag.
-    * A colliding **unpinned** row is updated in place, keeping its identity (its
-      id, and therefore anything referencing it) and its ``pinned`` / ``excluded``
-      flags, so an excluded fact stays excluded after a re-sync.
+    * A colliding **human** row — ``pinned`` (a correction) or any
+      ``origin="manual"`` row (an addition) — is left exactly as it is. Both
+      outrank an ingested fact on ADR 0016 §5's ladder, so both survive every
+      future re-sync; an addition is unpinned precisely because it overrides no
+      source, and #827 widened this guard from ``pinned`` alone after a re-sync
+      was found to rewrite a user's own sentence.
+    * A colliding **ingested, unpinned** row is updated in place, keeping its
+      identity (its id, and therefore anything referencing it) and its
+      ``pinned`` / ``excluded`` flags, so an excluded fact stays excluded after
+      a re-sync.
     * A fact colliding with nothing is inserted.
 
     Facts are never deleted here. A fact that has dropped out of the corpus stops
@@ -398,7 +403,7 @@ def merge_facts(
     :param facts: Cleaned facts, as produced by :func:`build_distillation`.
     :param source_id: The source to attribute new/updated rows to, when the
         distillation covered exactly one.
-    :returns: How many rows were inserted or updated — pinned collisions, being
+    :returns: How many rows were inserted or updated — human collisions, being
         skipped, are not counted.
     """
     existing = (
@@ -410,15 +415,20 @@ def merge_facts(
         .all()
     )
     by_key: dict[tuple[str, str], BusinessFact] = {}
-    for row in existing:
+    # Ingested rows are registered first, so when a correction and the fact it
+    # supersedes share a key the re-sync refreshes the *ingested original*
+    # (which stays superseded and struck through) instead of colliding with the
+    # correction and skipping. Without the ordering the winner would depend on
+    # insertion order, which is not a contract.
+    for row in sorted(existing, key=lambda r: (r.origin != "ingested", r.pinned, r.id)):
         by_key.setdefault(_fact_key(row.category, row.term), row)
 
     merged = 0
     for fact in facts:
         key = _fact_key(fact["category"], fact["term"])
         row = by_key.get(key)
-        if row is not None and row.pinned:
-            continue  # no-clobber: the human correction stands
+        if row is not None and (row.pinned or row.origin == "manual"):
+            continue  # no-clobber: the human's row stands (ADR 0016 §5, layers 1-2)
         if row is None:
             row = BusinessFact(
                 project_guid=project_guid,

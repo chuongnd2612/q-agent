@@ -27,7 +27,21 @@ from pathlib import Path
 from app.services import workspace_scope
 from app.services.business_ingest.base import FetchedDoc
 
-__all__ = ["PersistedSnapshot", "source_root", "persist_snapshot", "content_hash_for"]
+__all__ = [
+    "PersistedSnapshot",
+    "source_root",
+    "persist_snapshot",
+    "content_hash_for",
+    "archive_previous_normalized",
+]
+
+#: Where a replaced snapshot's normalized markdown is kept, as
+#: ``normalized.<hash>.md``. One flat file per superseded version, so "what did
+#: this document say when that test case was written?" is answerable with a
+#: diff — which is the whole of the versioning story for #827. There is
+#: deliberately no history *table*: a diff/restore UI is a real feature with no
+#: stated demand, and ``BusinessFact.revision`` is the hook if one is wanted.
+ARCHIVE_DIRNAME = "archive"
 
 
 @dataclass(frozen=True)
@@ -129,6 +143,7 @@ def persist_snapshot(
     root = source_root(project_key, source_id, owner_id)
     raw_dir = root / "raw"
     normalized_dir = root / "normalized"
+    archive_previous_normalized(root, normalized_dir)
     for directory in (raw_dir, normalized_dir):
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True, exist_ok=True)
@@ -155,3 +170,44 @@ def persist_snapshot(
         byte_size=byte_size,
         doc_count=len(normalized_by_path),
     )
+
+
+def archive_previous_normalized(root: Path, normalized_dir: Path) -> Path | None:
+    """Keep the snapshot about to be replaced as ``archive/normalized.<hash>.md``.
+
+    Called immediately before a re-sync overwrites ``normalized/``, so the
+    version a previously generated test case was attributed to stays readable
+    and diffable after the upstream document has moved on (#827). The file is
+    one flat markdown document — every normalized page of that snapshot,
+    path-ordered under an ``## <path>`` heading — because what a reader wants is
+    a diff of the whole document version, not a directory to re-walk.
+
+    Named by the snapshot's own content hash, so re-syncing back to a version
+    already archived writes nothing new and the archive never grows on a
+    no-change re-sync. Best-effort: an unreadable previous snapshot is skipped
+    rather than failing an ingestion that has already succeeded.
+
+    :param root: The source's snapshot directory.
+    :param normalized_dir: The ``normalized/`` directory about to be replaced.
+    :returns: The archive file, or ``None`` when there was nothing to keep.
+    """
+    if not normalized_dir.is_dir():
+        return None
+    previous: dict[str, str] = {}
+    for path in sorted(normalized_dir.rglob("*.md")):
+        try:
+            relative = path.relative_to(normalized_dir).as_posix()
+            previous[relative[: -len(".md")]] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+    if not previous:
+        return None
+
+    archive_dir = root / ARCHIVE_DIRNAME
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    target = archive_dir / f"normalized.{content_hash_for(previous)}.md"
+    if target.exists():
+        return target
+    body = "\n\n".join(f"## {path}\n\n{previous[path]}" for path in sorted(previous))
+    target.write_text(body, encoding="utf-8")
+    return target

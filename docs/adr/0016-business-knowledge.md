@@ -168,6 +168,21 @@ lets a re-sync silently undo it will not be corrected twice. **Observation outra
 statement of intent by the people who own the product, a runtime observation is evidence, and a
 source parse is a guess.
 
+**Versioning is deliberately cheap.** A human-authored fact carries a `revision`
+counter and an `updated_by`, and a re-synced source keeps the snapshot it
+replaced as `normalized.<hash>.md` so a diff is inspectable. There is **no
+history table**: a per-revision history with a diff view and a restore action is
+a real feature with a real UI, and nothing has asked for it. `revision` is the
+hook to hang one on if it ever does — which is the whole reason it exists rather
+than being inferred.
+
+One consequence of the ladder that only shows up at the merge: a **human
+addition** (layer 2) is *not* pinned — pinning marks a row as overriding a
+source, and an addition overrides nothing — so the no-clobber rule cannot be
+written as "skip pinned rows". It is "skip rows a human wrote", pinned or not.
+Written the narrow way, a re-sync that happened to distil the same term would
+rewrite the user's own sentence (#827).
+
 Immutability is what makes the whole thing safe to re-sync, and it is deliberately the opposite
 of how the code KB behaves today: `apply_build()` overwrites `row.knowledge` wholesale, so any
 manual change to the code KB would be destroyed by the next bootstrap. That asymmetry is the

@@ -1594,6 +1594,72 @@ export interface BusinessAdoPreflightOut {
   wikis: string[];
 }
 
+/**
+ * One business fact — ingested, or the human overlay on it (#827, ADR 0016 §5).
+ *
+ * Ingested and human-authored facts are the **same shape** on purpose: a
+ * correction is a new row, not a different kind of record. Three fields tell
+ * them apart, and the UI needs all three:
+ *
+ * - `origin` + `pinned` give the precedence layer — a pinned `manual` row is a
+ *   correction (layer 1), an unpinned `manual` row an addition (layer 2), an
+ *   `ingested` row the document's own claim (layer 3).
+ * - `supersededBy` marks a row a correction has beaten. It is still returned,
+ *   and is rendered struck through beside the correction, so the disagreement
+ *   with the source document stays visible instead of being hidden by an
+ *   in-place edit.
+ *
+ * `revision`/`updatedBy` are the whole of the versioning: a counter and an
+ * author, deliberately no history table.
+ */
+export interface BusinessFactOut {
+  id: number;
+  projectGuid: string | null;
+  sourceId: number | null;
+  category: BusinessFactCategory;
+  term: string;
+  statement: string;
+  detail: string;
+  origin: "ingested" | "manual";
+  pinned: boolean;
+  excluded: boolean;
+  supersededBy: number | null;
+  revision: number;
+  updatedBy: number | null;
+  updatedAt: string | null;
+}
+
+/** The fact shapes a test case is written from (`BUSINESS_FACT_CATEGORIES`). */
+export type BusinessFactCategory =
+  | "glossary"
+  | "rule"
+  | "flow"
+  | "actor"
+  | "constraint"
+  | "acceptance-norm";
+
+/** Add a fact the documents never stated. Never pinned — it overrides nothing. */
+export interface BusinessFactCreate {
+  category: BusinessFactCategory;
+  term: string;
+  statement: string;
+  detail?: string;
+}
+
+/** Override a fact. No `term`/`category`: a correction inherits both. */
+export interface BusinessFactCorrection {
+  statement: string;
+  detail?: string;
+}
+
+/** An omitted field is left alone. `statement`/`detail` are refused on an
+ *  ingested fact — the way to disagree with one is a correction. */
+export interface BusinessFactUpdate {
+  statement?: string;
+  detail?: string;
+  excluded?: boolean;
+}
+
 export interface BusinessSourceCreate {
   kind: BusinessSourceKind;
   title?: string;

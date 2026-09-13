@@ -44,6 +44,9 @@ import type {
   KnowledgeStatus,
   ProjectKnowledgeOut,
   ProjectOut,
+  BusinessFactCorrection,
+  BusinessFactCreate,
+  BusinessFactUpdate,
   BusinessSourceCreate,
   BusinessSourceUpdate,
 } from "@/types/api";
@@ -1346,6 +1349,59 @@ export const usePreflightBusinessAdoWiki = (projectGuid: string | null) =>
     mutationFn: ({ url, pat }: { url: string; pat: string }) =>
       api.preflightBusinessAdoWiki(projectGuid as string, url, pat),
   });
+
+// ------------------------------------------ business facts + overlay (#827)
+//
+// Ingested content is immutable, so none of these mutations edits a distilled
+// fact: they write rows AROUND it (ADR 0016 §5). The list is not filtered
+// client-side — the server returns superseded and excluded rows on purpose,
+// because the panel shows a superseded fact struck through beside the
+// correction that beat it.
+//
+// Every mutation invalidates the one list query rather than patching the cache:
+// a correction changes TWO rows (the new one and the `supersededBy` pointer on
+// the old one), and the precedence ordering is the server's.
+
+/** Every fact grounding this project, highest precedence first. */
+export const useBusinessFacts = (projectGuid: string | null) =>
+  useQuery({
+    queryKey: queryKeys.businessFacts(projectGuid ?? ""),
+    queryFn: () => api.listBusinessFacts(projectGuid as string),
+    enabled: !!projectGuid,
+  });
+
+/** Add a fact the documents never stated (not pinned — it overrides nothing). */
+export const useCreateBusinessFact = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BusinessFactCreate) =>
+      api.createBusinessFact(projectGuid as string, body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessFacts(projectGuid ?? "") }),
+  });
+};
+
+/** Override a fact with a pinned correction — a new row, never an edit. */
+export const useCorrectBusinessFact = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: BusinessFactCorrection }) =>
+      api.correctBusinessFact(projectGuid as string, id, body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessFacts(projectGuid ?? "") }),
+  });
+};
+
+/** Edit a manual fact, or exclude/restore any fact. */
+export const useUpdateBusinessFact = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: BusinessFactUpdate }) =>
+      api.updateBusinessFact(projectGuid as string, id, body),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessFacts(projectGuid ?? "") }),
+  });
+};
 
 // ------------------------------------------- project automation repos (#765)
 //

@@ -10,6 +10,10 @@ import { useAuth } from "@/store/auth";
 import type {
   BusinessAdoCredentialOut,
   BusinessAdoPreflightOut,
+  BusinessFactCorrection,
+  BusinessFactCreate,
+  BusinessFactOut,
+  BusinessFactUpdate,
   BusinessSourceCreate,
   BusinessSourceOut,
   BusinessSourceUpdate,
@@ -1127,6 +1131,46 @@ export const api = {
       form,
     );
   },
+  // business facts + the human overlay (#827). Ingested content is immutable,
+  // so none of these edits a distilled fact in place: a correction is a NEW
+  // pinned row that supersedes the original, and the original keeps being
+  // returned so the UI can show the disagreement rather than hide it.
+  listBusinessFacts: (projectGuid: string) =>
+    get<BusinessFactOut[]>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/facts`,
+    ),
+  /** Add a fact the documents never stated. */
+  createBusinessFact: (projectGuid: string, body: BusinessFactCreate) =>
+    post<BusinessFactOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/facts`,
+      body,
+    ),
+  /**
+   * Override a fact with a pinned correction. 201 — the correction is a new
+   * row with its own id, and the fact it supersedes is still there.
+   *
+   * 409 when that fact has already been corrected: the next correction belongs
+   * on the row that is actually in context, not on the one already beaten.
+   */
+  correctBusinessFact: (
+    projectGuid: string,
+    factId: number,
+    body: BusinessFactCorrection,
+  ) =>
+    post<BusinessFactOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/facts/${factId}/correct`,
+      body,
+    ),
+  /** Edit a manual fact, or take any fact out of context (and back into it). */
+  updateBusinessFact: (
+    projectGuid: string,
+    factId: number,
+    body: BusinessFactUpdate,
+  ) =>
+    patch<BusinessFactOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/facts/${factId}`,
+      body,
+    ),
   /** Where this wiki source's token would come from, before any fetch (#822). */
   businessAdoCredential: (projectGuid: string, sourceId: number) =>
     get<BusinessAdoCredentialOut>(

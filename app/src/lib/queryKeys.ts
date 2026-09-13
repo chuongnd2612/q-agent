@@ -52,6 +52,9 @@ export const queryKeys = {
    *  reaches it. */
   businessSources: (projectGuid: string) =>
     ["projects", projectGuid, "business", "sources"] as const,
+  /** The project's business facts — ingested plus the human overlay (#827). */
+  businessFacts: (projectGuid: string) =>
+    ["projects", projectGuid, "business", "facts"] as const,
   repoKnowledge: (key: string, repo: string) =>
     ["projects", key, "repos", repo, "knowledge"] as const,
   tickets: (filters?: Record<string, string | number | undefined>) =>

@@ -35,9 +35,18 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps_auth import current_user
-from app.models.business import BUSINESS_SOURCE_KINDS, BusinessSource
+from app.models.business import BUSINESS_SOURCE_KINDS, BusinessFact, BusinessSource
 from app.models.user import User
-from app.schemas import BusinessSourceCreate, BusinessSourceOut, BusinessSourceUpdate
+from app.schemas import (
+    BusinessFactCorrection,
+    BusinessFactCreate,
+    BusinessFactOut,
+    BusinessFactUpdate,
+    BusinessSourceCreate,
+    BusinessSourceOut,
+    BusinessSourceUpdate,
+)
+from app.services import business_fact_service as facts
 from app.services import business_source_service as sources
 from app.services.ownership import stamp_owner
 
@@ -183,3 +192,135 @@ def delete_business_source(
     guid, _ = sources.resolve_project(db, project_guid, user)
     row = sources.source_or_404(db, guid, source_id, user)
     sources.delete_source(db, row)
+
+
+# --------------------------------------------------------- The fact overlay (#827)
+# Ingested content is immutable, so none of these endpoints edits a distilled
+# fact in place. They add rows *around* it: a pinned correction that supersedes
+# it, an addition the documents never carried, or an exclusion that takes a row
+# out of context while leaving it on disk. ADR 0016 §5 is the precedence ladder
+# they implement, and `business_fact_service` is where it lives — the router is
+# validation and status codes only.
+
+
+@router.get("/facts", response_model=list[BusinessFactOut])
+def list_business_facts(
+    project_guid: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> list[BusinessFact]:
+    """Every fact grounding this project, highest precedence first.
+
+    Superseded and excluded rows are **included**: this is the management view,
+    and the Business tab renders a superseded original struck through beside the
+    correction that beat it. The prompt view is
+    ``business_fact_service.facts_in_context``, which drops both.
+    """
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    return facts.visible_facts(db, guid, user)
+
+
+@router.post("/facts", response_model=BusinessFactOut, status_code=201)
+def create_business_fact(
+    project_guid: str,
+    body: BusinessFactCreate,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> BusinessFact:
+    """Add a fact the documents never stated.
+
+    Not pinned — pinning marks a row as overriding a source, and an addition
+    overrides nothing. It survives a re-sync regardless: the merge refuses to
+    write over any human-authored row (ADR 0016 §5, layer 2).
+
+    Raises:
+        HTTPException: 400 on an unknown category or an empty term/statement.
+    """
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    category = facts.validate_category(body.category)
+    term = (body.term or "").strip()
+    statement = (body.statement or "").strip()
+    if not term or not statement:
+        raise HTTPException(
+            status_code=400, detail="A fact needs both a term and a statement."
+        )
+    return facts.add_fact(
+        db,
+        project_guid=guid,
+        owner_id=user.id if user is not None else None,
+        category=category,
+        term=term,
+        statement=statement,
+        detail=(body.detail or "").strip(),
+        updated_by=user.id if user is not None else None,
+        user=user,
+    )
+
+
+@router.post("/facts/{fact_id}/correct", response_model=BusinessFactOut, status_code=201)
+def correct_business_fact(
+    project_guid: str,
+    fact_id: int,
+    body: BusinessFactCorrection,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> BusinessFact:
+    """Override a fact with a pinned correction — a new row, never an edit.
+
+    201, not 200: a correction is a *created* resource with its own id, and the
+    fact it supersedes is still there. That is the point — the original stays
+    visible, struck through, so a reader can see where the source document and
+    the team disagree instead of the disagreement being silently resolved.
+
+    Raises:
+        HTTPException: 400 on an empty statement, 404 when the fact is not the
+            caller's to correct, 409 when it has already been superseded (the
+            correction belongs on the row that is actually in context).
+    """
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    original = facts.fact_or_404(db, guid, fact_id, user)
+    statement = (body.statement or "").strip()
+    if not statement:
+        raise HTTPException(status_code=400, detail="A correction needs a statement.")
+    if original.superseded_by is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="That fact has already been corrected — correct the correction instead.",
+        )
+    return facts.correct_fact(
+        db,
+        original,
+        statement=statement,
+        detail=(body.detail or "").strip(),
+        updated_by=user.id if user is not None else None,
+    )
+
+
+@router.patch("/facts/{fact_id}", response_model=BusinessFactOut)
+def update_business_fact(
+    project_guid: str,
+    fact_id: int,
+    body: BusinessFactUpdate,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> BusinessFact:
+    """Edit a manual fact, or take any fact out of context (and back into it).
+
+    ``excluded`` is not a delete: the row stays, so anything already generated
+    from it remains attributable and one click restores it. Editing the
+    *content* of an ingested fact is refused with a 400 pointing at the
+    correction endpoint.
+    """
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    row = facts.fact_or_404(db, guid, fact_id, user)
+    statement = body.statement.strip() if body.statement is not None else None
+    if statement is not None and not statement:
+        raise HTTPException(status_code=400, detail="A fact statement cannot be empty.")
+    return facts.update_fact(
+        db,
+        row,
+        statement=statement,
+        detail=body.detail.strip() if body.detail is not None else None,
+        excluded=body.excluded,
+        updated_by=user.id if user is not None else None,
+    )
