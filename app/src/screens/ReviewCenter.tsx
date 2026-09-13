@@ -1,5 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, ChevronRight, FlaskConical, Plus, Sparkles, X } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FlaskConical,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -23,7 +32,7 @@ import {
 } from "@/hooks/queries";
 import { useUI, type CaseDraft } from "@/store/ui";
 import { cn } from "@/lib/cn";
-import type { TestCaseOut } from "@/types/api";
+import type { CaseGrounding, TestCaseOut } from "@/types/api";
 
 /** Groups the run's flat case list by ticket, preserving first-seen order. */
 function groupByTicket(cases: TestCaseOut[]): Array<{ ticketExternalId: string; cases: TestCaseOut[] }> {
@@ -611,6 +620,7 @@ function CaseRow({
                     ))}
                   </div>
                 ) : null}
+                <GroundedIn sources={c.groundedIn ?? []} />
                 {voiceFindings.length > 0 && (
                   <div
                     className="mb-3 rounded-[11px] border px-3 py-2.5"
@@ -872,6 +882,76 @@ function CaseRow({
  *  feedback (#635): color transition on hover, a magnetic-ish lift, and a
  *  spring press. Approval state itself flips optimistically in the cache, so
  *  the active style lands the moment the button is clicked. */
+/**
+ * "Grounded in" — the business document VERSIONS this case was written from
+ * (#830, ADR 0016 §4).
+ *
+ * The payoff of storing a content hash in the first place, and the thing that
+ * makes a QC trust the output: "why does this case assert a 30-day grace
+ * period?" is answerable months later, against the exact snapshot the model was
+ * shown, even after the wiki page has moved on.
+ *
+ * The values are a COPY taken at generation time, not a live join — so this
+ * deliberately links out to the source's address while naming a hash and a date
+ * that may no longer be the source's current ones. That divergence is the
+ * information, not a bug.
+ *
+ * An empty list renders **nothing**. A case with no recorded grounding is a
+ * hand-written one, or one generated before attribution shipped; a "grounded in
+ * nothing" banner on it would be a claim of its own.
+ */
+function GroundedIn({ sources }: { sources: CaseGrounding[] }) {
+  const { t } = useTranslation("runs");
+  if (!sources.length) return null;
+  return (
+    <div
+      className="mb-3 rounded-[11px] border border-bd2 bg-pop px-3 py-2.5"
+      data-testid="case-grounded-in"
+    >
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-ink-dim">
+        <BookOpen size={12} strokeWidth={2.4} />
+        {t("review.case.groundedIn")}
+      </div>
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {sources.map((source) => (
+          <li
+            key={source.sourceId}
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11.5px]"
+          >
+            {source.url ? (
+              <a
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-ink-soft hover:text-violet"
+              >
+                {source.title}
+              </a>
+            ) : (
+              <span className="font-semibold text-ink-soft">{source.title}</span>
+            )}
+            {source.contentHash && (
+              <span className="font-mono text-faint" title={source.contentHash}>
+                {t("review.case.groundedHash", { hash: source.contentHash.slice(0, 12) })}
+              </span>
+            )}
+            {source.fetchedAt && (
+              <span className="text-faint">
+                {t("review.case.groundedFetched", {
+                  when: new Date(source.fetchedAt).toLocaleDateString(),
+                })}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="m-0 mt-2 text-[11px] leading-snug text-faint">
+        {t("review.case.groundedNote")}
+      </p>
+    </div>
+  );
+}
+
 function CaseActionButton({
   active = false,
   activeClass = "",

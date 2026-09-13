@@ -199,7 +199,11 @@
         "internal_id": "Id nội bộ",
         "code_identifier": "Định danh trong mã nguồn",
         "tech_noun": "Thuật ngữ kỹ thuật"
-      }
+      },
+      "groundedIn": "DỰA TRÊN",
+      "groundedHash": "@ {{hash}}",
+      "groundedFetched": "tải {{when}}",
+      "groundedNote": "Các phiên bản tài liệu đã dùng để sinh test case này. Chúng được ghi lại đúng tại thời điểm sinh, nên vẫn chính xác cả sau khi nguồn được đồng bộ lại."
     },
     "dryRun": "Chạy thử",
     "dryRunHint": "Chế độ chạy thử đang bật trong Cài đặt — test case chỉ được lưu trong Q-Agent, không đụng tới work item nào.",

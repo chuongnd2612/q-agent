@@ -421,6 +421,20 @@ class GitHubMarkdownAdapter:
 
     kind = "github_md"
 
+    def probe_revision(self, source, credential: SourceCredential | None = None) -> str:
+        """The current upstream commit SHA — the cheap staleness probe (#830).
+
+        The method on the adapter is what the staleness service calls; the
+        module-level :func:`probe_revision` is where the logic lives, so a test
+        can exercise it without a registry lookup.
+
+        :param source: The ``BusinessSource`` row; only ``url`` is read.
+        :param credential: The resolved token, or ``None`` for a public repo.
+        :returns: A commit SHA, never ``""``.
+        :raises SourceFetchError: when the probe cannot answer.
+        """
+        return probe_revision(source, credential)
+
     def fetch(self, source, credential: SourceCredential | None = None) -> list[FetchedDoc]:
         """Fetch every markdown document under ``source.url``.
 

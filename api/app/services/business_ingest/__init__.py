@@ -68,6 +68,16 @@ from app.services.business_ingest.pipeline import (
     start_sync,
     sync_source,
 )
+from app.services.business_ingest.staleness import (
+    NO_PROBE_MESSAGE,
+    PROBE_KINDS,
+    ProbeState,
+    probe_revision,
+    probe_state,
+    probe_supported,
+    record_revision,
+    refresh_staleness,
+)
 from app.services.business_ingest.storage import content_hash_for, source_root
 from app.services.business_ingest.uploads import (
     ALLOWED_EXTENSIONS,
@@ -113,6 +123,15 @@ __all__ = [
     "readable_length",
     "MIN_READABLE_CHARS",
     "SPA_SHELL_MESSAGE",
+    # staleness (#830)
+    "ProbeState",
+    "PROBE_KINDS",
+    "NO_PROBE_MESSAGE",
+    "probe_supported",
+    "probe_state",
+    "probe_revision",
+    "record_revision",
+    "refresh_staleness",
     # storage
     "content_hash_for",
     "source_root",

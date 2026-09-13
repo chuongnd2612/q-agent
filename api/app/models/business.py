@@ -142,6 +142,30 @@ class BusinessSource(Base):
     fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: Hash of the normalized content — the staleness signal (#830).
     content_hash: Mapped[str] = mapped_column(String(64), default="")
+
+    # ----------------------------------------------- Staleness probe (#830)
+    # Snapshot-with-manual-resync is only defensible if a user can SEE that a
+    # snapshot has gone stale, so the cheap per-adapter probe (a commit SHA, a
+    # digest of wiki page versions, an ETag) is recorded here alongside the
+    # snapshot it describes. Four columns rather than a single ``stale`` boolean
+    # because the honest answer has three parts — what was true when we fetched,
+    # when we last asked, and what the asking said — and a bare flag cannot tell
+    # "upstream is unchanged" apart from "we have never looked", which is
+    # exactly the claim this slice exists to stop the UI making.
+    #: Upstream version identifier as it stood when the snapshot was taken.
+    #: Empty means no probe could answer for this source — staleness for it is
+    #: then time-based only, and must be *labelled* as time-based.
+    upstream_rev: Mapped[str] = mapped_column(String(200), default="")
+    #: When staleness was last checked. NULL = never asked, which is NOT the
+    #: same as "not stale" and is rendered differently.
+    probed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: Result of the last probe: the upstream revision has moved since
+    #: ``upstream_rev``. Only ever set by a probe that actually answered.
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Why the last probe could not answer (no ETag on the page, a 403, a
+    #: timeout). Non-empty means ``stale`` is meaningless and the UI falls back
+    #: to the age label.
+    probe_error: Mapped[str] = mapped_column(String(1000), default="")
     byte_size: Mapped[int] = mapped_column(Integer, default=0)
     #: How many documents this source expanded into (a wiki link fetches many).
     doc_count: Mapped[int] = mapped_column(Integer, default=0)

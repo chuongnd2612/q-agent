@@ -417,6 +417,7 @@ def _review_and_expand(
     # One glossary lookup for the whole expansion; every case goes through the
     # QC-voice gate on its way to columns (#829).
     gate = build_voice_gate(db, ticket, analysis, context)
+    grounding = grounding_for(context)
 
     added = 0
     for i, raw_case in enumerate(additional, start=1):
@@ -428,6 +429,7 @@ def _review_and_expand(
                 ticket_external_id=ticket.external_id,
                 code=f"TC-{start_offset + i:02d}",
                 source="ai-review",
+                grounded_in=grounding,
                 **_case_kwargs_from_raw(raw_case, gate),
             )
         )
@@ -443,6 +445,26 @@ def _review_and_expand(
     db.commit()
     logger.info("Test-case review for {}: verdict={!r}, +{} cases", ticket.external_id, verdict, added)
     return added
+
+
+def grounding_for(context: dict | None) -> list[dict]:
+    """The business document versions a case generated from ``context`` stands on.
+
+    Copied straight out of the context the prompt was built from (#830, ADR 0016
+    §4), rather than re-queried at persistence time: what a case records must be
+    what the model was actually shown. Re-deriving it a second later would
+    already be a different question, since a concurrent re-sync can move a
+    source between the two.
+
+    Args:
+        context: The resolved project context, or ``None``.
+
+    Returns:
+        The ``businessSources`` entries, or an empty list — which the Review
+        Center renders as "not recorded", never as "grounded in nothing".
+    """
+    sources = (context or {}).get("businessSources") or []
+    return [entry for entry in sources if isinstance(entry, dict)]
 
 
 def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
@@ -521,6 +543,7 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
         # One glossary lookup for the whole ticket; every case goes through the
         # QC-voice gate on its way to columns (#829).
         gate = build_voice_gate(db, ticket, analysis, context)
+        grounding = grounding_for(context)
 
         case_count = 0
         for i, raw_case in enumerate(cases, start=1):
@@ -532,6 +555,7 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
                     ticket_external_id=ticket.external_id,
                     code=f"TC-{offset + i:02d}",
                     source="ai",
+                    grounded_in=grounding,
                     **_case_kwargs_from_raw(raw_case, gate),
                 )
             )

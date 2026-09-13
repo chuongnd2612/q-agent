@@ -35,7 +35,7 @@ from loguru import logger
 from app import db as db_module
 from app.db import utcnow
 from app.models.business import BusinessSource
-from app.services.business_ingest import adapters, credentials, storage
+from app.services.business_ingest import adapters, credentials, staleness, storage
 from app.services.business_ingest.base import (
     BusinessIngestError,
     FetchedDoc,
@@ -85,7 +85,10 @@ def _failure_detail(failures: list[tuple[str, str]], *, total: int) -> str:
 
 
 def ingest_documents(
-    db, source: BusinessSource, documents: list[FetchedDoc]
+    db,
+    source: BusinessSource,
+    documents: list[FetchedDoc],
+    credential: SourceCredential | None = None,
 ) -> BusinessSource:
     """Normalize, hash, persist and mark — the half every source shares.
 
@@ -99,6 +102,9 @@ def ingest_documents(
         ``id`` for its on-disk directory).
     :param documents: The adapter's output, including any doc carrying
         :attr:`~...base.FetchedDoc.error`.
+    :param credential: The credential the fetch used, reused for the staleness
+        probe that stamps ``upstream_rev`` (#830). ``None`` for a
+        credential-free kind and for an upload, which has no probe at all.
     :returns: ``source``, updated and committed.
     """
     successes: list[tuple[FetchedDoc, str]] = []
@@ -133,6 +139,11 @@ def ingest_documents(
     source.doc_count = snapshot.doc_count
     source.fetched_at = utcnow()
     source.status = "synced"
+    # Record the upstream version marker for the snapshot we just took, so a
+    # later probe compares like with like (#830). Best-effort inside: a source
+    # whose probe cannot answer is still perfectly ingested, and the failure is
+    # what makes the UI fall back to the honest age label.
+    staleness.record_revision(source, credential)
     # Cleared on a fully successful sync (the model's contract); on a partial
     # one it carries the count, because a synced source that quietly lost three
     # pages is exactly the silent drop this slice exists to prevent.
@@ -172,7 +183,7 @@ def sync_source(
         source.last_error = str(exc)[:_MAX_ERROR_CHARS]
         db.commit()
         return source
-    return ingest_documents(db, source, documents)
+    return ingest_documents(db, source, documents, credential)
 
 
 def start_sync(source_id: int, credential: SourceCredential | None = None) -> bool:

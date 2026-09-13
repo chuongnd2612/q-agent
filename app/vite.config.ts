@@ -78,14 +78,14 @@ export default defineConfig({
       // with the SPA's own client routes (`/runs`, `/projects`, …). `ws: true`
       // also carries the `/api/ws/*` websockets.
       "/api": {
-        target: "http://127.0.0.1:8787",
+        target: process.env.VITE_API_TARGET || "http://127.0.0.1:8787",
         changeOrigin: true,
         ws: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
       // Auth stays same-origin on its own path so the httpOnly refresh + CSRF
       // cookies flow (ADR 0007).
-      "/auth": { target: "http://127.0.0.1:8787", changeOrigin: true },
+      "/auth": { target: process.env.VITE_API_TARGET || "http://127.0.0.1:8787", changeOrigin: true },
     },
     port: 5173
   },

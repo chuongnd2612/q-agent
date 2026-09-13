@@ -1,14 +1,19 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  AlertTriangle,
   BookOpen,
+  CheckCircle2,
+  Clock,
   EyeOff,
   FileText,
   Github,
   Globe,
   Eye,
+  HelpCircle,
   Plus,
   RefreshCw,
+  SearchCheck,
   Trash2,
   X,
 } from "lucide-react";
@@ -18,6 +23,7 @@ import { timeAgo } from "@/components/dashboard/runStatus";
 import {
   useBusinessSources,
   useDeleteBusinessSource,
+  useProbeBusinessSource,
   useSyncBusinessSource,
   useUpdateBusinessSource,
 } from "@/hooks/queries";
@@ -50,6 +56,25 @@ import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
  * `excluded` is a context switch, not a soft delete: the snapshot and its
  * provenance survive so an artifact already generated from the source stays
  * attributable.
+ *
+ * ## Staleness is shown, and only ever claimed where it is known (#830)
+ *
+ * ADR 0016 §4 takes snapshots over live sync for ATTRIBUTABILITY, and that
+ * bargain is only honest if a user can see when a snapshot has gone stale. The
+ * badge therefore renders the server's `staleness.mode`, never a boolean the
+ * client re-derives:
+ *
+ * - `revision` — a probe compared upstream versions, so "Upstream changed" /
+ *   "Up to date" is a real statement.
+ * - `age` — nothing can be probed (an upload has no address; a page sends no
+ *   ETag), so the badge says "Last fetched 34 days ago" and says WHY, rather
+ *   than a confident "changed". Claiming knowledge we do not have is worse
+ *   than admitting the gap — that is the point of the slice.
+ * - `unknown` — a probe exists but nobody has run it. Deliberately not styled
+ *   as "up to date": nobody has looked.
+ *
+ * The provenance line under each row carries `fetchedAt` and the content hash,
+ * because those are what a generated case's "grounded in" list names.
  *
  * ## The overlay lives below, in its own panel
  *
@@ -105,6 +130,7 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
   const update = useUpdateBusinessSource(projectGuid);
   const remove = useDeleteBusinessSource(projectGuid);
   const sync = useSyncBusinessSource(projectGuid);
+  const probe = useProbeBusinessSource(projectGuid);
 
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<BusinessSourceOut | null>(null);
@@ -143,6 +169,26 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
     sync.mutate(row.id, {
       onSuccess: () => toast.success(t("businessTab.syncStarted", { title: row.title })),
       onError: (e) => toast.error(e instanceof Error ? e.message : t("businessTab.syncError")),
+    });
+
+  /**
+   * Ask upstream whether this document has moved. Never a fetch.
+   *
+   * A probe that could not answer is still a success — it records WHY on the
+   * row, which is what drops the badge to the age label — so the toast reports
+   * the verdict rather than treating "could not check" as an error.
+   */
+  const checkNow = (row: BusinessSourceOut) =>
+    probe.mutate(row.id, {
+      onSuccess: (next) =>
+        toast.success(
+          next.probeError
+            ? t("businessTab.probeUnknown", { title: next.title })
+            : t(next.stale ? "businessTab.probeStale" : "businessTab.probeFresh", {
+                title: next.title,
+              }),
+        ),
+      onError: (e) => toast.error(e instanceof Error ? e.message : t("businessTab.probeError")),
     });
 
   const confirmDelete = () => {
@@ -222,8 +268,10 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
                 row={row}
                 busy={update.isPending && update.variables?.id === row.id}
                 syncing={row.status === "syncing" || (sync.isPending && sync.variables === row.id)}
+                probing={probe.isPending && probe.variables === row.id}
                 onToggle={() => toggleExcluded(row)}
                 onSync={() => syncNow(row)}
+                onProbe={() => checkNow(row)}
                 onDelete={() => setConfirming(row)}
               />
             ))}
@@ -280,19 +328,118 @@ function EmptyState({ onAdd, formOpen }: { onAdd: () => void; formOpen: boolean 
   );
 }
 
+
+/**
+ * Days since an ISO timestamp, or `null` when there is none.
+ *
+ * Whole days on purpose: the age label is a judgement aid ("34 days ago"), not
+ * a clock, and an hours-precise number would suggest a precision the snapshot
+ * model does not have.
+ */
+function daysSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, Math.floor(ms / 86_400_000));
+}
+
+/**
+ * The freshness badge — the honest one.
+ *
+ * Every branch here corresponds to a `staleness.mode` the SERVER decided
+ * (#830). The client never turns "we have not checked" into "up to date", and
+ * never turns "we cannot check" into "changed": those two conflations are the
+ * entire failure mode the badge exists to avoid, so each mode gets its own
+ * wording, its own icon and its own token pair.
+ *
+ * `title` carries the reason in every uncertain mode, so a user who asks "why
+ * does this only show an age?" gets the adapter's own sentence rather than a
+ * shrug.
+ */
+function StalenessBadge({ row }: { row: BusinessSourceOut }) {
+  const { t } = useTranslation("projects");
+  const { mode, stale, detail } = row.staleness;
+  const age = daysSince(row.fetchedAt);
+
+  // Nothing has ever been fetched: there is no snapshot to be stale, and
+  // saying anything about freshness here would be noise on top of `pending`.
+  if (!row.fetchedAt) return null;
+
+  if (mode === "revision" && stale) {
+    return (
+      <span
+        data-testid="business-staleness"
+        data-mode="stale"
+        title={t("businessTab.staleness.staleHint")}
+        className="flex items-center gap-1 rounded-md bg-warn-tint px-2 py-0.5 text-[10.5px] font-bold text-warn"
+      >
+        <AlertTriangle size={11} strokeWidth={2.6} />
+        {t("businessTab.staleness.stale")}
+      </span>
+    );
+  }
+  if (mode === "revision") {
+    return (
+      <span
+        data-testid="business-staleness"
+        data-mode="fresh"
+        title={t("businessTab.staleness.freshHint", {
+          when: row.probedAt ? timeAgo(row.probedAt) : "",
+        })}
+        className="flex items-center gap-1 rounded-md bg-ok-tint px-2 py-0.5 text-[10.5px] font-bold text-ok"
+      >
+        <CheckCircle2 size={11} strokeWidth={2.6} />
+        {t("businessTab.staleness.fresh")}
+      </span>
+    );
+  }
+  if (mode === "unknown") {
+    return (
+      <span
+        data-testid="business-staleness"
+        data-mode="unknown"
+        title={t("businessTab.staleness.unknownHint")}
+        className="flex items-center gap-1 rounded-md bg-neutral-tint px-2 py-0.5 text-[10.5px] font-bold text-neutral"
+      >
+        <HelpCircle size={11} strokeWidth={2.6} />
+        {t("businessTab.staleness.unknown")}
+      </span>
+    );
+  }
+  // `age` — the honest fallback. It states the AGE and never a verdict, and
+  // the tooltip says which limitation put us here.
+  return (
+    <span
+      data-testid="business-staleness"
+      data-mode="age"
+      title={detail || t("businessTab.staleness.ageHint")}
+      className="flex items-center gap-1 rounded-md bg-neutral-tint px-2 py-0.5 text-[10.5px] font-bold text-neutral"
+    >
+      <Clock size={11} strokeWidth={2.6} />
+      {age === null
+        ? t("businessTab.staleness.ageUnknown")
+        : t("businessTab.staleness.age", { count: age })}
+    </span>
+  );
+}
+
 function SourceRow({
   row,
   busy,
   syncing,
+  probing,
   onToggle,
   onSync,
+  onProbe,
   onDelete,
 }: {
   row: BusinessSourceOut;
   busy: boolean;
   syncing: boolean;
+  probing: boolean;
   onToggle: () => void;
   onSync: () => void;
+  onProbe: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation("projects");
@@ -340,23 +487,47 @@ function SourceRow({
             {t("businessTab.excludedHint")}
           </p>
         )}
+        {/* Provenance: exactly what a generated case's "grounded in" list names
+            (#830). The hash is truncated for reading, not for identity — the
+            full value is on the title attribute. */}
+        {row.fetchedAt && (
+          <p
+            className="m-0 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-faint"
+            data-testid="business-provenance"
+          >
+            <span>{t("businessTab.fetchedAt", { when: timeAgo(row.fetchedAt) })}</span>
+            {row.contentHash && (
+              <span className="font-mono" title={row.contentHash}>
+                {t("businessTab.hash", { hash: row.contentHash.slice(0, 12) })}
+              </span>
+            )}
+            {row.docCount > 0 && (
+              <span>{t("businessTab.docCount", { count: row.docCount })}</span>
+            )}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
-        {row.docCount > 0 && (
-          <span className="text-[11px] text-faint">
-            {t("businessTab.docCount", { count: row.docCount })}
-          </span>
-        )}
-        {row.fetchedAt && (
-          <span className="text-[11px] text-faint">{timeAgo(row.fetchedAt)}</span>
-        )}
+        <StalenessBadge row={row} />
         <span
           className={`rounded-md px-2 py-0.5 text-[10.5px] font-bold ${statusText} ${statusTint}`}
           data-testid="business-source-status"
         >
           {row.excluded ? t("businessTab.excluded") : t(`businessTab.status.${row.status}`)}
         </span>
+        {row.probeSupported && row.fetchedAt && (
+          <button
+            onClick={onProbe}
+            disabled={probing}
+            title={t("businessTab.checkNow")}
+            aria-label={t("businessTab.checkNow")}
+            data-testid="business-probe"
+            className="cursor-pointer rounded-lg p-1.5 text-txt4 hover:bg-card3 hover:text-p disabled:cursor-default disabled:opacity-50"
+          >
+            <SearchCheck size={15} className={probing ? "animate-pulse" : undefined} />
+          </button>
+        )}
         {row.kind !== "upload" && (
           <button
             onClick={onSync}
