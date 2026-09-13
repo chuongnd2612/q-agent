@@ -27,6 +27,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import User
 from app.models.agent_device import AgentDevice
+from app.models.business import BusinessFact
+from app.models.knowledge import ProjectKnowledge
 from app.models.project_config import ProjectConfig
 from app.models.provider_connection import ProviderConnection
 from app.services import claude_credentials, project_config_service, settings_store
@@ -77,6 +79,38 @@ def _owned_configs(db: Session, user: User | None) -> list[ProjectConfig]:
     return [r for r in rows if r.owner_id == owner_id or r.owner_id is None]
 
 
+def _has_authoring_grounding(db: Session, configs: list[ProjectConfig]) -> bool:
+    """True when any visible project can ground test-case authoring.
+
+    Either source counts, and neither is privileged (#826, ADR 0016 §6): a
+    distilled **business brief** or a single **business fact** is as complete an
+    answer as an indexed **code knowledge base**. Checking only the latter is
+    what made the checklist read as though a repository were mandatory, which is
+    the opposite of the position the ADR takes.
+
+    :param db: Active session.
+    :param configs: The project configs visible to this caller.
+    :returns: ``True`` if at least one visible project has business knowledge or
+        a code knowledge base (project-level or per-repo).
+    """
+    guids = {c.project_guid for c in configs if c.project_guid}
+    if any((c.business_brief or {}).get("brief") for c in configs):
+        return True
+    if guids and db.query(BusinessFact).filter(
+        BusinessFact.project_guid.in_(guids), BusinessFact.excluded.is_(False)
+    ).first():
+        return True
+
+    # Per-repo KB rows are keyed "<project>::<repo>"; a legacy project-level row
+    # is the bare key. Match both without assuming which one exists.
+    keys = {c.key for c in configs if c.key}
+    for row in db.query(ProjectKnowledge).all():
+        key = row.key or ""
+        if key in keys or key.split("::", 1)[0] in keys:
+            return True
+    return False
+
+
 def check(db: Session, user: User | None) -> dict[str, Any]:
     """Build the setup checklist for ``user`` under the settings in force.
 
@@ -122,6 +156,7 @@ def check(db: Session, user: User | None) -> dict[str, Any]:
     )
 
     configs = _owned_configs(db, user)
+    has_grounding = _has_authoring_grounding(db, configs)
     with_base_url = [c for c in configs if (c.base_url or "").strip()]
     manual_auth = [c for c in configs if getattr(c, "manual_auth", False)]
     captured = [
@@ -176,6 +211,23 @@ def check(db: Session, user: User | None) -> dict[str, Any]:
             detail=""
             if with_base_url
             else "No project has a base URL, so live authoring has nothing to drive.",
+        ),
+        # Grounding for test-case authoring, satisfied by EITHER source (#826,
+        # ADR 0016 §6). It is deliberately NOT required: a run with neither still
+        # produces cases, merely ungrounded ones — so reporting it as a blocker
+        # would be false. It is here to say that Business Knowledge alone is a
+        # complete answer, and that a repository is therefore not mandatory.
+        _item(
+            "authoringKnowledge",
+            ready=has_grounding,
+            required=False,
+            fix=FIX_PROJECT,
+            detail=""
+            if has_grounding
+            else (
+                "No project has Business Knowledge or an indexed code knowledge "
+                "base — test cases can still be written, but nothing grounds them."
+            ),
         ),
         _item(
             "capturedLogin",

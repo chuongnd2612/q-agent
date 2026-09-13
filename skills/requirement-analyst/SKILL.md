@@ -1,6 +1,6 @@
 ---
 name: requirement-analyst
-description: Analyze an Azure DevOps or Jira ticket into a structured Requirement Analysis (business objective, functional/non-functional requirements, business rules, AC breakdown, edge cases, risks, test-scope + coverage plan) before any test cases are written. Use when the user pastes a ticket, says "analyze this requirement", "break down this ticket", or before running test-case-generator. Requires the Project Knowledge Base from project-bootstrap.
+description: Analyze an Azure DevOps or Jira ticket into a structured Requirement Analysis (business objective, functional/non-functional requirements, business rules, AC breakdown, edge cases, risks, test-scope + coverage plan) before any test cases are written. Use when the user pastes a ticket, says "analyze this requirement", "break down this ticket", or before running test-case-generator. Requires a ticket and at least one of Business Knowledge or the Project Knowledge Base.
 version: 1.0.0
 author: Andrew
 ---
@@ -40,14 +40,22 @@ Required:
 - Ticket Title, Description, Acceptance Criteria
 - Ticket Comments and Attachments (if available)
 - Linked Pull Requests (optional)
-- **Project Knowledge Base** — `knowledge.md` + `knowledge.json` from `project-bootstrap`
+- **and at least one of**:
+  - **Business Knowledge** — the project's business brief and business facts
+    (glossary, rules, workflows, roles), or
+  - **Project Knowledge Base** — `knowledge.md` + `knowledge.json` from `project-bootstrap`
 
-> The analysis now receives the **enriched KB context** injected into the prompt — business
-> entities, domain, application routes, and base URL. Reuse that real terminology and those
-> entities/routes as-is; never reinterpret or invent them.
+> The analysis receives the **enriched context** injected into the prompt — the business brief
+> and facts, plus (when the project has indexed code) business entities, domain, application
+> routes, and base URL. Reuse that real terminology and those entities/routes as-is; never
+> reinterpret or invent them.
 >
-> If the Project Knowledge Base does not exist, run **project-bootstrap** first. Reuse its
-> business entities, roles, workflows, and glossary — never invent domain concepts.
+> Stop and request input only when the ticket is missing, or when **both** knowledge sources
+> are absent. **A project with no code yet is a supported case**: with Business Knowledge
+> alone, analyse the requirement from business intent, and say nothing about screens, routes
+> or selectors you have not been given — record them as open questions instead. Reuse the
+> business entities, roles, workflows, and glossary you were given — never invent domain
+> concepts.
 
 ## Workflow
 
@@ -61,8 +69,10 @@ Required:
    error and recovery scenarios.
 5. **Risks** — missing/contradictory requirements, technical, business, and regression risks;
    assign a risk level.
-6. **Domain mapping** — map the ticket to the KB's business entities, routes, and workflows,
-   reusing KB terminology and the exact project terminology from the enriched context.
+6. **Domain mapping** — map the ticket to the business entities, workflows and (when a code
+   knowledge base exists) routes you were given, reusing that exact project terminology. With
+   Business Knowledge only, map to the business vocabulary and leave the routes unmapped
+   rather than guessing at them.
 7. **Test scope recommendation** — recommend which testing types apply (Functional, Regression,
    Validation, Permission, UI, API, Integration).
 8. **Requirement coverage plan** — map each AC to proposed testing areas; highlight covered vs

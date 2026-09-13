@@ -221,3 +221,121 @@ def test_without_hub_management_a_missing_credential_still_blocks(client, db_ses
     assert item["ready"] is False
     assert "No Claude credential" in item["detail"]
     assert payload["ready"] is False
+
+
+# ---------------------------------------------- grounding for authoring (#826)
+
+
+def _cold_start_project(db_session, owner_id, *, brief: str = "", fact: bool = False):
+    """A project with NO repository and NO code knowledge base.
+
+    Optionally given business knowledge — which is the only variable these tests
+    change, so a difference in the item's state can only come from that.
+    """
+    from app.models.business import BusinessFact
+
+    guid = f"guid-{owner_id}-cold"
+    db_session.add(
+        ProjectConfig(
+            key=f"Cold-{owner_id}",
+            name=f"Cold-{owner_id}",
+            project_guid=guid,
+            owner_id=owner_id,
+            business_brief={"brief": brief, "status": "ready"} if brief else {},
+        )
+    )
+    if fact:
+        db_session.add(
+            BusinessFact(
+                project_guid=guid,
+                owner_id=owner_id,
+                category="glossary",
+                term="Plan Sponsor",
+                statement="The employer who owns the benefit plan.",
+            )
+        )
+    db_session.commit()
+    return guid
+
+
+def test_business_knowledge_alone_satisfies_the_authoring_item(client, db_session, auth_on):
+    """#826: a project with no repo is grounded, so the checklist must not say otherwise.
+
+    The negative control is the same account one step earlier: with the project
+    present but no business knowledge on it, the item is unmet — so a pass here
+    comes from the brief, not from the item being satisfied by anything at all.
+    """
+    user = _make_user(db_session, "cold@example.com")
+    _cold_start_project(db_session, user.id)
+
+    before = _item(client.get("/readiness", headers=_headers(user)).json(), "authoringKnowledge")
+    assert before["ready"] is False
+    assert "Business Knowledge" in before["detail"]
+
+    cfg = (
+        db_session.query(ProjectConfig).filter(ProjectConfig.owner_id == user.id).one()
+    )
+    cfg.business_brief = {"brief": "Greenfield administers benefit plans.", "status": "ready"}
+    db_session.commit()
+
+    after = _item(client.get("/readiness", headers=_headers(user)).json(), "authoringKnowledge")
+    assert after["ready"] is True, "business knowledge alone must satisfy the item"
+    assert after["detail"] == ""
+
+
+def test_a_single_business_fact_is_enough(client, db_session, auth_on):
+    """Either half of Business Knowledge counts — a distilled brief is not required."""
+    user = _make_user(db_session, "facts@example.com")
+    _cold_start_project(db_session, user.id, fact=True)
+
+    item = _item(client.get("/readiness", headers=_headers(user)).json(), "authoringKnowledge")
+    assert item["ready"] is True
+
+
+def test_the_authoring_item_never_blocks_a_run(client, db_session, auth_on):
+    """Ungrounded generation still produces cases, so reporting a blocker would be false."""
+    user = _make_user(db_session, "ungrounded@example.com")
+    _cold_start_project(db_session, user.id)
+
+    payload = client.get("/readiness", headers=_headers(user)).json()
+    item = _item(payload, "authoringKnowledge")
+
+    assert item["ready"] is False
+    assert item["required"] is False
+    assert "authoringKnowledge" not in [
+        i["key"] for i in payload["items"] if i["required"] and not i["ready"]
+    ]
+
+
+def test_a_code_knowledge_base_satisfies_it_too(client, db_session, auth_on):
+    """The other half of "either": an indexed repo, with no business knowledge at all."""
+    from app.models.knowledge import compose_key, ProjectKnowledge
+
+    user = _make_user(db_session, "codekb@example.com")
+    _cold_start_project(db_session, user.id)
+    db_session.add(
+        ProjectKnowledge(
+            key=compose_key(f"Cold-{user.id}", "web"),
+            name=f"Cold-{user.id}",
+            owner_id=user.id,
+            knowledge={"domain": "benefits"},
+        )
+    )
+    db_session.commit()
+
+    item = _item(client.get("/readiness", headers=_headers(user)).json(), "authoringKnowledge")
+    assert item["ready"] is True
+
+
+def test_another_users_knowledge_does_not_ground_this_account(client, db_session, auth_on):
+    """Owner scoping, the same trap #583 hit: B must not inherit A's grounding."""
+    user_a = _make_user(db_session, "ka@example.com")
+    user_b = _make_user(db_session, "kb@example.com")
+    _cold_start_project(db_session, user_a.id, brief="A's product brief.")
+    _cold_start_project(db_session, user_b.id)
+
+    a = client.get("/readiness", headers=_headers(user_a)).json()
+    b = client.get("/readiness", headers=_headers(user_b)).json()
+
+    assert _item(a, "authoringKnowledge")["ready"] is True
+    assert _item(b, "authoringKnowledge")["ready"] is False

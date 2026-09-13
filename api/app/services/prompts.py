@@ -398,6 +398,14 @@ def render_project_context(
             )
             lines.append(f"- Test-account roles available: {rendered}")
 
+    # A project with no code indexed yet (#826) resolves a key but nothing under
+    # it, leaving only the header — which reads as "a Knowledge Base exists and
+    # is empty" and invites the model to fill the silence with a guessed route or
+    # selector. Say nothing instead: the business block above is then the only
+    # grounding, which is exactly what it is.
+    if len(lines) == 1:
+        return ""
+
     return "\n".join(lines)
 
 

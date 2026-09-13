@@ -62,9 +62,10 @@
   "knowledgeTab": {
     "buildSuccess": "Knowledge built for {{repo}}",
     "buildError": "Knowledge build failed",
-    "emptyTitle": "No repositories yet",
-    "emptyBody": "A project can hold many repositories, each with its own knowledge base. Add the repos this project owns, then build knowledge per repo.",
+    "emptyTitle": "No code indexed yet",
+    "emptyBody": "Test authoring is running on Business Knowledge — a project with no repository can still produce reviewable manual test cases. Add repositories when there is code to index; automation, execution and self-heal need one.",
     "manageRepositories": "Manage repositories",
+    "openBusiness": "Open Business Knowledge",
     "repositories": "REPOSITORIES",
     "manage": "Manage"
   },

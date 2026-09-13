@@ -176,6 +176,7 @@ export function ProjectKnowledgeTab() {
       providerKind={providerKind}
       repos={repos}
       onManageRepos={() => goTab("connection")}
+      onOpenBusiness={() => goTab("business")}
     />
   );
 }
