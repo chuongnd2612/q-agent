@@ -305,12 +305,68 @@ automation generator from Q-Agent's secure store — reference them by role.
     return str(out_dir)
 
 
+#: Sections of the knowledge blob whose entries a human can pin, and the key
+#: each section's entries are identified by. Both are the lists the three
+#: machine-merge paths below already key on, so "what can be pinned" and "what a
+#: heal or an exploration can rewrite" stay the same set by construction.
+PINNABLE_SECTIONS: dict[str, str] = {"routes": "path", "selectors": "selector"}
+
+
+def carry_pinned_forward(previous: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str, Any]:
+    """Re-apply the human-pinned entries of ``previous`` onto a rebuilt blob (#827).
+
+    **This is the highest-risk detail in the Business Knowledge epic**, and it is
+    a data-loss one rather than a crash: ``apply_build`` replaces
+    ``row.knowledge`` wholesale, so without this a ``project-bootstrap`` rebuild
+    destroys every manual correction *silently* — no error, no log, the
+    corrections are simply gone the next time somebody rebuilds. ADR 0016 §5
+    names it as the reason making the code KB editable (#828) is gated on this
+    slice.
+
+    Only entries carrying a truthy ``pinned`` are carried, and a carried entry
+    **replaces** the rebuilt entry it collides with rather than sitting beside
+    it — two entries for one selector would both reach every prompt, with the
+    machine's contradicting the human's. Everything else about the rebuilt blob
+    is left exactly as the build produced it, so a rebuild still sheds entries
+    the code no longer has.
+
+    Args:
+        previous: The blob being replaced (``{}`` on a first index).
+        rebuilt: The build's fresh blob. Not mutated.
+
+    Returns:
+        A new blob: ``rebuilt`` with the previous blob's pinned entries applied.
+    """
+    merged = dict(rebuilt or {})
+    for section, id_key in PINNABLE_SECTIONS.items():
+        pinned = [
+            entry
+            for entry in (previous or {}).get(section) or []
+            if isinstance(entry, dict) and entry.get("pinned")
+        ]
+        if not pinned:
+            continue
+        entries = [e for e in (merged.get(section) or []) if isinstance(e, dict)]
+        by_id = {entry.get(id_key): i for i, entry in enumerate(entries) if entry.get(id_key)}
+        for entry in pinned:
+            index = by_id.get(entry.get(id_key))
+            if index is None:
+                entries.append(entry)
+            else:
+                entries[index] = entry
+        merged[section] = entries
+    return merged
+
+
 def apply_build(
     row: ProjectKnowledge, payload: dict[str, Any], *, config: "ProjectConfig | None" = None
 ) -> None:
     """Persist a build result onto a ProjectKnowledge row (caller commits).
 
     First index stays ``v1``; each subsequent (re)build increments the version.
+
+    A **rebuild** carries the previous blob's human-pinned entries forward
+    (:func:`carry_pinned_forward`); a first index has nothing to carry.
     """
     # Detect a rebuild by prior success (the status is transiently "indexing" here).
     rebuild = row.last_indexed is not None
@@ -322,7 +378,11 @@ def apply_build(
         row.version = f"v{n + 1}"
     else:
         row.version = "v1"
-    row.knowledge = payload["knowledge"]
+    row.knowledge = (
+        carry_pinned_forward(row.knowledge or {}, payload["knowledge"])
+        if rebuild
+        else payload["knowledge"]
+    )
     row.confidence = payload["confidence"]
     row.status = "indexed"
     row.needs_refresh = False
@@ -420,6 +480,10 @@ def propose_selector_fix(
     value) in the project's ``ProjectKnowledge`` row, so future generations reuse
     the healed value instead of repeating the same broken selector.
 
+    NO-CLOBBER (#827, ADR 0016 §5): an entry a human has ``pinned`` is never
+    rewritten. A correction is the only signal that the machine was wrong, and a
+    self-heal that silently undid one would not be made twice.
+
     Looks up the per-repo row first, falling back to the legacy project-level row
     (mirrors ``project_config_service.build_context``'s KB resolution). Opens its
     own session so it never interferes with the caller's (heal loop) transaction.
@@ -465,9 +529,15 @@ def propose_selector_fix(
         selectors = list(kn.get("selectors") or [])
         updated = False
         for i, sel in enumerate(selectors):
-            if isinstance(sel, dict) and sel.get("selector") == old_selector:
-                selectors[i] = {**sel, "selector": new_selector}
-                updated = True
+            if not isinstance(sel, dict) or sel.get("selector") != old_selector:
+                continue
+            if sel.get("pinned"):
+                # No-clobber (#827, ADR 0016 §5): a human correction outranks a
+                # self-heal's guess. The heal's own spec edit still stands; only
+                # the write-back into the KB is declined.
+                continue
+            selectors[i] = {**sel, "selector": new_selector}
+            updated = True
         if not updated:
             return False
 
@@ -515,7 +585,10 @@ def merge_discovered_dom(
     exercised and the selectors it used are, by definition, real. This *adds* any
     of them the KB doesn't already know (it never rewrites existing entries — that
     is ``propose_selector_fix``'s job), tagging added entries ``source="dom-heal"``
-    for provenance. Adding grounding to a KB that had none is what lets a future
+    for provenance. Because it only ever *adds*, a human-``pinned`` entry is
+    already safe here: a colliding discovery dedups against it and is dropped
+    (#827 — the explicit ``pinned`` guard belongs on the two paths that rewrite,
+    ``propose_selector_fix`` and ``merge_verified_discovery``). Adding grounding to a KB that had none is what lets a future
     generation stop hitting the ``blocked`` gate.
 
     Looks up the per-repo row first, falling back to the legacy project-level row
@@ -636,8 +709,10 @@ def merge_verified_discovery(
 
     Merge semantics (extends ``merge_discovered_dom``): dedup by ``path`` (routes) and
     by ``selector`` value (selectors). NO-CLOBBER — an existing entry that already has
-    a truthy ``verified_at_runtime`` is never overwritten (the colliding discovery is
-    skipped, leaving the verified entry intact). A discovery colliding with an existing
+    a truthy ``verified_at_runtime`` **or ``pinned``** is never overwritten (the
+    colliding discovery is skipped, leaving that entry intact). ``pinned`` joins the
+    condition because a runtime observation outranks a source parse (ADR 0010 §6) but
+    not a human correction (ADR 0016 §5, #827). A discovery colliding with an existing
     UN-verified (source-inferred) entry UPGRADES it in place to verified, preserving the
     existing entry's other keys. Non-colliding discoveries are appended.
 
@@ -712,8 +787,8 @@ def merge_verified_discovery(
                     routes.append(entry)
                     index_by_path[path] = len(routes) - 1
                     merged += 1
-                elif routes[i].get("verified_at_runtime"):
-                    continue  # no-clobber: leave the existing verified entry intact
+                elif routes[i].get("verified_at_runtime") or routes[i].get("pinned"):
+                    continue  # no-clobber: leave the verified/pinned entry intact
                 else:
                     routes[i] = {**routes[i], **entry}  # upgrade in place, preserve other keys
                     merged += 1
@@ -739,8 +814,8 @@ def merge_verified_discovery(
                     sels.append(entry)
                     index_by_sel[selector] = len(sels) - 1
                     merged += 1
-                elif sels[i].get("verified_at_runtime"):
-                    continue  # no-clobber: leave the existing verified entry intact
+                elif sels[i].get("verified_at_runtime") or sels[i].get("pinned"):
+                    continue  # no-clobber: leave the verified/pinned entry intact
                 else:
                     sels[i] = {**sels[i], **entry}  # upgrade in place, preserve other keys
                     merged += 1

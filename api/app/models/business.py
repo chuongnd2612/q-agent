@@ -216,6 +216,18 @@ class BusinessFact(Base):
         ForeignKey("business_fact.id", ondelete="SET NULL"), nullable=True
     )
 
+    #: How many times a human has edited *this* row's content. Deliberately a
+    #: counter and not a history table (#827): a diff/restore UI is a real
+    #: feature with no stated demand, and this column is the hook to build one
+    #: on if it ever arrives. Ingested rows stay at 1 — a re-sync refreshing a
+    #: row is not a human revising it.
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    #: Who last edited it. Nullable because an ingested row has no human author
+    #: and because the #91 ownership bridge admits an anonymous caller.
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, default=None
+    )
+
     #: Denormalized text for keyword scoring. There is no vector store anywhere
     #: in this codebase — retrieval is keyword overlap
     #: (``prompts._rank_by_relevance``) — so the searchable projection is

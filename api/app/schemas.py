@@ -1705,3 +1705,69 @@ class BusinessSourceUpdate(ApiModel):
 
     title: str | None = None
     excluded: bool | None = None
+
+# ------------------------------------------------- Business fact overlay (#827)
+class BusinessFactOut(ApiModel):
+    """One business fact, ingested or human-authored (epic #813, ADR 0016 §5).
+
+    One shape for both, on purpose: an ingested fact and the correction that
+    beats it are the same thing, and ``origin``/``pinned``/``supersededBy`` are
+    what tell them apart. The client needs all three to render the overlay —
+    a superseded row is shown **struck through** next to the correction, so the
+    disagreement with the source document stays visible instead of being hidden
+    by an in-place edit.
+
+    ``revision`` and ``updatedBy`` are the whole of the versioning (#827): a
+    counter and an author, deliberately no history table.
+    """
+
+    id: int
+    project_guid: str | None = None
+    source_id: int | None = None
+    category: str = "rule"
+    term: str = ""
+    statement: str = ""
+    detail: str = ""
+    origin: str = "ingested"
+    pinned: bool = False
+    excluded: bool = False
+    superseded_by: int | None = None
+    revision: int = 1
+    updated_by: int | None = None
+    updated_at: datetime | None = None
+
+
+class BusinessFactCreate(ApiModel):
+    """Add a fact the documents never stated."""
+
+    category: str = "rule"
+    term: str = ""
+    statement: str = ""
+    detail: str = ""
+
+
+class BusinessFactCorrection(ApiModel):
+    """Override a fact with a pinned correction.
+
+    No ``category``/``term``: a correction is *about* the fact it supersedes, so
+    it inherits both. Letting a correction change the term would make it collide
+    with a different distilled fact on the next re-sync — i.e. it would be an
+    addition wearing a correction's clothes.
+    """
+
+    statement: str = ""
+    detail: str = ""
+
+
+class BusinessFactUpdate(ApiModel):
+    """Edit a manual fact, and/or take any fact out of context.
+
+    Every field optional — an omitted field is left alone, a ``null`` is not a
+    clear. ``statement``/``detail`` are refused on an ingested fact: ingested
+    content is immutable and the way to disagree with it is a correction.
+    """
+
+    statement: str | None = None
+    detail: str | None = None
+    excluded: bool | None = None
+

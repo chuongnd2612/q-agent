@@ -21,6 +21,7 @@ import {
   useSyncBusinessSource,
   useUpdateBusinessSource,
 } from "@/hooks/queries";
+import { BusinessFactsPanel } from "./BusinessFactsPanel";
 import { BusinessSourceForm } from "./BusinessSourceForm";
 import { toast } from "@/lib/toast";
 import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
@@ -49,6 +50,14 @@ import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
  * `excluded` is a context switch, not a soft delete: the snapshot and its
  * provenance survive so an artifact already generated from the source stays
  * attributable.
+ *
+ * ## The overlay lives below, in its own panel
+ *
+ * `BusinessFactsPanel` (#827) is the *distilled* half: the facts the documents
+ * produced, plus the human overlay on them — correct, add, exclude. It is a
+ * second panel rather than a section of this one because it is a different
+ * object (a fact, not a document) with a different lifecycle, and because a
+ * source can be excluded wholesale here while a single fact is corrected there.
  *
  * ## Opaque surface, not GlassCard
  *
@@ -227,6 +236,8 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
           </p>
         )}
       </section>
+
+      <BusinessFactsPanel projectGuid={projectGuid} />
 
       <ConfirmDialog
         open={confirming !== null}
