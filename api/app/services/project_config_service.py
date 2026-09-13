@@ -29,6 +29,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import crypto
+from app.models.business import BusinessFact
 from app.models.knowledge import ProjectKnowledge, compose_key
 from app.models.project import Project
 from app.models.project_config import ProjectConfig
@@ -722,6 +723,86 @@ def repo_options(db: Session, project_key: str) -> list[dict[str, Any]]:
     return out
 
 
+# ------------------------------------------------------- business knowledge
+def business_context(
+    db: Session, project_guid: str | None, owner_id: int | None
+) -> dict[str, Any]:
+    """Load a project's Business Knowledge for prompt assembly (#825, ADR 0016).
+
+    Business Knowledge is the project's *domain* — what the software is meant to
+    do — as opposed to :class:`~app.models.knowledge.ProjectKnowledge`, which is
+    code-derived and says how it is currently built. It is loaded by
+    **``project_guid``**, never by repo: that is what lets a project with no
+    repository at all (the cold-start case, #826) still be grounded.
+
+    Ownership resolution mirrors :func:`get_config_visible_to` (ADR 0009 §3): the
+    caller's own rows win outright, and only when they have none does the
+    unowned/shared namespace (``owner_id IS NULL``) answer. The two namespaces are
+    never mixed, so a user's own correction is never shown alongside the shared
+    row it replaces.
+
+    Superseded facts are dropped: a manual correction carries the id of the
+    ingested fact it overrides in ``superseded_by`` (epic #813 — override is an
+    overlay, never a mutation), so the overridden row must not also reach the
+    prompt.
+
+    :param db: Active session.
+    :param project_guid: The owning project's GUID; ``None`` yields empty context.
+    :param owner_id: The viewer whose rows take precedence; ``None`` reads the
+        shared namespace directly.
+    :returns: ``{"businessBrief": str, "businessFacts": list[dict]}`` — the brief
+        text (empty when the project has never been distilled) and the in-context
+        facts as ``{category, term, statement, detail, pinned, origin, sourceId}``.
+    """
+    empty: dict[str, Any] = {"businessBrief": "", "businessFacts": []}
+    if not project_guid:
+        return empty
+
+    def _load(scope_owner: int | None) -> tuple[str, list[BusinessFact]]:
+        cfg_row = (
+            db.query(ProjectConfig)
+            .filter(
+                ProjectConfig.project_guid == project_guid,
+                ProjectConfig.owner_id == scope_owner,
+            )
+            .first()
+        )
+        brief = str(((cfg_row.business_brief if cfg_row else None) or {}).get("brief") or "")
+        facts = (
+            db.query(BusinessFact)
+            .filter(
+                BusinessFact.project_guid == project_guid,
+                BusinessFact.owner_id == scope_owner,
+                BusinessFact.excluded.is_(False),
+            )
+            .order_by(BusinessFact.id)
+            .all()
+        )
+        return brief, facts
+
+    brief, facts = _load(owner_id)
+    if owner_id is not None and not brief and not facts:
+        brief, facts = _load(None)
+
+    superseded = {f.superseded_by for f in facts if f.superseded_by}
+    return {
+        "businessBrief": brief,
+        "businessFacts": [
+            {
+                "category": f.category or "",
+                "term": f.term or "",
+                "statement": f.statement or "",
+                "detail": f.detail or "",
+                "pinned": bool(f.pinned),
+                "origin": f.origin or "",
+                "sourceId": f.source_id,
+            }
+            for f in facts
+            if f.id not in superseded
+        ],
+    }
+
+
 def build_context(
     db: Session, ticket: Ticket, env: str = "", repo: str | None = None
 ) -> dict[str, Any]:
@@ -747,7 +828,8 @@ def build_context(
         repo, repoOptions, baseUrl, testAccounts (with decrypted passwords),
         environments, extra, plus flattened knowledge fields (domain,
         architecture, locator, routes, selectors, auth, businessEntities, stack,
-        pageObjects/fixtures counts).
+        pageObjects/fixtures counts), plus Business Knowledge (businessBrief,
+        businessFacts) resolved by project GUID (#825).
     """
     key = project_key_for_ticket(db, ticket)
     context: dict[str, Any] = {"projectKey": key or ""}
@@ -811,6 +893,11 @@ def build_context(
         context["pageObjectNames"] = kn.get("page_object_names", [])
         context["fixtureNames"] = kn.get("fixture_names", [])
         context["utilities"] = kn.get("utilities", [])
+
+    # Business Knowledge (#825): loaded by project GUID rather than by repo, so a
+    # project with no repository still gets grounded (#826).
+    guid = project_guid_for_key(db, key, owner_id=ticket.owner_id)
+    context.update(business_context(db, guid, ticket.owner_id))
     return context
 
 

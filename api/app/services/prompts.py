@@ -14,6 +14,20 @@ from typing import Any
 from app.models.ticket import Ticket
 from app.services.spec_examples import _keywords
 
+#: Character budgets for the Business Knowledge block (#825, ADR 0016). Stated in
+#: CHARACTERS rather than item counts because a fact varies wildly in length —
+#: a glossary entry is a line, a rule with its detail is a paragraph — where a
+#: route or a selector does not, so an item cap would bound the prompt badly.
+#:
+#: The brief is ALWAYS included and never dropped: it is the one artifact that
+#: does not grow with the corpus (see ``business_ingest.distil``), so it is
+#: affordable by construction.
+BUSINESS_BRIEF_CHARS = 6_000
+#: The ranked fill. Pinned facts — human corrections — are admitted BEFORE this
+#: budget applies and never count against it; everything else competes for it in
+#: relevance order and the lowest-ranked facts fall off the end.
+BUSINESS_FACT_CHARS = 6_000
+
 ANALYSIS_JSON_SHAPE = """{
   "businessRules": string[],
   "functionalRequirements": string[],
@@ -90,6 +104,23 @@ def _ticket_context(ticket: Ticket) -> str:
     )
 
 
+def _ticket_rank_query(ticket: Ticket) -> str:
+    """The relevance-ranking query text for a ticket: title + description + AC.
+
+    The test-case prompts have no ``TestCase`` to rank against — they are what
+    *produces* the cases — so the work item itself is the query. Mirrors
+    ``spec_service._case_rank_query``, which does the same job one stage later
+    with a concrete case in hand.
+
+    :param ticket: The work item the prompt is being built for.
+    :returns: Free text for :func:`render_project_context` /
+        :func:`render_business_context`'s ``rank_query``.
+    """
+    parts = [ticket.title or "", ticket.description or ""]
+    parts.extend(str(item) for item in (ticket.acceptance_criteria or []))
+    return " ".join(part for part in parts if part)
+
+
 def _rank_by_relevance(
     items: list[dict], text_fn: Callable[[dict], str], query_keywords: set[str], limit: int
 ) -> list[dict]:
@@ -137,6 +168,116 @@ def _verified_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         items,
         key=lambda it: 0 if isinstance(it, dict) and it.get("verified_at_runtime") else 1,
     )
+
+
+def _pinned_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort business facts so pinned (human-corrected) ones come first.
+
+    The exact analogue of :func:`_verified_first` for the code KB: a ``pinned``
+    fact is a human correction that beats the ingested distillation (epic #813 —
+    override is an overlay, never a mutation), so it leads the block and, in
+    :func:`render_business_context`, is admitted before the character budget
+    applies. The sort is stable, so the upstream relevance order (see
+    :func:`_rank_by_relevance`) survives within each group.
+
+    :param items: Fact dicts, already relevance-ranked.
+    :returns: The same facts, pinned first, order otherwise unchanged.
+    """
+    return sorted(items, key=lambda it: 0 if isinstance(it, dict) and it.get("pinned") else 1)
+
+
+def _render_fact(fact: dict[str, Any]) -> str:
+    """Render one business fact as a single prompt line."""
+    term = str(fact.get("term") or "").strip()
+    statement = str(fact.get("statement") or "").strip()
+    detail = str(fact.get("detail") or "").strip()
+    head = f"- [{fact.get('category') or 'rule'}]"
+    if term:
+        head += f" {term}:"
+    line = f"{head} {statement}".rstrip()
+    if detail:
+        line += f" — {detail}"
+    if fact.get("pinned"):
+        line += " (pinned correction — authoritative)"
+    return line
+
+
+def render_business_context(
+    context: dict[str, Any] | None,
+    *,
+    rank_query: str = "",
+    char_budget: int = BUSINESS_FACT_CHARS,
+) -> str:
+    """Render a project's Business Knowledge as its OWN prompt block (#825).
+
+    Deliberately separate from :func:`render_project_context` rather than folded
+    into it, because the two answer different questions and the model has to be
+    able to tell them apart: this block is *what the software is meant to do* and
+    is the PRIMARY authority for test intent; the Project Knowledge Base block is
+    *how it is currently built* and is for automation detail only. The headings
+    say exactly that (ADR 0016 §7).
+
+    Budgeting is in characters, not item counts (see :data:`BUSINESS_FACT_CHARS`).
+    The brief is always included, clamped at :data:`BUSINESS_BRIEF_CHARS`. Facts
+    are relevance-ranked against ``rank_query`` and then pinned-first; pinned
+    facts are admitted before the budget applies, and the remaining facts fill
+    ``char_budget`` in rank order, so the LOWEST-ranked ones are what fall off.
+
+    :param context: Output of ``project_config_service.build_context`` (or None).
+    :param rank_query: Free text — typically the ticket's title + description +
+        acceptance criteria — that facts are scored against. Empty preserves the
+        corpus order.
+    :param char_budget: Character ceiling for the unpinned ranked fill.
+    :returns: A markdown block, or "" when the project has no business knowledge.
+    """
+    brief = str((context or {}).get("businessBrief") or "").strip()
+    facts = [f for f in ((context or {}).get("businessFacts") or []) if isinstance(f, dict)]
+    if not brief and not facts:
+        return ""
+
+    lines = [
+        "Business context (Business Knowledge — the PRIMARY source for WHAT this "
+        "software is meant to do, and the authority for test intent, scope and "
+        "vocabulary). The Project Knowledge Base block describes how the product "
+        "is currently BUILT — use that for automation detail (routes, selectors) "
+        "only, and never let it override the intent stated here:"
+    ]
+    if brief:
+        lines.append("")
+        lines.append("Product brief:")
+        lines.append(brief[:BUSINESS_BRIEF_CHARS])
+
+    if facts:
+        ranked = _pinned_first(
+            _rank_by_relevance(
+                facts,
+                lambda f: " ".join(
+                    str(f.get(k) or "") for k in ("term", "statement", "detail", "category")
+                ),
+                _keywords(rank_query),
+                len(facts),
+            )
+        )
+        kept: list[str] = []
+        spent = 0
+        for fact in ranked:
+            rendered = _render_fact(fact)
+            if fact.get("pinned"):
+                kept.append(rendered)
+                continue
+            if spent + len(rendered) > char_budget:
+                break
+            kept.append(rendered)
+            spent += len(rendered)
+        if kept:
+            lines.append("")
+            lines.append(
+                "Domain facts (most relevant to this work item first; a pinned "
+                "correction is authoritative and beats anything else here):"
+            )
+            lines.extend(kept)
+
+    return "\n".join(lines)
 
 
 def render_project_context(
@@ -402,12 +543,16 @@ def build_combined_prompt(
     and test-case-generator skills as the system prompt so neither stage loses its
     methodology; this prompt carries the explicit output contract for both.
     """
-    project_block = render_project_context(context)
+    rank_query = _ticket_rank_query(ticket)
+    business_block = render_business_context(context, rank_query=rank_query)
+    business_section = f"{business_block}\n\n" if business_block else ""
+    project_block = render_project_context(context, rank_query=rank_query)
     project_section = f"{project_block}\n\n" if project_block else ""
     repo_section = _repo_section(context)
     return (
         "You are a senior QA analyst and engineer. In a SINGLE response, do two "
         "things for the work item below.\n\n"
+        f"{business_section}"
         f"{project_section}"
         f"{repo_section}"
         f"{_ticket_context(ticket)}\n\n"
@@ -459,7 +604,10 @@ def build_review_prompt(
     not yet covered) and ``additionalCases`` (new cases in the standard case
     shape). ``max_cases`` caps how many additional cases to add.
     """
-    project_block = render_project_context(context)
+    rank_query = _ticket_rank_query(ticket)
+    business_block = render_business_context(context, rank_query=rank_query)
+    business_section = f"{business_block}\n\n" if business_block else ""
+    project_block = render_project_context(context, rank_query=rank_query)
     project_section = f"{project_block}\n\n" if project_block else ""
     return (
         "You are a senior QA reviewer. The happy-path test cases below were "
@@ -475,6 +623,7 @@ def build_review_prompt(
         "gaps — negative, invalid-input, boundary, permission and error-handling "
         "scenarios. Do NOT duplicate or restate the existing happy-path cases.\n"
         "3. Give an overall verdict.\n\n"
+        f"{business_section}"
         f"{project_section}"
         f"{_ticket_context(ticket)}\n\n"
         f"Prior analysis (JSON):\n{analysis}\n\n"
@@ -499,13 +648,17 @@ def build_case_regenerate_prompt(
 
     Returns a JSON object matching :data:`CASE_JSON_SHAPE`.
     """
-    project_block = render_project_context(context)
+    rank_query = _ticket_rank_query(ticket)
+    business_block = render_business_context(context, rank_query=rank_query)
+    business_section = f"{business_block}\n\n" if business_block else ""
+    project_block = render_project_context(context, rank_query=rank_query)
     project_section = f"{project_block}\n\n" if project_block else ""
     return (
         "You are a senior QA engineer. Rewrite/improve the single test case below "
         "for the given ticket, using the prior requirement analysis for context. "
         "Keep it focused on the same testing intent and scope, but improve its "
         "clarity and correctness.\n\n"
+        f"{business_section}"
         f"{project_section}"
         f"{_ticket_context(ticket)}\n\n"
         f"Prior analysis (JSON):\n{analysis}\n\n"
