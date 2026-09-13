@@ -849,6 +849,10 @@ class TestCaseOut(ApiModel):
     approval: str = "pending"
     source: str = "ai"
     edited: bool = False
+    # QC-voice gate findings that survived the one allowed retry (#829). Empty
+    # for a clean case; the Review Center badges a non-empty list as "technical
+    # wording" and offers a rewrite. Each entry is {"field", "rule", "match"}.
+    voice_findings: list[dict] = Field(default_factory=list)
 
 
 class TestCaseUpdate(ApiModel):

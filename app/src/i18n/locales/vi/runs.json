@@ -183,7 +183,23 @@
       "removeStepAria": "Xóa bước {{num}}",
       "addStep": "Thêm bước",
       "saveChanges": "Lưu thay đổi",
-      "cancel": "Hủy"
+      "cancel": "Hủy",
+      "voiceBadge": "Ngôn ngữ kỹ thuật",
+      "voiceTitle": "NGÔN NGỮ KỸ THUẬT",
+      "voiceBody_one": "{{count}} cụm từ đọc như mã nguồn, không phải điều một tester có thể thao tác hay nhìn thấy. Hệ thống đã yêu cầu viết lại một lần và đây là phần còn sót lại.",
+      "voiceBody_other": "{{count}} cụm từ đọc như mã nguồn, không phải điều một tester có thể thao tác hay nhìn thấy. Hệ thống đã yêu cầu viết lại một lần và đây là phần còn sót lại.",
+      "voiceRewrite": "Viết lại theo giọng QC",
+      "voiceRule": {
+        "template_var": "Placeholder chưa điền",
+        "uuid": "Mã định danh thô",
+        "css_xpath_selector": "Selector",
+        "api_path": "Đường dẫn hoặc endpoint",
+        "db_artifact": "Chi tiết cơ sở dữ liệu",
+        "http_status": "Mã trạng thái",
+        "internal_id": "Id nội bộ",
+        "code_identifier": "Định danh trong mã nguồn",
+        "tech_noun": "Thuật ngữ kỹ thuật"
+      }
     },
     "dryRun": "Chạy thử",
     "dryRunHint": "Chế độ chạy thử đang bật trong Cài đặt — test case chỉ được lưu trong Q-Agent, không đụng tới work item nào.",

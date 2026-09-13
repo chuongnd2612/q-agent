@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, ChevronRight, FlaskConical, Plus, Sparkles, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Button } from "@/components/ui/Button";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { approvalStyle, Pill, priorityBg, priorityColor } from "@/components/ui/badges";
@@ -39,6 +40,24 @@ function groupByTicket(cases: TestCaseOut[]): Array<{ ticketExternalId: string; 
 }
 
 const platformIcon: Record<string, string> = { Web: "🖥", Mobile: "📱", API: "🔌" };
+
+/**
+ * Human label for a QC-voice gate rule name (#829).
+ *
+ * The gate's rule names are stable identifiers (`css_xpath_selector`,
+ * `code_identifier`, …) and are translated per locale. A rule the UI does not
+ * know about — a rule added to the gate after this build — falls back to the
+ * generic badge label rather than rendering a raw snake_case token.
+ *
+ * @param t - The `runs` namespace translator.
+ * @param rule - The rule name as the API reported it.
+ * @returns The localized label to show beside the offending phrase.
+ */
+function voiceRuleLabel(t: TFunction<"runs">, rule: string): string {
+  const key = `review.case.voiceRule.${rule}`;
+  const label = t(key, { defaultValue: "" });
+  return label || t("review.case.voiceBadge");
+}
 
 export function ReviewCenter() {
   const { t } = useTranslation("runs");
@@ -447,6 +466,7 @@ function CaseRow({
 
   const expanded = expandedCase === c.id;
   const isEditing = editingCase === c.id;
+  const voiceFindings = c.voiceFindings ?? [];
   const [color, label, bg] = approvalStyle(c.approval);
   const prColor = priorityColor(c.priority);
   const prBg = priorityBg(c.priority);
@@ -485,6 +505,13 @@ function CaseRow({
             <Spinner size={12} />
             {t("review.case.regenerating")}
           </span>
+        )}
+        {/* The case leaked technical wording past the gate's one retry (#829).
+            It was persisted anyway — degrade and show — so say so here. */}
+        {voiceFindings.length > 0 && (
+          <Pill color="#fdba74" bg="rgba(251,146,60,.16)">
+            {t("review.case.voiceBadge")}
+          </Pill>
         )}
         <Pill color={color} bg={bg}>
           {label}
@@ -584,6 +611,47 @@ function CaseRow({
                     ))}
                   </div>
                 ) : null}
+                {voiceFindings.length > 0 && (
+                  <div
+                    className="mb-3 rounded-[11px] border px-3 py-2.5"
+                    style={{ background: "rgba(251,146,60,.08)", borderColor: "rgba(251,146,60,.28)" }}
+                  >
+                    <div
+                      className="mb-1.5 text-[11px] font-semibold tracking-wider"
+                      style={{ color: "#fdba74" }}
+                    >
+                      {t("review.case.voiceTitle")}
+                    </div>
+                    <p className="m-0 mb-2.5 text-[12px] leading-relaxed text-ink-dim">
+                      {t("review.case.voiceBody", { count: voiceFindings.length })}
+                    </p>
+                    <div className="mb-2.5 flex flex-col gap-1.5">
+                      {voiceFindings.map((f, i) => (
+                        <div
+                          key={i}
+                          className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11.5px]"
+                        >
+                          <span
+                            className="rounded-md px-1.5 py-[1px] text-[10.5px] font-semibold"
+                            style={{ background: "rgba(251,146,60,.16)", color: "#fdba74" }}
+                          >
+                            {voiceRuleLabel(t, f.rule)}
+                          </span>
+                          <span className="font-mono text-ink-soft">{f.match}</span>
+                          <span className="font-mono text-faint">{f.field}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <CaseActionButton
+                      onClick={onRegenerate}
+                      disabled={regenerating}
+                      hoverClass="hover:border-[rgba(251,146,60,.45)] hover:bg-[rgba(251,146,60,.14)]"
+                    >
+                      {regenerating ? <Spinner size={12} /> : null}
+                      {t("review.case.voiceRewrite")}
+                    </CaseActionButton>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <CaseActionButton
                     active={c.approval === "approved"}

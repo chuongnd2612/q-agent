@@ -41,6 +41,14 @@ class TestCase(Base):
     platform: Mapped[str] = mapped_column(String(16), default="Web")
     duration: Mapped[str] = mapped_column(String(16), default="—")
 
+    # QC-voice gate findings that survived the one allowed retry (#829). Empty
+    # for a clean case; a non-empty list means the case was persisted ANYWAY —
+    # degrade and show, never silently drop — and the Review Center badges it
+    # as "technical wording" so a QC can rewrite it. Each entry is
+    # ``{"field", "rule", "match"}`` exactly as ``qc_voice_gate.check_case``
+    # returns it.
+    voice_findings: Mapped[list] = mapped_column(JSON, default=list)
+
     approval: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     source: Mapped[str] = mapped_column(String(16), default="ai")
     edited: Mapped[bool] = mapped_column(default=False)

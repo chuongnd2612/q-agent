@@ -183,7 +183,23 @@
       "removeStepAria": "Remove step {{num}}",
       "addStep": "Add step",
       "saveChanges": "Save changes",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "voiceBadge": "Technical wording",
+      "voiceTitle": "TECHNICAL WORDING",
+      "voiceBody_one": "{{count}} phrase reads like code, not like something a tester can do or see. The generator was asked to rewrite it once and this is what remained.",
+      "voiceBody_other": "{{count}} phrases read like code, not like something a tester can do or see. The generator was asked to rewrite them once and this is what remained.",
+      "voiceRewrite": "Rewrite for QC voice",
+      "voiceRule": {
+        "template_var": "Unfilled placeholder",
+        "uuid": "Raw identifier",
+        "css_xpath_selector": "Selector",
+        "api_path": "Route or endpoint",
+        "db_artifact": "Database detail",
+        "http_status": "Status code",
+        "internal_id": "Internal id",
+        "code_identifier": "Code identifier",
+        "tech_noun": "Technical term"
+      }
     },
     "dryRun": "Dry run",
     "dryRunHint": "Dry run is on in Settings — test cases are recorded in Q-Agent and no work item is touched.",
