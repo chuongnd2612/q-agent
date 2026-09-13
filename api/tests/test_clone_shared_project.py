@@ -6,17 +6,23 @@ encrypted test account, a knowledge row, and on-disk knowledge files — clones
 into an authenticated member's own scope (rows re-stamped, secrets decrypt
 identically, files copied under ``users/<id>/…``). Also covers the 404/409
 clone semantics and that shared-namespace writes are admin-only.
+
+Business Knowledge (#831, ADR 0016) rides the same path and is tested the same
+way plus one more: the clone's rows must be *new rows*, not shared references,
+so the Business Knowledge tests here also mutate the clone and assert the
+admin's original did not move.
 """
 
 from __future__ import annotations
 
 from app import crypto
+from app.models.business import BusinessFact, BusinessSource
 from app.models.knowledge import ProjectKnowledge
 from app.models.project import Project
 from app.models.project_config import ProjectConfig
 from app.models.user import User
 from app.services import auth_service, knowledge_service
-from app.services.workspace_scope import scoped_knowledge_dir, slug
+from app.services.workspace_scope import scoped_business_dir, scoped_knowledge_dir, slug
 
 PROJECT_KEY = "Surency Platform"
 
@@ -89,6 +95,272 @@ def _seed_shared_project(db_session, key: str = PROJECT_KEY) -> dict:
     db_session.commit()
 
     return {"config": config, "knowledge": knowledge}
+
+
+def _seed_shared_business(db_session, project_guid: str, key: str = PROJECT_KEY) -> dict:
+    """Seed the shared namespace's Business Knowledge for ``project_guid``.
+
+    Two sources — an upload (``url IS NULL``, the case
+    ``uq_business_source_project_kind_url`` cannot de-duplicate) and a link —
+    each with a real snapshot on disk, plus an ingested fact and the pinned
+    manual correction that supersedes it.
+    """
+    upload = BusinessSource(
+        project_guid=project_guid,
+        project_key=key,
+        owner_id=None,
+        kind="upload",
+        title="eligibility-rules.md",
+        url=None,
+        connection_id=None,
+        status="synced",
+        content_hash="abc123",
+        byte_size=42,
+        doc_count=1,
+        secrets={"token": "admin-pat"},
+    )
+    link = BusinessSource(
+        project_guid=project_guid,
+        project_key=key,
+        owner_id=None,
+        kind="url",
+        title="Claims adjudication",
+        url="https://wiki.surency.test/claims",
+        status="synced",
+        content_hash="def456",
+        byte_size=12,
+        doc_count=1,
+    )
+    db_session.add_all([upload, link])
+    db_session.commit()
+
+    for source, body in ((upload, "# Eligibility"), (link, "# Claims")):
+        root = scoped_business_dir(None) / slug(key) / str(source.id)
+        (root / "raw").mkdir(parents=True, exist_ok=True)
+        (root / "normalized").mkdir(parents=True, exist_ok=True)
+        (root / "raw" / "doc").write_text(body, encoding="utf-8")
+        (root / "normalized" / "doc.md").write_text(body, encoding="utf-8")
+        source.raw_path = f"{slug(key)}/{source.id}/raw"
+        source.normalized_path = f"{slug(key)}/{source.id}/normalized"
+
+    ingested = BusinessFact(
+        project_guid=project_guid,
+        owner_id=None,
+        source_id=upload.id,
+        category="rule",
+        term="Suspended member",
+        statement="A suspended member may not file a new claim.",
+        origin="ingested",
+        rank_text="suspended member claim",
+    )
+    db_session.add(ingested)
+    db_session.commit()
+    correction = BusinessFact(
+        project_guid=project_guid,
+        owner_id=None,
+        source_id=None,
+        category="rule",
+        term="Suspended member",
+        statement="A suspended member may not file a new claim, but may appeal.",
+        origin="manual",
+        pinned=True,
+        superseded_by=ingested.id,
+    )
+    db_session.add(correction)
+    db_session.commit()
+    return {"upload": upload, "link": link, "ingested": ingested, "correction": correction}
+
+
+def _shared_guid(db_session, key: str = PROJECT_KEY) -> str:
+    """The GUID the shared project's Business Knowledge rows are keyed on."""
+    return db_session.query(Project).filter_by(name=key, owner_id=None).one().guid
+
+
+# ------------------------------------------------------ business knowledge (#831)
+def test_clone_carries_business_sources_facts_and_artifacts(client, db_session, monkeypatch):
+    """Sources, facts and their snapshots arrive under the CLONING user's scope."""
+    _auth_on(monkeypatch)
+    _seed_shared_project(db_session)
+    guid = _shared_guid(db_session)
+    seeded = _seed_shared_business(db_session, guid)
+    user = _make_user(db_session, "bk-member@example.com")
+
+    resp = client.post(f"/shared/projects/{PROJECT_KEY}/clone", headers=_auth_headers(user))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(body["businessSourcesCloned"]) == ["Claims adjudication", "eligibility-rules.md"]
+    assert body["businessFactsCloned"] == 2
+    assert "business" in body["artifactsCopied"]
+
+    cloned_sources = (
+        db_session.query(BusinessSource)
+        .filter_by(owner_id=user.id)
+        .order_by(BusinessSource.id)
+        .all()
+    )
+    assert [s.title for s in cloned_sources] == ["eligibility-rules.md", "Claims adjudication"]
+    # Same project identity, different owner — ADR 0009 §3/§4 verbatim.
+    assert {s.project_guid for s in cloned_sources} == {guid}
+    # New rows, not the admin's.
+    assert not {s.id for s in cloned_sources} & {seeded["upload"].id, seeded["link"].id}
+
+    cloned_upload = next(s for s in cloned_sources if s.kind == "upload")
+    # The admin's per-source credential does not travel.
+    assert cloned_upload.secrets == {}
+    assert cloned_upload.connection_id is None
+    # ... but the snapshot does, so the clone needs no re-fetch.
+    assert cloned_upload.content_hash == "abc123"
+    assert cloned_upload.status == "synced"
+
+    # Artifacts landed under the caller's own scope, at the CLONE's source id.
+    for source in cloned_sources:
+        dest = scoped_business_dir(user.id) / slug(PROJECT_KEY) / str(source.id)
+        assert (dest / "normalized" / "doc.md").read_text(encoding="utf-8").startswith("#")
+        assert (dest / "raw" / "doc").exists()
+        assert source.raw_path == f"{slug(PROJECT_KEY)}/{source.id}/raw"
+        assert source.normalized_path == f"{slug(PROJECT_KEY)}/{source.id}/normalized"
+        # The stored path resolves inside the caller's scope, and nowhere else.
+        resolved = (scoped_business_dir(user.id) / source.normalized_path).resolve()
+        resolved.relative_to(scoped_business_dir(user.id).resolve())
+
+    cloned_facts = (
+        db_session.query(BusinessFact).filter_by(owner_id=user.id).order_by(BusinessFact.id).all()
+    )
+    assert len(cloned_facts) == 2
+    ingested, correction = cloned_facts
+    assert ingested.statement.endswith("file a new claim.")
+    assert correction.pinned is True
+    # The fact's source link was remapped onto the CLONE's source, and the
+    # correction still supersedes the clone's ingested row.
+    assert ingested.source_id == cloned_upload.id
+    assert correction.superseded_by == ingested.id
+
+    # Negative: nothing of the admin's is reachable from the clone.
+    shared_source_ids = {seeded["upload"].id, seeded["link"].id}
+    shared_fact_ids = {seeded["ingested"].id, seeded["correction"].id}
+    assert not {f.source_id for f in cloned_facts} & shared_source_ids
+    assert not {f.superseded_by for f in cloned_facts if f.superseded_by} & shared_fact_ids
+    assert not (
+        scoped_business_dir(user.id) / slug(PROJECT_KEY) / str(seeded["upload"].id)
+    ).exists()
+
+
+def test_cloned_business_knowledge_is_independent_of_the_original(client, db_session, monkeypatch):
+    """Mutating the clone — rows and files — must not touch the admin's copy."""
+    _auth_on(monkeypatch)
+    _seed_shared_project(db_session)
+    guid = _shared_guid(db_session)
+    seeded = _seed_shared_business(db_session, guid)
+    shared_upload_id = seeded["upload"].id
+    user = _make_user(db_session, "bk-independent@example.com")
+
+    resp = client.post(f"/shared/projects/{PROJECT_KEY}/clone", headers=_auth_headers(user))
+    assert resp.status_code == 200
+
+    cloned_upload = (
+        db_session.query(BusinessSource).filter_by(owner_id=user.id, kind="upload").one()
+    )
+    cloned_fact = db_session.query(BusinessFact).filter_by(owner_id=user.id, origin="ingested").one()
+    cloned_upload.title = "renamed-by-member.md"
+    cloned_upload.excluded = True
+    cloned_fact.statement = "Rewritten by the member."
+    db_session.commit()
+    (
+        scoped_business_dir(user.id)
+        / slug(PROJECT_KEY)
+        / str(cloned_upload.id)
+        / "normalized"
+        / "doc.md"
+    ).write_text("# Member edit", encoding="utf-8")
+
+    db_session.refresh(seeded["upload"])
+    db_session.refresh(seeded["ingested"])
+    assert seeded["upload"].title == "eligibility-rules.md"
+    assert seeded["upload"].excluded is False
+    assert seeded["ingested"].statement.endswith("file a new claim.")
+    shared_doc = (
+        scoped_business_dir(None)
+        / slug(PROJECT_KEY)
+        / str(shared_upload_id)
+        / "normalized"
+        / "doc.md"
+    )
+    assert shared_doc.read_text(encoding="utf-8") == "# Eligibility"
+    # And the admin's rows are still the only ones in the shared namespace.
+    assert db_session.query(BusinessSource).filter(BusinessSource.owner_id.is_(None)).count() == 2
+
+
+def test_clone_does_not_duplicate_a_source_the_member_already_has(client, db_session, monkeypatch):
+    """An upload has no URL, so the unique constraint cannot de-duplicate it (#815) —
+    the clone consults ``find_duplicate`` instead."""
+    _auth_on(monkeypatch)
+    _seed_shared_project(db_session)
+    guid = _shared_guid(db_session)
+    _seed_shared_business(db_session, guid)
+    user = _make_user(db_session, "bk-dupe@example.com")
+    db_session.add(
+        BusinessSource(
+            project_guid=guid,
+            project_key=PROJECT_KEY,
+            owner_id=user.id,
+            kind="upload",
+            title="Eligibility-Rules.MD",  # same document, different casing
+            url=None,
+            status="synced",
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(f"/shared/projects/{PROJECT_KEY}/clone", headers=_auth_headers(user))
+    assert resp.status_code == 200
+    assert resp.json()["businessSourcesCloned"] == ["Claims adjudication"]
+
+    uploads = db_session.query(BusinessSource).filter_by(owner_id=user.id, kind="upload").all()
+    assert [u.title for u in uploads] == ["Eligibility-Rules.MD"]
+    # The link still cloned, and the member's pre-existing row was left alone.
+    assert db_session.query(BusinessSource).filter_by(owner_id=user.id, kind="url").count() == 1
+    # The fact whose source was skipped keeps no link to the admin's row.
+    ingested = db_session.query(BusinessFact).filter_by(owner_id=user.id, origin="ingested").one()
+    assert ingested.source_id is None
+
+
+def test_clone_copies_the_business_brief_onto_the_members_config(client, db_session, monkeypatch):
+    """``ProjectConfig.business_brief`` (#824) follows the clone, and so does the GUID."""
+    _auth_on(monkeypatch)
+    seeded = _seed_shared_project(db_session)
+    guid = _shared_guid(db_session)
+    seeded["config"].project_guid = guid
+    seeded["config"].business_brief = {
+        "brief": "Members may appeal.",
+        "hash": "h1",
+        "status": "built",
+    }
+    db_session.commit()
+    user = _make_user(db_session, "bk-brief@example.com")
+
+    resp = client.post(f"/shared/projects/{PROJECT_KEY}/clone", headers=_auth_headers(user))
+    assert resp.status_code == 200
+
+    cloned = db_session.query(ProjectConfig).filter_by(key=PROJECT_KEY, owner_id=user.id).one()
+    assert cloned.business_brief["brief"] == "Members may appeal."
+    assert cloned.project_guid == guid
+    # A separate dict, not the admin's — editing one must not edit the other.
+    cloned.business_brief = {**cloned.business_brief, "brief": "Member edit."}
+    db_session.commit()
+    db_session.refresh(seeded["config"])
+    assert seeded["config"].business_brief["brief"] == "Members may appeal."
+
+
+def test_clone_without_business_knowledge_reports_nothing(client, db_session, monkeypatch):
+    """A project with no Business Knowledge clones exactly as before (#831 is additive)."""
+    _auth_on(monkeypatch)
+    _seed_shared_project(db_session)
+    user = _make_user(db_session, "bk-none@example.com")
+
+    body = client.post(f"/shared/projects/{PROJECT_KEY}/clone", headers=_auth_headers(user)).json()
+    assert body["businessSourcesCloned"] == []
+    assert body["businessFactsCloned"] == 0
+    assert "business" not in body["artifactsCopied"]
 
 
 # --------------------------------------------------------------------- clone

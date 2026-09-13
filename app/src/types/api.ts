@@ -251,6 +251,9 @@ export interface CloneResultOut {
   configCloned: boolean;
   knowledgeCloned: string[];
   artifactsCopied: string[];
+  /** Business Knowledge carried through the clone (#831): source titles + fact count. */
+  businessSourcesCloned: string[];
+  businessFactsCloned: number;
   docPath: string;
   lastError: string;
 }
