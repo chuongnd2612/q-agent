@@ -54,7 +54,11 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("stale", sa.Boolean(), nullable=True))
         batch_op.add_column(sa.Column("probe_error", sa.String(length=1000), nullable=True))
     op.execute("UPDATE business_source SET upstream_rev = '' WHERE upstream_rev IS NULL")
-    op.execute("UPDATE business_source SET stale = 0 WHERE stale IS NULL")
+    # FALSE, not 0: SQLite stores booleans as 0/1 and accepts the integer, but
+    # Postgres rejects it outright ("column is of type boolean but expression is
+    # of type integer") and the container then fails startup. Every migration
+    # test here runs on SQLite, so only the deploy can catch it (#861).
+    op.execute("UPDATE business_source SET stale = FALSE WHERE stale IS NULL")
     op.execute("UPDATE business_source SET probe_error = '' WHERE probe_error IS NULL")
 
     with op.batch_alter_table("test_cases") as batch_op:
