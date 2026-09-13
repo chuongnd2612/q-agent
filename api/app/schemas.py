@@ -10,7 +10,7 @@ from datetime import datetime
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from pydantic.alias_generators import to_camel
 
 
@@ -864,6 +864,13 @@ class TestCaseOut(ApiModel):
     # for a clean case; the Review Center badges a non-empty list as "technical
     # wording" and offers a rewrite. Each entry is {"field", "rule", "match"}.
     voice_findings: list[dict] = Field(default_factory=list)
+    # The business document VERSIONS this case was generated from (#830, ADR
+    # 0016 §4). Each entry is {"sourceId", "title", "kind", "url",
+    # "contentHash", "fetchedAt"} — copied at generation time, not joined, so it
+    # stays answerable after the source has been re-synced or deleted. Empty
+    # means "not recorded", which the Review Center says rather than inventing a
+    # source.
+    grounded_in: list[dict] = Field(default_factory=list)
 
 
 class TestCaseUpdate(ApiModel):
@@ -1687,6 +1694,54 @@ class BusinessSourceOut(ApiModel):
     byte_size: int = 0
     doc_count: int = 0
     excluded: bool = False
+
+    # --------------------------------------------------- Staleness (#830)
+    # Four fields rather than one ``stale`` boolean, because the honest answer
+    # has three parts and a bare flag cannot tell "upstream is unchanged" apart
+    # from "nobody has ever looked". ``staleness`` below collapses them into the
+    # one verdict the UI is entitled to render, decided on the server so two
+    # clients cannot disagree about it.
+    #: Upstream version marker recorded when the snapshot was taken (a commit
+    #: SHA, a wiki page-version digest, an ``ETag``). Empty when no probe could
+    #: answer — staleness is then age-based, and says so.
+    upstream_rev: str = ""
+    #: When freshness was last checked. ``None`` = never asked.
+    probed_at: datetime | None = None
+    #: Upstream has moved since ``upstreamRev``. Meaningful only when
+    #: ``staleness.mode == "revision"``.
+    stale: bool = False
+    #: Why the last probe could not answer. Non-empty means ``stale`` says
+    #: nothing and the client must fall back to the age label.
+    probe_error: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def probe_supported(self) -> bool:
+        """Whether this source's kind has a cheap upstream-version probe at all.
+
+        Computed from ``kind`` on the server so the client does not carry a
+        second copy of the kind list that can drift from
+        :data:`app.services.business_ingest.staleness.PROBE_KINDS`.
+        """
+        from app.services.business_ingest import staleness
+
+        return staleness.probe_supported(self.kind)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def staleness(self) -> dict:
+        """The verdict the UI renders: ``{"mode", "stale", "detail"}``.
+
+        ``mode`` is ``"revision"`` (a probe compared upstream versions and
+        ``stale`` is real), ``"age"`` (no probe can answer — render the age of
+        ``fetchedAt``, never a claim about change) or ``"unknown"`` (a probe
+        exists but has never run). Deciding it here rather than in the client is
+        what stops the badge conflating "unchanged" with "never checked".
+        """
+        from app.services.business_ingest import staleness as probe
+
+        state = probe.probe_state(self)  # type: ignore[arg-type]
+        return {"mode": state.mode, "stale": state.stale, "detail": state.detail}
 
 
 class BusinessSourceCreate(ApiModel):

@@ -29,7 +29,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import crypto
-from app.models.business import BusinessFact
+from app.models.business import BusinessFact, BusinessSource
 from app.models.knowledge import ProjectKnowledge, compose_key
 from app.models.project import Project
 from app.models.project_config import ProjectConfig
@@ -724,6 +724,63 @@ def repo_options(db: Session, project_key: str) -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------- business knowledge
+def _grounding_sources(
+    db: Session,
+    project_guid: str,
+    owner_id: int | None,
+    facts: list[BusinessFact],
+) -> list[dict[str, Any]]:
+    """The document versions behind the facts that reached the prompt (#830).
+
+    Scoped to the facts actually in context, and to the owner scope that
+    answered, so the list names what this generation was really grounded in
+    rather than every document the project has ever held. A fact with no
+    ``source_id`` (a human addition, or one whose source was deleted) simply
+    contributes no document — the list is allowed to be shorter than the facts,
+    and is never padded to look complete.
+
+    Each entry copies ``content_hash`` and ``fetched_at`` **by value**. That is
+    the point of storing a hash at all: the answer to "which version said that?"
+    has to survive the source being re-synced, excluded or deleted, which a
+    reference to the live row would not.
+
+    Args:
+        db: Active session.
+        project_guid: The owning project's GUID.
+        owner_id: The ownership scope that supplied the facts.
+        facts: The in-context facts, already filtered of superseded rows.
+
+    Returns:
+        ``{sourceId, title, kind, url, contentHash, fetchedAt}`` per contributing
+        source, ordered by id so two generations from the same corpus record the
+        same list.
+    """
+    source_ids = sorted({f.source_id for f in facts if f.source_id})
+    if not source_ids:
+        return []
+    rows = (
+        db.query(BusinessSource)
+        .filter(
+            BusinessSource.project_guid == project_guid,
+            BusinessSource.owner_id == owner_id,
+            BusinessSource.id.in_(source_ids),
+        )
+        .order_by(BusinessSource.id)
+        .all()
+    )
+    return [
+        {
+            "sourceId": row.id,
+            "title": row.title or "",
+            "kind": row.kind or "",
+            "url": row.url or "",
+            "contentHash": row.content_hash or "",
+            "fetchedAt": row.fetched_at.isoformat() if row.fetched_at else "",
+        }
+        for row in rows
+    ]
+
+
 def business_context(
     db: Session, project_guid: str | None, owner_id: int | None
 ) -> dict[str, Any]:
@@ -750,11 +807,21 @@ def business_context(
     :param project_guid: The owning project's GUID; ``None`` yields empty context.
     :param owner_id: The viewer whose rows take precedence; ``None`` reads the
         shared namespace directly.
-    :returns: ``{"businessBrief": str, "businessFacts": list[dict]}`` — the brief
-        text (empty when the project has never been distilled) and the in-context
-        facts as ``{category, term, statement, detail, pinned, origin, sourceId}``.
+    :returns: ``{"businessBrief", "businessFacts", "businessSources"}`` — the
+        brief text (empty when the project has never been distilled), the
+        in-context facts as
+        ``{category, term, statement, detail, pinned, origin, sourceId}``, and
+        the **document versions** those came from as
+        ``{sourceId, title, kind, url, contentHash, fetchedAt}`` (#830).
+
+        ``businessSources`` is the attribution half of ADR 0016 §4: the whole
+        reason a content hash is stored is so a generated test case can name the
+        exact document version behind it. It is carried in the same context dict
+        the prompt is built from, so what a case records is what the model was
+        actually shown — not a list re-derived later, by which time a source may
+        have been re-synced.
     """
-    empty: dict[str, Any] = {"businessBrief": "", "businessFacts": []}
+    empty: dict[str, Any] = {"businessBrief": "", "businessFacts": [], "businessSources": []}
     if not project_guid:
         return empty
 
@@ -780,13 +847,17 @@ def business_context(
         )
         return brief, facts
 
+    resolved_owner = owner_id
     brief, facts = _load(owner_id)
     if owner_id is not None and not brief and not facts:
+        resolved_owner = None
         brief, facts = _load(None)
 
     superseded = {f.superseded_by for f in facts if f.superseded_by}
+    in_context = [f for f in facts if f.id not in superseded]
     return {
         "businessBrief": brief,
+        "businessSources": _grounding_sources(db, project_guid, resolved_owner, in_context),
         "businessFacts": [
             {
                 "category": f.category or "",
@@ -797,8 +868,7 @@ def business_context(
                 "origin": f.origin or "",
                 "sourceId": f.source_id,
             }
-            for f in facts
-            if f.id not in superseded
+            for f in in_context
         ],
     }
 

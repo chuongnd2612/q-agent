@@ -627,6 +627,13 @@ export interface TestCaseOut {
    * wording" with a rewrite offered.
    */
   voiceFindings: VoiceFinding[];
+  /**
+   * The business document versions this case was generated from (#830).
+   * Empty means "not recorded" — a hand-written case, or one generated before
+   * attribution shipped. Render that as not recorded, never as "grounded in
+   * nothing".
+   */
+  groundedIn: CaseGrounding[];
 }
 
 export interface TestCaseUpdate {
@@ -1564,6 +1571,53 @@ export interface BusinessSourceOut {
   byteSize: number;
   docCount: number;
   excluded: boolean;
+  /** Upstream version marker recorded when the snapshot was taken (#830). */
+  upstreamRev: string;
+  /** When freshness was last checked. `null` = never asked. */
+  probedAt: string | null;
+  /** Upstream moved. Meaningful ONLY when `staleness.mode === "revision"`. */
+  stale: boolean;
+  /** Why the last probe could not answer; non-empty means `stale` says nothing. */
+  probeError: string;
+  /** Whether this kind has a cheap upstream-version probe at all. */
+  probeSupported: boolean;
+  staleness: BusinessSourceStaleness;
+}
+
+/**
+ * What the UI is ENTITLED to claim about a source's freshness (#830, ADR 0016 §4).
+ *
+ * Decided on the server so two clients cannot disagree, and split three ways
+ * rather than into a boolean because the badge most easily conflates the two
+ * cases a snapshot model has to keep apart:
+ *
+ * - `revision` — a probe compared upstream versions, so `stale` is a real
+ *   verdict.
+ * - `age` — no probe can answer (an upload has no address; the page sends no
+ *   ETag). Render the AGE of `fetchedAt` and never a claim about change.
+ * - `unknown` — a probe exists but has never run. Not the same as "up to date".
+ */
+export interface BusinessSourceStaleness {
+  mode: "revision" | "age" | "unknown";
+  stale: boolean;
+  /** The reason a probe could not answer; empty in `revision` mode. */
+  detail: string;
+}
+
+/**
+ * One business document VERSION a generated test case stands on (#830).
+ *
+ * A copy taken at generation time, not a reference: it must stay answerable
+ * after the source has been re-synced, excluded or deleted, which is the whole
+ * argument for snapshots in ADR 0016 §4.
+ */
+export interface CaseGrounding {
+  sourceId: number;
+  title: string;
+  kind: BusinessSourceKind | string;
+  url: string;
+  contentHash: string;
+  fetchedAt: string;
 }
 
 /** The v1 source kinds. `notion` is deferred to v2 (#832). */

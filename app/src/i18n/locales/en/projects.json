@@ -204,6 +204,25 @@
         "constraint": "Constraint",
         "acceptance-norm": "Acceptance norm"
       }
+    },
+    "fetchedAt": "Fetched {{when}}",
+    "hash": "hash {{hash}}",
+    "checkNow": "Check for updates",
+    "probeStale": "“{{title}}” has changed upstream",
+    "probeFresh": "“{{title}}” is up to date",
+    "probeUnknown": "“{{title}}” could not be checked — see the badge for why",
+    "probeError": "Could not check that source",
+    "staleness": {
+      "stale": "Upstream changed",
+      "staleHint": "The document has been edited since this snapshot was taken. Sync it to pick up the new version — test cases already generated stay attributed to the old one.",
+      "fresh": "Up to date",
+      "freshHint": "Checked {{when}}: the upstream document is still the version in this snapshot.",
+      "unknown": "Not checked",
+      "unknownHint": "Nobody has asked upstream whether this has changed. That is not the same as up to date.",
+      "age_one": "Fetched {{count}} day ago",
+      "age_other": "Fetched {{count}} days ago",
+      "ageUnknown": "Age unknown",
+      "ageHint": "This source cannot report whether it has changed, so this is the age of the snapshot — not a claim that it is stale."
     }
   },
   "repoKnowledge": {

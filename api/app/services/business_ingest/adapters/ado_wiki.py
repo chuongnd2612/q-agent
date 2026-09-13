@@ -43,6 +43,7 @@ string that leaves this module.
 from __future__ import annotations
 
 import base64
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -66,6 +67,7 @@ __all__ = [
     "list_wikis",
     "parse_wiki_url",
     "preflight",
+    "probe_revision",
 ]
 
 #: Matches ``app.services.adapters.azure_devops.API_VERSION`` — one Azure DevOps
@@ -310,9 +312,18 @@ def _select_wiki(wikis: list[dict[str, Any]], wanted: str, *, project: str) -> d
 
 
 def _fetch_tree(
-    client: httpx.Client, *, project: str, wiki_id: str, page_path: str
+    client: httpx.Client,
+    *,
+    project: str,
+    wiki_id: str,
+    page_path: str,
+    include_content: bool = True,
 ) -> dict[str, Any]:
-    """The page tree under ``page_path``, with content, in one request.
+    """The page tree under ``page_path``, in one request.
+
+    ``include_content=False`` is what makes the staleness probe cheap: the same
+    single request returns every page's path and ``eTag`` with none of their
+    text, which is exactly what :func:`probe_revision` needs and nothing more.
 
     :raises SourceFetchError: including a page-path-specific 404, because "the
         wiki exists but that page does not" is a different repair from "there is
@@ -324,7 +335,7 @@ def _fetch_tree(
             params={
                 "path": page_path,
                 "recursionLevel": "full",
-                "includeContent": "true",
+                "includeContent": "true" if include_content else "false",
                 "api-version": API_VERSION,
             },
         )
@@ -430,10 +441,84 @@ def preflight(url: str, token: str) -> dict[str, Any]:
     }
 
 
+def probe_revision(source, credential: SourceCredential | None = None) -> str:
+    """A digest of every wiki page's version — the cheap staleness probe (#830).
+
+    Azure DevOps stamps each wiki page with an ``eTag`` that changes when the
+    page is edited, so one content-free tree request answers "has anything under
+    this sub-tree changed" for the whole source at once — including a page being
+    added, removed or renamed, which a per-page check would miss.
+
+    The digest is over ``path`` + ``eTag`` pairs in path order, so it is stable
+    across two identical probes regardless of the order the API walked the tree
+    in. It is **not** the content hash: that is computed by the pipeline from
+    the normalized markdown, and the two answer different questions (this one is
+    answerable without downloading anything).
+
+    :param source: The ``BusinessSource`` row; only ``url`` is read.
+    :param credential: The resolved wiki-scoped PAT.
+    :returns: A hex digest.
+    :raises SourceFetchError: for a missing/rejected token, a wrong scope, a
+        missing wiki or page path, a rate limit or an unreachable host — never a
+        silent ``""``, which compared against a stored digest would read as
+        "changed" every time.
+    """
+    token = (credential.token if credential else "") or ""
+    if not token.strip():
+        raise SourceFetchError(NO_CREDENTIAL_MESSAGE)
+
+    target = parse_wiki_url(getattr(source, "url", "") or "")
+    with _client(target.org_url, token) as client:
+        wikis = list_wikis(client, target.project)
+        wiki = _select_wiki(wikis, target.wiki, project=target.project)
+        tree = _fetch_tree(
+            client,
+            project=target.project,
+            wiki_id=str(wiki.get("id") or wiki.get("name") or ""),
+            page_path=target.page_path,
+            include_content=False,
+        )
+
+    versions = {
+        str(page.get("path") or ""): str(page.get("eTag") or page.get("id") or "")
+        for page in _walk_paths(tree)
+    }
+    digest = hashlib.sha256()
+    for path in sorted(versions):
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(versions[path].encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _walk_paths(root: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every node of a page tree, flattened — containers included.
+
+    Unlike :func:`_walk` this keeps container nodes and applies no caps: the
+    probe is asking whether *anything* moved, and a page appearing above the
+    ingestion cap is still a change the user should be told about.
+    """
+    out: list[dict[str, Any]] = []
+    queue: list[dict[str, Any]] = [root]
+    while queue:
+        node = queue.pop(0)
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("path") or "") not in ("", "/"):
+            out.append(node)
+        queue.extend(child for child in (node.get("subPages") or []) if isinstance(child, dict))
+    return out
+
+
 class AdoWikiAdapter:
     """Fetch a project wiki's pages as markdown."""
 
     kind = "ado_wiki"
+
+    def probe_revision(self, source, credential: SourceCredential | None = None) -> str:
+        """A digest of the wiki sub-tree's page versions — see :func:`probe_revision`."""
+        return probe_revision(source, credential)
 
     def fetch(self, source, credential: SourceCredential | None = None) -> list[FetchedDoc]:
         """Fetch every page of the wiki ``source.url`` addresses.

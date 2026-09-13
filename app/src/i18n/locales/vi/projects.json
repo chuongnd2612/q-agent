@@ -204,6 +204,25 @@
         "constraint": "Ràng buộc",
         "acceptance-norm": "Chuẩn nghiệm thu"
       }
+    },
+    "fetchedAt": "Đã tải {{when}}",
+    "hash": "mã băm {{hash}}",
+    "checkNow": "Kiểm tra cập nhật",
+    "probeStale": "“{{title}}” đã thay đổi ở nguồn",
+    "probeFresh": "“{{title}}” vẫn là bản mới nhất",
+    "probeUnknown": "Không kiểm tra được “{{title}}” — xem nhãn để biết lý do",
+    "probeError": "Không kiểm tra được nguồn đó",
+    "staleness": {
+      "stale": "Nguồn đã đổi",
+      "staleHint": "Tài liệu đã được sửa kể từ khi chụp bản này. Đồng bộ để lấy phiên bản mới — các test case đã sinh vẫn gắn với bản cũ.",
+      "fresh": "Đã cập nhật",
+      "freshHint": "Kiểm tra {{when}}: tài liệu nguồn vẫn đúng phiên bản trong bản chụp này.",
+      "unknown": "Chưa kiểm tra",
+      "unknownHint": "Chưa ai hỏi nguồn xem tài liệu có đổi không. Điều đó không đồng nghĩa với đã cập nhật.",
+      "age_one": "Đã tải {{count}} ngày trước",
+      "age_other": "Đã tải {{count}} ngày trước",
+      "ageUnknown": "Không rõ thời điểm",
+      "ageHint": "Nguồn này không báo được là nó có đổi hay không, nên đây là tuổi của bản chụp — không phải khẳng định nó đã cũ."
     }
   },
   "repoKnowledge": {

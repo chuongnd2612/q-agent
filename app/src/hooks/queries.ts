@@ -1306,6 +1306,24 @@ export const useSyncBusinessSource = (projectGuid: string | null) => {
 };
 
 /**
+ * Check whether a source's upstream document has moved (#830).
+ *
+ * A mutation rather than a query even though it only reads upstream: it is an
+ * explicit act with a cost (one request to GitHub / Azure DevOps / the site),
+ * and ADR 0016 §4 is emphatic that nothing re-fetches on its own. Invalidating
+ * the list on success is what repaints the badge — the verdict lives on the
+ * row, not in this hook.
+ */
+export const useProbeBusinessSource = (projectGuid: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.probeBusinessSource(projectGuid as string, id),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.businessSources(projectGuid ?? "") }),
+  });
+};
+
+/**
  * Upload a `.md`/`.txt` document — the create path for the `upload` kind (#848).
  *
  * Not `useCreateBusinessSource` with a title: an upload's content IS the source,

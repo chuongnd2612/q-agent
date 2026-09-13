@@ -540,6 +540,11 @@ def test_a_url_source_is_a_single_page_and_never_crawls(
     Asserted on the requests that were actually issued, not on ``doc_count``
     alone: a crawler that fetched forty pages and stored one would satisfy the
     count and fail this.
+
+    Counted per **address**, not per request, because #830 added a
+    content-free ``HEAD`` to the same URL after a successful sync — the
+    staleness probe that records the version this snapshot was taken at. One
+    address is the claim; a second address would be a crawl.
     """
     linked = REAL_PAGE_HTML.replace(
         "<ul>",
@@ -550,8 +555,9 @@ def test_a_url_source_is_a_single_page_and_never_crawls(
 
     assert url_source.status == "synced"
     assert url_source.doc_count == 1
-    assert len(seen) == 1
-    assert str(seen[0].url) == "https://handbook.acme.test/refunds"
+    assert {str(request.url) for request in seen} == {"https://handbook.acme.test/refunds"}
+    # Exactly one document was downloaded; the extra call is the probe's HEAD.
+    assert [request.method for request in seen].count("GET") == 1
 
 
 def test_a_non_http_address_is_refused_before_any_request(

@@ -1115,6 +1115,20 @@ export const api = {
       `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/sync`,
     ),
   /**
+   * Ask whether this source's upstream document has moved (#830).
+   *
+   * Synchronous, unlike `syncBusinessSource`: a probe is one cheap request that
+   * downloads no document bytes (a commit SHA, a content-free wiki page tree,
+   * an `ETag`), so there is nothing to poll for. It answers 200 even when it
+   * could NOT check — the reason lands in `probeError` and `staleness.mode`
+   * drops to `age`, which is what makes the badge honest instead of claiming a
+   * change it cannot see.
+   */
+  probeBusinessSource: (projectGuid: string, sourceId: number) =>
+    post<BusinessSourceOut>(
+      `/projects/${encodeURIComponent(projectGuid)}/business/sources/${sourceId}/probe`,
+    ),
+  /**
    * Upload one `.md`/`.txt` document and ingest it inline (#818, wired #848).
    *
    * The one kind whose "address" is a file, so it does not go through

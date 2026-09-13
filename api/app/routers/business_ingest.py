@@ -33,14 +33,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import get_db, utcnow
 from app.deps_auth import current_user
 from app.models.business import BusinessSource
 from app.models.user import User
 from app.schemas import BusinessSourceOut
 from app.services import business_source_service as sources
-from app.services.business_ingest import pipeline, uploads
-from app.services.business_ingest.base import BusinessIngestError
+from app.services.business_ingest import credentials, pipeline, staleness, uploads
+from app.services.business_ingest.base import BusinessIngestError, SourceFetchError
 from app.services.business_ingest.uploads import MAX_UPLOAD_BYTES, UploadRejectedError
 
 router = APIRouter(prefix="/projects/{project_guid}/business", tags=["business"])
@@ -139,3 +139,46 @@ def sync_business_source(
     # to resolve it, and pass it in — the adapter never resolves its own secret.
     pipeline.start_sync(row.id)
     return row
+
+
+@router.post("/sources/{source_id}/probe", response_model=BusinessSourceOut)
+def probe_business_source(
+    project_guid: str,
+    source_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> BusinessSource:
+    """Check whether this source's upstream document has moved since the snapshot.
+
+    Synchronous, unlike ``/sync``, and that difference is the design: a probe is
+    one cheap request that downloads no document bytes at all (a commit SHA, a
+    content-free wiki page tree, an ``ETag``), so making the client poll for it
+    would be ceremony. A *fetch* is the thing that can take the adapter's full
+    timeout per document.
+
+    **A probe that cannot answer is a 200, not an error.** "GitHub rate-limited
+    us", "this page sends no ETag" and "an upload has no address" are all
+    recorded on the row as ``probeError``, which is exactly what makes the UI
+    fall back to the honest age label ("last fetched 34 days ago") instead of
+    claiming a change it cannot see (#830, ADR 0016 §4). The only 4xx here is an
+    unreachable source.
+
+    :raises HTTPException: 404 when the source is not the caller's.
+    """
+    guid, _ = sources.resolve_project(db, project_guid, user)
+    row = sources.source_or_404(db, guid, source_id, user)
+
+    credential = None
+    if staleness.probe_supported(row.kind):
+        try:
+            credential = credentials.resolve_credential(db, row)
+        except SourceFetchError as exc:
+            # Resolved here rather than inside the probe so the adapter contract
+            # holds (an adapter never resolves its own secret), and a missing
+            # credential lands on the row as a probe failure rather than a 500.
+            row.probed_at = utcnow()
+            row.probe_error = str(exc)[:1000]
+            db.commit()
+            db.refresh(row)
+            return row
+    return staleness.refresh_staleness(db, row, credential)

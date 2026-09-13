@@ -199,7 +199,11 @@
         "internal_id": "Internal id",
         "code_identifier": "Code identifier",
         "tech_noun": "Technical term"
-      }
+      },
+      "groundedIn": "GROUNDED IN",
+      "groundedHash": "@ {{hash}}",
+      "groundedFetched": "fetched {{when}}",
+      "groundedNote": "The document versions this case was generated from. They are recorded as they were at generation time, so they stay accurate even after a source has been re-synced."
     },
     "dryRun": "Dry run",
     "dryRunHint": "Dry run is on in Settings — test cases are recorded in Q-Agent and no work item is touched.",

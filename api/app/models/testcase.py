@@ -49,6 +49,16 @@ class TestCase(Base):
     # returns it.
     voice_findings: Mapped[list] = mapped_column(JSON, default=list)
 
+    # The business document VERSIONS this case was generated from (#830, ADR
+    # 0016 §4). Each entry is ``{"sourceId", "title", "kind", "url",
+    # "contentHash", "fetchedAt"}`` — a copy, not a foreign key, and that is the
+    # point: it must stay answerable after the source has been re-synced,
+    # excluded or deleted, because "why does this case assert a 30-day grace
+    # period?" is asked *later*, about a document that has since moved on.
+    # Empty for a hand-written case and for one generated before this shipped;
+    # the UI says "not recorded", never invents a source.
+    grounded_in: Mapped[list] = mapped_column(JSON, default=list)
+
     approval: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     source: Mapped[str] = mapped_column(String(16), default="ai")
     edited: Mapped[bool] = mapped_column(default=False)
