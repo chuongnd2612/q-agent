@@ -1,4 +1,4 @@
-import { Cpu, KeyRound, Link2, LogIn, Globe } from "lucide-react";
+import { BookOpen, Cpu, KeyRound, Link2, LogIn, Globe } from "lucide-react";
 import type { ComponentType } from "react";
 import type { ReadinessFix, ReadinessItem } from "@/types/api";
 
@@ -13,6 +13,7 @@ export const SETUP_ICONS: Record<string, ComponentType<{ size?: number; strokeWi
   providerConnection: Link2,
   localAgent: Cpu,
   projectBaseUrl: Globe,
+  authoringKnowledge: BookOpen,
   capturedLogin: LogIn,
 };
 

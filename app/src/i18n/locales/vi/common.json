@@ -57,6 +57,10 @@
         "title": "Base URL của dự án",
         "why": "Live authoring điều khiển app thật nên cần địa chỉ để mở."
       },
+      "authoringKnowledge": {
+        "title": "Tri thức để viết test case",
+        "why": "Tri thức nghiệp vụ hoặc một kho mã đã lập chỉ mục — chỉ cần một trong hai là đủ làm nền cho test case. Dự án chưa có mã nguồn chỉ cần cái đầu tiên."
+      },
       "capturedLogin": {
         "title": "Login đã lưu",
         "why": "Dự án bật đăng nhập thủ công cần session đã lưu để vào được trang cần auth."

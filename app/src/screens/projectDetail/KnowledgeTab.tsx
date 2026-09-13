@@ -1,4 +1,4 @@
-import { GitBranch, Plus, Star } from "lucide-react";
+import { BookOpen, GitBranch, Plus, Star } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -30,11 +30,13 @@ export function KnowledgeTab({
   providerKind,
   repos,
   onManageRepos,
+  onOpenBusiness,
 }: {
   projectKey: string;
   providerKind: ProviderKind;
   repos: RepoKnowledgeOut[];
   onManageRepos: () => void;
+  onOpenBusiness: () => void;
 }) {
   const { t } = useTranslation("projects");
   const buildRepo = useBuildRepoKnowledge(projectKey);
@@ -55,22 +57,36 @@ export function KnowledgeTab({
       },
     );
 
+  // No repository is a SUPPORTED state, not a dead end (#826, ADR 0016 §6):
+  // test-case authoring runs on Business Knowledge alone, so the empty state
+  // says what is already working and points at it, instead of offering only a
+  // build button that has nothing to index. Automation/execution/self-heal do
+  // still need a repo, which is why "Manage repositories" stays — demoted, not
+  // removed.
   if (repos.length === 0) {
     return (
-      <div className="glass flex flex-col items-center rounded-[22px] px-8 py-14 text-center">
+      <div
+        className="glass flex flex-col items-center rounded-[22px] px-8 py-14 text-center"
+        data-testid="knowledge-empty"
+      >
         <div
           className="mb-5 flex h-[72px] w-[72px] items-center justify-center rounded-[22px]"
           style={{ background: "linear-gradient(135deg,rgba(139,92,246,.24),rgba(99,102,241,.12))" }}
         >
-          <GitBranch size={32} color="#a78bfa" strokeWidth={1.9} />
+          <BookOpen size={32} color="#a78bfa" strokeWidth={1.9} />
         </div>
         <h2 className="m-0 mb-2 text-[21px] font-extrabold">{t("knowledgeTab.emptyTitle")}</h2>
-        <p className="m-0 mb-[22px] max-w-[440px] text-[13.5px] leading-relaxed text-ink-dim">
+        <p className="m-0 mb-[22px] max-w-[460px] text-[13.5px] leading-relaxed text-ink-dim">
           {t("knowledgeTab.emptyBody")}
         </p>
-        <Button variant="primary" size="lg" onClick={onManageRepos}>
-          <Plus size={16} strokeWidth={2.3} /> {t("knowledgeTab.manageRepositories")}
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-2.5">
+          <Button variant="primary" size="lg" onClick={onOpenBusiness}>
+            <BookOpen size={16} strokeWidth={2.3} /> {t("knowledgeTab.openBusiness")}
+          </Button>
+          <Button variant="ghost" size="lg" onClick={onManageRepos}>
+            <Plus size={16} strokeWidth={2.3} /> {t("knowledgeTab.manageRepositories")}
+          </Button>
+        </div>
       </div>
     );
   }

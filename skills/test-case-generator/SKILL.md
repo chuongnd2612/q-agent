@@ -21,7 +21,11 @@ These test cases become the starting point for the next stage (`test-case-review
 
 # Position in QA Pipeline
 
-project-bootstrap
+Business Knowledge (wiki, spec, brief)
+↓
+business brief + business facts
+
+project-bootstrap (only once code exists)
 ↓
 knowledge.md + knowledge.json
 
@@ -45,10 +49,22 @@ automation-generator
 
 Required:
 
-- requirement-analysis.md
-- knowledge.md / knowledge.json
+- requirement-analysis.md (or the ticket it was written from)
+- **and at least one of**: **Business Knowledge** (the project's business brief
+  and business facts) **or** the Project Knowledge Base (`knowledge.md` /
+  `knowledge.json`)
 
-If either is missing, stop and request it.
+Only stop and request input when the ticket is missing, or when **both**
+knowledge sources are absent.
+
+**A project that has not been built yet is a supported case.** With Business
+Knowledge only — no repository, no indexed code, no Project Knowledge Base —
+write the test cases from **business intent**: the ticket's acceptance criteria
+and the product behaviour the business facts describe. Then say nothing about
+screens, routes, selectors, field names or navigation paths you have not been
+given. Name the step by what the user is trying to *do* ("Submit a claim for
+reimbursement"), not by a screen you guessed at, and record the unknowns under
+**Assumptions** so a QC can fill them in once the product exists.
 
 ---
 

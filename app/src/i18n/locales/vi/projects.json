@@ -62,9 +62,10 @@
   "knowledgeTab": {
     "buildSuccess": "Đã xây dựng tri thức cho {{repo}}",
     "buildError": "Xây dựng tri thức thất bại",
-    "emptyTitle": "Chưa có kho mã nào",
-    "emptyBody": "Một dự án có thể chứa nhiều kho mã, mỗi kho có cơ sở tri thức riêng. Thêm các kho mã mà dự án này sở hữu, rồi xây dựng tri thức cho từng kho.",
+    "emptyTitle": "Chưa lập chỉ mục mã nguồn",
+    "emptyBody": "Việc soạn test case đang chạy trên Tri thức nghiệp vụ — dự án chưa có kho mã vẫn tạo được test case thủ công để review. Thêm kho mã khi đã có mã nguồn để lập chỉ mục; tự động hoá, thực thi và tự chữa lỗi thì cần đến nó.",
     "manageRepositories": "Quản lý kho mã",
+    "openBusiness": "Mở Tri thức nghiệp vụ",
     "repositories": "KHO MÃ",
     "manage": "Quản lý"
   },

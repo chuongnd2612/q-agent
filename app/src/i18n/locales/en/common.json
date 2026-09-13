@@ -57,6 +57,10 @@
         "title": "Project base URL",
         "why": "Live authoring drives the real app, so it needs an address to open."
       },
+      "authoringKnowledge": {
+        "title": "Knowledge to write from",
+        "why": "Business Knowledge or an indexed repository — either one grounds test cases. A project with no code yet needs only the first."
+      },
       "capturedLogin": {
         "title": "Captured login",
         "why": "A project set to manual login needs a saved session to reach authenticated pages."
