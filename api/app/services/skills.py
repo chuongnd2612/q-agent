@@ -31,6 +31,7 @@ REPORT_GENERATOR = "report-generator"
 TICKET_COMMENT_GENERATOR = "ticket-comment-generator"
 SCREENSHOT_ANNOTATOR = "screenshot-annotator"
 PROJECT_BOOTSTRAP = "project-bootstrap"
+BUSINESS_ANALYST = "business-analyst"
 
 SKILLS = {
     REQUIREMENT_ANALYST,
@@ -46,6 +47,7 @@ SKILLS = {
     TICKET_COMMENT_GENERATOR,
     SCREENSHOT_ANNOTATOR,
     PROJECT_BOOTSTRAP,
+    BUSINESS_ANALYST,
 }
 
 
