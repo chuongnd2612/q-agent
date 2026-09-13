@@ -24,6 +24,7 @@ import { Spinner } from "@/components/ui/misc";
 import { useAgentDevices, usePairCode, useRevokeDevice } from "@/hooks/queries";
 import { relativeTime } from "@/screens/auth/profile/sessions";
 import type { AgentDeviceOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /** A device whose `lastSeenAt` is within this window is treated as "Connected".
  * The agent idle-polls the job queue every ~3s (each poll refreshes
@@ -37,9 +38,14 @@ function isDeviceOnline(device: AgentDeviceOut, now: number): boolean {
   return now - Date.parse(device.lastSeenAt) < ONLINE_WINDOW_MS;
 }
 
+/* A workspace pairs a handful of devices at most; two rows is the realistic
+   shape of this panel rather than a filler count (#750). */
+const AGENT_DEVICE_ROWS = 2;
+
 export function LocalAgent() {
   const { t } = useTranslation("dashboard");
   const { data: devices, isLoading } = useAgentDevices();
+  const showSkeleton = useSkeleton(isLoading);
   const pairCode = usePairCode();
   const revokeDevice = useRevokeDevice();
 
@@ -165,12 +171,8 @@ export function LocalAgent() {
       )}
 
       <GlassCard className="p-2">
-        {isLoading ? (
-          <div className="flex flex-col gap-2 p-2">
-            {Array.from({ length: 2 }).map((_, i) => (
-              <div key={i} className="h-[58px] animate-pulse rounded-xl bg-white/[0.04]" />
-            ))}
-          </div>
+        {showSkeleton ? (
+          <SkeletonList count={AGENT_DEVICE_ROWS} rowHeight={58} gap={8} className="p-2" />
         ) : !devices?.length ? (
           <div className="p-8 text-center text-[13px] text-ink-dim">
             {t("localAgent.noDevices")}

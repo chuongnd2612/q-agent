@@ -10,6 +10,7 @@ import { toast } from "@/lib/toast";
 import { ProjectSettingsTab } from "../ProjectSettingsTab";
 import { RoleCard } from "./RoleCard";
 import { ROLES, bindRolePatch, boundConnectionId } from "./roles";
+import { Skeleton, SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /**
  * Project → **Connection** (ADR 0015 §3, #732).
@@ -44,12 +45,19 @@ export function ConnectionTab({
   const { enabled: hubOwnsProjects, resolved: hubResolved } = useHubDataEnabled();
   const readOnly = !hubResolved || hubOwnsProjects;
 
+  const showSkeleton = useSkeleton(isLoading);
+
   const allConnections = (providers ?? []).flatMap((g) => g.connections);
 
-  if (isLoading || !config) {
+  if (showSkeleton || !config) {
+    // Shaped like the tab itself: the intro banner, one card per role, then the
+    // project settings form below (#750). The bare centred "Loading…" this
+    // replaces is what prompted the report.
     return (
-      <div className="glass rounded-[18px] p-8 text-center text-[13px] text-ink-dim">
-        {t("common:loading")}
+      <div className="flex flex-col gap-3" data-testid="connection-tab-skeleton">
+        <Skeleton className="h-[64px]" />
+        <SkeletonList count={ROLES.length} rowHeight={112} gap={12} />
+        <Skeleton className="h-[240px]" style={{ animationDelay: "360ms" }} />
       </div>
     );
   }

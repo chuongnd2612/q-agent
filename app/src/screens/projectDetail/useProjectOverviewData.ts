@@ -3,6 +3,7 @@ import {
   projectCountsKey,
   useProjectCounts,
   useProjectRepos,
+  useProjects,
 } from "@/hooks/queries";
 import { knowledgeStatusStyle, providerLabel } from "@/data/projects";
 import { providerGlyph } from "@/components/ui/badges";
@@ -28,6 +29,10 @@ export function useProjectOverviewData(key: string) {
   // matched — a second counting path, an unscoped read, and a count that was
   // wrong the moment two projects shared a provider. All three go away together.
   const { byProject, projects } = useProjectCounts();
+  // Same query, deduped by react-query. Needed separately because
+  // `useProjectCounts().isLoading` also covers the runs list, which has nothing
+  // to do with whether the project's NAME is known yet.
+  const { isLoading: projectsLoading } = useProjects();
 
   // GUID first — that is the identity. Falling back to the name keeps a
   // pre-#587 bookmark working; it is a *display* match, and the reason it can no
@@ -64,6 +69,14 @@ export function useProjectOverviewData(key: string) {
   return {
     /** The matched project row, or `undefined` while the list is still loading. */
     project,
+    /**
+     * True only while the project LIST is in flight, i.e. while `meta.name` is
+     * still the route key. The header renders a placeholder rather than that
+     * key, which for a GUID route (#587) is a 36-character UUID that reads as
+     * real data. Deliberately NOT `project === undefined`: once the list has
+     * resolved, falling back to the key is the right answer, not a load.
+     */
+    metaLoading: projectsLoading,
     meta,
     providerKind,
     repoList,

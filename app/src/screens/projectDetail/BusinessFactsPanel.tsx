@@ -10,6 +10,7 @@ import {
 } from "@/hooks/queries";
 import { toast } from "@/lib/toast";
 import type { BusinessFactCategory, BusinessFactOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /**
  * Project → Business Knowledge → **the fact overlay** (#827, epic #813, ADR 0016 §5).
@@ -67,6 +68,10 @@ type Editor =
   | { mode: "correct"; fact: BusinessFactOut }
   | { mode: "edit"; fact: BusinessFactOut };
 
+/* The facts list is unpaginated; four rows is one screenful of the panel
+   rather than a count picked by eye (#750). */
+const BUSINESS_FACT_ROWS = 4;
+
 export function BusinessFactsPanel({ projectGuid }: { projectGuid: string | null }) {
   const { t } = useTranslation("projects");
   const facts = useBusinessFacts(projectGuid);
@@ -77,6 +82,7 @@ export function BusinessFactsPanel({ projectGuid }: { projectGuid: string | null
   const [editor, setEditor] = useState<Editor | null>(null);
 
   const rows = useMemo(() => facts.data ?? [], [facts.data]);
+  const showSkeleton = useSkeleton(facts.isLoading);
   const busy = create.isPending || correct.isPending || update.isPending;
 
   /** Which correction superseded a given fact, so the row can name it. */
@@ -195,8 +201,8 @@ export function BusinessFactsPanel({ projectGuid }: { projectGuid: string | null
         />
       )}
 
-      {facts.isLoading ? (
-        <div className="px-5 py-10 text-center text-[13px] text-txt4">{t("common:loading")}</div>
+      {showSkeleton ? (
+        <SkeletonList count={BUSINESS_FACT_ROWS} rowHeight={56} className="px-5 py-4" />
       ) : rows.length === 0 ? (
         <p
           className="m-0 px-5 py-10 text-center text-[13px] leading-relaxed text-txt4"

@@ -31,6 +31,7 @@ import { BusinessFactsPanel } from "./BusinessFactsPanel";
 import { BusinessSourceForm } from "./BusinessSourceForm";
 import { toast } from "@/lib/toast";
 import type { BusinessSourceKind, BusinessSourceOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /**
  * Project → **Business Knowledge** tab (#817, epic #813, ADR 0016).
@@ -124,6 +125,10 @@ const STATUS_STYLE: Record<BusinessSourceOut["status"], [string, string]> = {
   error: ["text-danger", "bg-danger-tint"],
 };
 
+/* A project binds a handful of business sources; three rows is the realistic
+   shape of this list rather than a filler count (#750). */
+const BUSINESS_SOURCE_ROWS = 3;
+
 export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
   const { t } = useTranslation("projects");
   const sources = useBusinessSources(projectGuid);
@@ -136,6 +141,7 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
   const [confirming, setConfirming] = useState<BusinessSourceOut | null>(null);
 
   const rows = sources.data ?? [];
+  const showSourcesSkeleton = useSkeleton(sources.isLoading);
 
   /**
    * A source was registered: close the composer and start its fetch.
@@ -256,8 +262,8 @@ export function BusinessTab({ projectGuid }: { projectGuid: string | null }) {
           />
         )}
 
-        {sources.isLoading ? (
-          <div className="px-5 py-10 text-center text-[13px] text-txt4">{t("common:loading")}</div>
+        {showSourcesSkeleton ? (
+          <SkeletonList count={BUSINESS_SOURCE_ROWS} rowHeight={56} className="px-5 py-4" />
         ) : rows.length === 0 ? (
           <EmptyState onAdd={() => setAdding(true)} formOpen={adding} />
         ) : (

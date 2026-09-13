@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/misc";
 import { useLinkedCases, useTicket } from "@/hooks/queries";
 import { providerLabel } from "@/data/projects";
 import type { LinkedTestCaseOut, ProviderKind } from "@/types/api";
+import { Skeleton, useSkeleton } from "@/components/ui/Skeleton";
 
 const CASE_STATUS_COLOR: Record<string, [string, string]> = {
   Design: ["#a78bfa", "rgba(139,92,246,.14)"],
@@ -172,6 +173,7 @@ export function TicketDetail() {
   const { externalId } = useParams();
   const navigate = useNavigate();
   const { data: detail, isLoading } = useTicket(externalId ?? null);
+  const showSkeleton = useSkeleton(isLoading);
 
   // Back to the project's Tickets tab when we got here through a project (ADR
   // 0015 makes that the only route the UI offers). The flat
@@ -186,14 +188,14 @@ export function TicketDetail() {
         : "/projects",
     );
 
-  if (isLoading || !detail) {
+  if (showSkeleton || !detail) {
     return (
       <div className="px-1 pb-10 pt-0.5">
         <BackButton onClick={goTickets} />
-        {isLoading ? (
+        {showSkeleton ? (
           <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[1.55fr_1fr]">
-            <div className="glass h-[420px] animate-pulse rounded-[22px]" />
-            <div className="glass h-[280px] animate-pulse rounded-[20px]" />
+            <Skeleton className="h-[420px]" />
+            <Skeleton className="h-[280px]" style={{ animationDelay: "90ms" }} />
           </div>
         ) : (
           <EmptyState

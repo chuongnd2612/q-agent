@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/screens/auth/profile/sessions";
 import type { ClaudeCredentialsMeta, HubClaudeCredential } from "@/types/api";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 /** "in N days"/"in N hours" for a future ISO timestamp; "Expired" once past;
  * "—" if absent. Exported so the admin shared-account card can reuse it. */
@@ -522,7 +523,7 @@ export function ClaudeCredentialsCard() {
   // Shared/Your-own picker for a frame and then withdrawing it is the same
   // "control that doesn't govern anything" defect, just briefer.
   if (!hubDataResolved) {
-    return <div className="h-[180px] animate-pulse rounded-[16px] bg-white/[0.03]" />;
+    return <Skeleton className="h-[180px]" />;
   }
 
   // EmeHub owns Claude credentials in this deployment (#528). Show what it

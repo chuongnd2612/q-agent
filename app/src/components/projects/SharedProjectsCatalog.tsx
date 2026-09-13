@@ -15,14 +15,16 @@ import { Spinner } from "@/components/ui/misc";
 import { knowledgeStatusStyle } from "@/data/projects";
 import { useCloneSharedProject, useSharedProjects } from "@/hooks/queries";
 import type { ProviderKind, SharedProjectOut } from "@/types/api";
+import { Skeleton, useSkeleton } from "@/components/ui/Skeleton";
 
 export function SharedProjectsCatalog() {
   const { t } = useTranslation("projects");
   const { data: shared, isLoading } = useSharedProjects();
   const clone = useCloneSharedProject();
+  const showSkeleton = useSkeleton(isLoading);
 
-  if (isLoading) {
-    return <div className="glass mb-4 h-[92px] animate-pulse rounded-[20px]" />;
+  if (showSkeleton) {
+    return <Skeleton className="mb-4 h-[92px]" />;
   }
   if (!shared?.length) return null;
 

@@ -33,6 +33,7 @@ import type {
   HubClaudeCredential,
   UsageWindow,
 } from "@/types/api";
+import { Skeleton, useSkeleton } from "@/components/ui/Skeleton";
 
 /** The credential actually in effect (matches the backend own→shared precedence). */
 function effectiveCredMeta(s: ClaudeCredentialsStatus | undefined): ClaudeCredentialsMeta | null {
@@ -135,6 +136,7 @@ export function ClaudeStatsButton() {
 
   // Loading = the model setting hasn't arrived yet on first page load.
   const loading = isPending && !stats;
+  const showSkeleton = useSkeleton(loading);
   // The chip names the ACCOUNT a run would authenticate with, not the model
   // (#763). The model is still one click away, in the panel's header. Derived
   // through `claudeAccountLabel` so the chip and the panel's CREDENTIAL badge
@@ -168,12 +170,16 @@ export function ClaudeStatsButton() {
         title={healthTitle}
         className="flex h-[38px] items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-[12.5px] font-semibold text-ink-soft hover:bg-white/[0.09] disabled:hover:bg-white/[0.04]"
       >
-        {loading ? (
+        {showSkeleton ? (
           <>
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/25" />
+            <span className="h-1.5 w-1.5">
+              <Skeleton className="h-full w-full" />
+            </span>
             <Star size={12} strokeWidth={2} className="text-ink-dim" />
             {/* Label skeleton is hidden on mobile where the chip is icon-only. */}
-            <span className="hidden h-3 w-16 animate-pulse rounded bg-white/[0.14] md:block" />
+            <span className="hidden h-3 w-16 md:block">
+              <Skeleton className="h-full w-full" />
+            </span>
           </>
         ) : (
           <>
@@ -225,6 +231,7 @@ function UsageRow({
   status: ClaudeStats["limitsStatus"];
 }) {
   const loading = status === "loading";
+  const showSkeleton = useSkeleton(loading);
   const hasPct = window.pctUsed >= 0;
   const pct = Math.max(0, Math.min(100, window.pctUsed));
   // Prefer the CLI's authoritative (already-localized) reset label; else format the ISO.
@@ -238,8 +245,10 @@ function UsageRow({
     <div className="mt-[15px]">
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-semibold text-ink-soft">{label}</span>
-        {loading ? (
-          <span className="h-3 w-14 animate-pulse rounded bg-white/[0.12]" />
+        {showSkeleton ? (
+          <span className="h-3 w-14">
+            <Skeleton className="h-full w-full" />
+          </span>
         ) : hasPct ? (
           <span className="text-[12px] font-bold text-ink">{pct}% used</span>
         ) : (
@@ -247,8 +256,10 @@ function UsageRow({
         )}
       </div>
 
-      {loading ? (
-        <div className="mt-2 h-[6px] w-full animate-pulse rounded-full bg-white/[0.12]" />
+      {showSkeleton ? (
+        <div className="mt-2 h-[6px] w-full">
+          <Skeleton className="h-full w-full" />
+        </div>
       ) : hasPct ? (
         <div className="mt-2 h-[6px] w-full overflow-hidden rounded-full bg-white/[0.08]">
           <div
@@ -264,8 +275,10 @@ function UsageRow({
         <div className="mt-2 h-[3px] w-full rounded-full bg-white/[0.06]" />
       )}
 
-      {loading ? (
-        <div className="mt-2 h-2.5 w-3/4 animate-pulse rounded bg-white/[0.08]" />
+      {showSkeleton ? (
+        <div className="mt-2 h-2.5 w-3/4">
+          <Skeleton className="h-full w-full" />
+        </div>
       ) : (
         <div className="mt-1.5 text-[10.5px] text-ink-dim">{sub}</div>
       )}

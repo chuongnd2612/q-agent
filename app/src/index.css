@@ -90,6 +90,21 @@
      the whole content area dark and the page's own ink becomes unreadable on
      it (#844). */
   --backdropVeil: rgba(9, 9, 14, 0.55);
+
+  /* Skeleton placeholders (#750). ONE surface and ONE radius for every skeleton
+     in the app — before this there were four surfaces and seven radii. The
+     shimmer highlight is white in BOTH modes on purpose: "a band lighter than
+     the block" reads as a sweep over a dark block and over a light one alike,
+     it is only the alpha that has to differ.
+
+     The block colour is OPAQUE, not an rgba tint, and carries no
+     backdrop-filter: a translucent placeholder lets the animated constellation
+     read straight through it, which is both the compositing artifact and the
+     unreadable-panel failure CLAUDE.md > Frontend warns about. A placeholder
+     has to look like a solid thing that content will replace. */
+  --skel: #1b1b25;
+  --skelHi: rgba(255, 255, 255, 0.07);
+  --skelRadius: 12px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -135,6 +150,11 @@
   --terra: #984c26;
   --scrim: rgba(18, 22, 36, 0.4);
   --backdropVeil: rgba(238, 240, 245, 0.72);
+
+  /* Light mode inverts the block (dark ink on a pale panel) but keeps the
+     highlight white, now near-opaque so the sweep still reads against it. */
+  --skel: #d6dae3;
+  --skelHi: rgba(255, 255, 255, 0.62);
 
   /* Derived accent tokens, re-stated here so one [data-mode] flip carries both.
      --pOn = text ON an accent fill; --psText = accent text on a surface. */
@@ -336,6 +356,12 @@
 @keyframes shimmer {
   0% { background-position: -500px 0; }
   100% { background-position: 500px 0; }
+}
+/* The reduced-motion fallback for `skeleton`: no travelling band, just a
+   stationary opacity pulse. */
+@keyframes skelPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 @keyframes barGrow {
   from { transform: scaleY(0.02); }
@@ -639,6 +665,28 @@ select:-webkit-autofill {
 /* ---------------------------------------------------------------------------
    9. Recipes a colour utility cannot express.
    ------------------------------------------------------------------------ */
+/* The one skeleton surface (#750). `@keyframes shimmer` had existed here since
+   the beginning with zero users; this is its first and only caller. The 500px
+   background-size matches the keyframe's -500px -> 500px travel. Sizing, count
+   and timing live in `components/ui/Skeleton.tsx`. */
+@utility skeleton {
+  background-color: var(--skel);
+  background-image: linear-gradient(90deg, transparent 0%, var(--skelHi) 50%, transparent 100%);
+  background-repeat: no-repeat;
+  background-size: 500px 100%;
+  border-radius: var(--skelRadius);
+  animation: shimmer 1.5s linear infinite;
+}
+/* Unlayered, so it beats the `@layer utilities` rule above regardless of
+   source order. A sweeping band is exactly the motion this preference is about,
+   so it degrades to a static pulse — non-negotiable, not a nicety. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    background-image: none;
+    animation: skelPulse 2s ease-in-out infinite;
+  }
+}
+
 @utility glass {
   background: var(--card);
   /* Lightning CSS adds the -webkit- prefix; declaring it by hand makes it drop

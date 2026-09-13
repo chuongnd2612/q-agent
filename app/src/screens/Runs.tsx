@@ -19,6 +19,7 @@ import { useRuns } from "@/hooks/queries";
 import { useProjectRoute } from "@/screens/ProjectDetail";
 import { useUI, type RunFilter } from "@/store/ui";
 import type { RunOut } from "@/types/api";
+import { Skeleton, SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /** Low-alpha tint of a 6-digit hex accent, for badge/pill backgrounds. */
 const tint = (hex: string, alpha = "22") => `${hex}${alpha}`;
@@ -36,6 +37,10 @@ const STAT_CARDS: { key: Exclude<RunFilter, "all">; color: string }[] = [
  * animated bulk-action bar. Per-row case count / pass progress / pass rate come
  * from the aggregates on `RunOut` (GET /runs).
  */
+/* The run list is not paginated, so the skeleton promises one screenful rather
+   than a page size — six rows is what fits under the stat tiles (#750). */
+const RUN_LIST_ROWS = 6;
+
 export function Runs() {
   const { t } = useTranslation("runs");
   const { t: tCommon } = useTranslation("common");
@@ -52,6 +57,7 @@ export function Runs() {
   // project tab that showed the whole workspace's runs.
   const { projectGuid } = useProjectRoute();
   const { data: runs, isLoading, isError, refetch } = useRuns(projectGuid ?? undefined);
+  const showSkeleton = useSkeleton(isLoading);
   const all = runs ?? [];
   const runHref = (id: number, seg?: string) =>
     `/projects/${encodeURIComponent(projectGuid ?? "")}/runs/${id}${seg ? `/${seg}` : ""}`;
@@ -102,16 +108,15 @@ export function Runs() {
         </Button>
       </div>
 
-      {isLoading ? (
+      {showSkeleton ? (
         <div className="flex flex-col gap-[10px]">
+          {/* Four tiles because the header really does have four stat tiles. */}
           <div className="mb-2 grid grid-cols-2 gap-3 md:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="glass h-[74px] animate-pulse rounded-[16px]" />
+            {STAT_CARDS.map((c, i) => (
+              <Skeleton key={c.key} className="h-[74px]" style={{ animationDelay: i * 90 + "ms" }} />
             ))}
           </div>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="glass h-[84px] animate-pulse rounded-2xl" />
-          ))}
+          <SkeletonList count={RUN_LIST_ROWS} rowHeight={84} testId="runs-skeleton" />
         </div>
       ) : isError ? (
         // A failed load is NOT an empty list (#491).

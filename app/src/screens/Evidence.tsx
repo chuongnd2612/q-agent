@@ -26,6 +26,7 @@ import { useEvidenceUploading } from "@/hooks/useRunEvents";
 import { AnnotationCanvas } from "./evidence/AnnotationCanvas";
 import { useUI, type AnnotationTool, type EvidenceTab } from "@/store/ui";
 import type { AnnotationShape, ExecutionResultOut } from "@/types/api";
+import { Skeleton, useSkeleton } from "@/components/ui/Skeleton";
 
 const TABS: { id: EvidenceTab }[] = [
   { id: "screenshot" },
@@ -115,6 +116,7 @@ export function Evidence() {
   const selectedResult = results.find((r) => r.id === selectedResultId) ?? results[0];
 
   const notReady = isError || isLoading === false ? !tickets.length : false;
+  const showSkeleton = useSkeleton(isLoading || (evidenceUploading && notReady));
 
   return (
     <div className="px-1 pb-10 pt-0.5">
@@ -132,10 +134,10 @@ export function Evidence() {
         </div>
       )}
 
-      {isLoading || (evidenceUploading && notReady) ? (
+      {showSkeleton ? (
         <div className="flex flex-col gap-3.5 md:grid md:grid-cols-[240px_1fr]">
-          <div className="glass h-64 animate-pulse rounded-[18px]" />
-          <div className="glass h-96 animate-pulse rounded-[18px]" />
+          <Skeleton className="h-64" />
+          <Skeleton className="h-96" style={{ animationDelay: "90ms" }} />
         </div>
       ) : notReady ? (
         <EmptyState

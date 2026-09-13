@@ -28,17 +28,23 @@ import {
 } from "@/hooks/queries";
 import { useAuth } from "@/store/auth";
 import type { ProviderKind, SharedProjectOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError || e instanceof Error ? e.message : fallback;
 
 const settingsPath = (key: string) => `/settings/shared-workspace/${encodeURIComponent(key)}`;
 
+/* A workspace shares a handful of projects; two rows is the realistic shape of
+   this panel rather than a filler count (#750). */
+const SHARED_PROJECT_ROWS = 2;
+
 export function SharedWorkspace() {
   const { t } = useTranslation("settings");
   const me = useAuth((s) => s.user);
   const navigate = useNavigate();
   const { data: shared, isLoading, isError, error } = useSharedProjects();
+  const showSkeleton = useSkeleton(isLoading);
   const buildRepo = useBuildSharedRepoKnowledge();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -108,15 +114,8 @@ export function SharedWorkspace() {
         <div className="rounded-2xl border border-[rgba(244,63,94,.28)] bg-[rgba(244,63,94,.08)] p-6 text-[13.5px] text-[#fb7185]">
           {errMsg(error, t("sharedWorkspace.loadFailed"))}
         </div>
-      ) : isLoading ? (
-        <div className="flex flex-col gap-2.5">
-          {[0, 1].map((i) => (
-            <div
-              key={i}
-              className="h-[76px] animate-pulse rounded-[14px] border border-white/[0.06] bg-white/[0.02]"
-            />
-          ))}
-        </div>
+      ) : showSkeleton ? (
+        <SkeletonList count={SHARED_PROJECT_ROWS} rowHeight={76} />
       ) : !shared?.length ? (
         <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-10 text-center text-[13.5px] text-muted">
           {t("sharedWorkspace.empty")}

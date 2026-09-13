@@ -9,6 +9,7 @@ import {
 } from "@/hooks/queries";
 import { ProjectSettingsForm } from "./ProjectSettingsForm";
 import { ManualLoginStatus } from "./ManualLogin";
+import { Skeleton, SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /**
  * Project Details → Settings tab. Thin wrapper: loads the current user's own
@@ -21,6 +22,21 @@ import { ManualLoginStatus } from "./ManualLogin";
  * keeps the behaviour predictable and reversible. The API refuses the `PUT` under
  * the same flag, so this is not a UI-only promise (#512).
  */
+/* The settings form is a title plus a stack of labelled fields, so its
+   placeholder is that stack rather than a centred word (#750). */
+const SETTINGS_FORM_FIELDS = 5;
+
+/** Placeholder for the project settings form, shared by the project tab and the
+ *  shared-project admin screen so both wait in the same shape. */
+export function ProjectSettingsSkeleton() {
+  return (
+    <div className="flex flex-col gap-3.5" data-testid="project-settings-skeleton">
+      <Skeleton className="h-[34px] w-[240px]" />
+      <SkeletonList count={SETTINGS_FORM_FIELDS} rowHeight={56} gap={12} />
+    </div>
+  );
+}
+
 export function ProjectSettingsTab({
   projectKey,
   hubProjectId,
@@ -40,13 +56,10 @@ export function ProjectSettingsTab({
   // flash #528 closed. Until then, treat it as read-only — the safer half-answer.
   const { enabled: hubOwnsProjects, resolved: hubResolved } = useHubDataEnabled();
   const readOnly = !hubResolved || hubOwnsProjects;
+  const showSkeleton = useSkeleton(isLoading);
 
-  if (isLoading || !config) {
-    return (
-      <div className="glass rounded-[18px] p-8 text-center text-[13px] text-ink-dim">
-        {t("common:loading")}
-      </div>
-    );
+  if (showSkeleton || !config) {
+    return <ProjectSettingsSkeleton />;
   }
   return (
     <>

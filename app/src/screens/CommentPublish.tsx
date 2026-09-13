@@ -12,6 +12,7 @@ import { useParams } from "react-router-dom";
 import { useComments, useCommentMutations, useRun } from "@/hooks/queries";
 import { CommentPreview } from "./publish/CommentPreview";
 import type { PublishStatus, TicketCommentOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 const PUBLISH_STATUS: Record<PublishStatus, [string, PublishStatus, string]> = {
   draft: ["#a0a0b2", "draft", "rgba(255,255,255,.06)"],
@@ -22,12 +23,17 @@ const PUBLISH_STATUS: Record<PublishStatus, [string, PublishStatus, string]> = {
 
 /** Ticket Comments / Publish — prepares AI-summarized result comments per ticket
  * and publishes them back to the provider work item. Design: Q-Agent.dc.html 489-506. */
+/* One draft comment per failed ticket, unpaginated — three cards is one
+   screenful at 132px each (#750). */
+const COMMENT_CARDS = 3;
+
 export function CommentPublish() {
   const { t } = useTranslation("pipeline");
   const { t: tCommon } = useTranslation("common");
   const runId = Number(useParams().runId);
   const { data: run } = useRun(runId);
   const { data: comments, isLoading, isError, refetch } = useComments(runId);
+  const showSkeleton = useSkeleton(isLoading);
   const { prepare, publishOne, publishAll, retry, edit, regenerate } =
     useCommentMutations(runId);
 
@@ -72,12 +78,8 @@ export function CommentPublish() {
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="flex flex-col gap-3">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="glass h-[132px] animate-pulse rounded-[18px]" />
-          ))}
-        </div>
+      {showSkeleton ? (
+        <SkeletonList count={COMMENT_CARDS} rowHeight={132} gap={12} />
       ) : isError ? (
         // A failed load is NOT an empty list (#491).
         <ErrorState
