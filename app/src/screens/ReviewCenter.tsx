@@ -33,6 +33,7 @@ import {
 import { useUI, type CaseDraft } from "@/store/ui";
 import { cn } from "@/lib/cn";
 import type { CaseGrounding, TestCaseOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /** Groups the run's flat case list by ticket, preserving first-seen order. */
 function groupByTicket(cases: TestCaseOut[]): Array<{ ticketExternalId: string; cases: TestCaseOut[] }> {
@@ -68,6 +69,10 @@ function voiceRuleLabel(t: TFunction<"runs">, rule: string): string {
   return label || t("review.case.voiceBadge");
 }
 
+/* Cases per run are unbounded, so the skeleton promises one screenful of rows
+   under the stat strip rather than an arbitrary 3 (#750). */
+const REVIEW_CASE_ROWS = 6;
+
 export function ReviewCenter() {
   const { t } = useTranslation("runs");
   const { t: tCommon } = useTranslation("common");
@@ -76,6 +81,7 @@ export function ReviewCenter() {
   const navigate = useNavigate();
   const { data: run } = useRun(runId);
   const { data: cases, isLoading, isError, refetch } = useRunCases(runId);
+  const showSkeleton = useSkeleton(isLoading);
   const { setApproval, regenerateCase, approveAll, approveTicket, updateCase } =
     useCaseMutations(runId);
   const createAndLink = useCreateAndLink(runId);
@@ -203,16 +209,12 @@ export function ReviewCenter() {
         </div>
       </div>
 
-      {isLoading && (
-        <div className="flex flex-col gap-2.5">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="glass h-[74px] animate-pulse rounded-[18px]" />
-          ))}
-        </div>
+      {showSkeleton && (
+        <SkeletonList count={REVIEW_CASE_ROWS} rowHeight={74} testId="review-skeleton" />
       )}
 
       {/* A failed load is NOT an empty list (#491). */}
-      {!isLoading && isError && (
+      {!showSkeleton && isError && (
         <ErrorState
           title={tCommon("loadFailed.title")}
           body={tCommon("loadFailed.body")}
@@ -226,11 +228,11 @@ export function ReviewCenter() {
           about the cause, and a dead end. The panel replaces the empty state
           when generation errored, and sits above the list on a partial failure
           so the surviving cases are still reviewable. */}
-      {!isLoading && !isError && failedRunTickets(run).length > 0 && (
+      {!showSkeleton && !isError && failedRunTickets(run).length > 0 && (
         <RunGenerationFailure run={run} runId={runId} />
       )}
 
-      {!isLoading && !isError && tickets.length === 0 && failedRunTickets(run).length === 0 && (
+      {!showSkeleton && !isError && tickets.length === 0 && failedRunTickets(run).length === 0 && (
         <EmptyState
           icon={<Sparkles size={30} className="text-violet" />}
           title={t("review.empty.title")}

@@ -40,6 +40,7 @@ import { cn } from "@/lib/cn";
 import { useAuth } from "@/store/auth";
 import { relativeTime } from "@/screens/auth/profile/sessions";
 import type { AdminUser, User, UserRole } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /** Local (screen-scoped) query key — the shared `queryKeys` module is off-limits
  * to this slice, so we key the admin user list inline. */
@@ -53,6 +54,10 @@ const initials = (u: User) =>
   u.email[0]?.toUpperCase() ||
   "?";
 
+/* The user table is unpaginated; four rows is one screenful under the stat
+   strip, rather than a count picked by eye (#750). */
+const USER_ROWS = 4;
+
 export function UserManagement() {
   const { t } = useTranslation("settings");
   const me = useAuth((s) => s.user);
@@ -65,6 +70,8 @@ export function UserManagement() {
     queryFn: () => api.auth.users(),
     enabled: me?.role === "admin",
   });
+
+  const showSkeleton = useSkeleton(usersQuery.isLoading);
 
   const refresh = () => qc.invalidateQueries({ queryKey: USERS_KEY });
 
@@ -168,15 +175,8 @@ export function UserManagement() {
         <div className="rounded-2xl border border-[rgba(244,63,94,.28)] bg-[rgba(244,63,94,.08)] p-6 text-[13.5px] text-[#fb7185]">
           {errMsg(usersQuery.error, t("users.loadFailed"))}
         </div>
-      ) : usersQuery.isLoading ? (
-        <div className="flex flex-col gap-2.5">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="h-[64px] animate-pulse rounded-[14px] border border-white/[0.06] bg-white/[0.02]"
-            />
-          ))}
-        </div>
+      ) : showSkeleton ? (
+        <SkeletonList count={USER_ROWS} rowHeight={64} />
       ) : users.length === 0 ? (
         <div className="rounded-2xl border border-white/[0.07] bg-panel/60 p-10 text-center text-[13.5px] text-muted">
           {t("users.empty")}

@@ -22,11 +22,16 @@ import { SetupBlockers } from "@/components/setup/SetupBlockers";
 import { useSetupGuard } from "@/components/setup/useSetupGuard";
 import { useRunEvents } from "@/hooks/useRunEvents";
 import type { ExecutionResultOut, ExecutionTarget, ProgressEvent } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 /** Truncates long ticket ids for the fixed-width queue column (design's r.tidShort). */
 function shortTicket(id: string): string {
   return id.length > 10 ? id.slice(0, 10) : id;
 }
+
+/* The execution queue is unpaginated; six 42px rows is the panel's visible
+   height, which is what the placeholder should promise (#750). */
+const EXEC_QUEUE_ROWS = 6;
 
 export function Execution() {
   const { t } = useTranslation("pipeline");
@@ -36,6 +41,7 @@ export function Execution() {
 
   const { data: run } = useRun(runId);
   const { data: execution, isLoading } = useExecution(runId);
+  const showSkeleton = useSkeleton(isLoading);
   const { data: settings } = useSettings();
   const startExecution = useStartExecution(runId);
   const guardSetup = useSetupGuard();
@@ -243,12 +249,8 @@ export function Execution() {
         <div className="p-[9px_12px_6px] text-[11px] font-semibold tracking-[.08em] text-[#6c6c7e]">
           {t("execution.queue.heading")} &middot; {progress}%
         </div>
-        {isLoading ? (
-          <div className="flex flex-col gap-2 p-2">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-[42px] animate-pulse rounded-xl bg-white/[0.04]" />
-            ))}
-          </div>
+        {showSkeleton ? (
+          <SkeletonList count={EXEC_QUEUE_ROWS} rowHeight={42} gap={8} className="p-2" />
         ) : !results.length ? (
           <div className="p-6 text-center text-[13px] text-ink-dim">
             {t("execution.queue.empty")}

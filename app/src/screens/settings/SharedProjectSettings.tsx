@@ -23,6 +23,8 @@ import {
   useSharedProjectConfig,
 } from "@/hooks/queries";
 import { useAuth } from "@/store/auth";
+import { useSkeleton } from "@/components/ui/Skeleton";
+import { ProjectSettingsSkeleton } from "@/screens/projectDetail/ProjectSettingsTab";
 
 export function SharedProjectSettings() {
   const { t } = useTranslation("settings");
@@ -30,6 +32,7 @@ export function SharedProjectSettings() {
   const navigate = useNavigate();
   const me = useAuth((s) => s.user);
   const { data: config, isLoading } = useSharedProjectConfig(key);
+  const showSkeleton = useSkeleton(isLoading);
   const save = useCreateSharedProject();
 
   if (me && me.role !== "admin") {
@@ -67,8 +70,8 @@ export function SharedProjectSettings() {
         </p>
       </div>
 
-      {isLoading || !config ? (
-        <div className="glass rounded-[18px] p-8 text-center text-[13px] text-ink-dim">{t("common:loading")}</div>
+      {showSkeleton || !config ? (
+        <ProjectSettingsSkeleton />
       ) : (
         <ProjectSettingsForm
           config={config}

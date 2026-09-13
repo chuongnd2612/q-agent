@@ -50,6 +50,7 @@ import { useAuth } from "@/store/auth";
 import { useUI } from "@/store/ui";
 import { useProjectRoute } from "@/screens/ProjectDetail";
 import type { TicketFilters, TicketOut } from "@/types/api";
+import { SkeletonList, useSkeleton } from "@/components/ui/Skeleton";
 
 // Last-resort priority values, used only when no ticket is loaded yet. They are a
 // guess about the provider's vocabulary — Azure DevOps spells priorities `1`..`4`,
@@ -166,6 +167,7 @@ export function Tickets() {
     pageSize: PAGE_SIZE,
   };
   const { data: ticketsPage, isLoading, isError, refetch } = useTickets(filters);
+  const showSkeleton = useSkeleton(isLoading);
   const tickets = ticketsPage?.items ?? [];
   const total = ticketsPage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -427,12 +429,10 @@ export function Tickets() {
         )}
       </div>
 
-      {isLoading ? (
-        <div className="flex flex-col gap-[10px]">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="glass h-[64px] animate-pulse rounded-2xl" />
-          ))}
-        </div>
+      {showSkeleton ? (
+        // One row per ticket the page will actually hold, not a count picked to
+        // fill the viewport (#750).
+        <SkeletonList count={PAGE_SIZE} rowHeight={64} testId="tickets-skeleton" />
       ) : isError ? (
         // A failed load is NOT an empty list (#491) — saying "no tickets found"
         // here would send the user off to change filters that are working fine.

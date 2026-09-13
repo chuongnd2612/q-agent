@@ -81,6 +81,7 @@ export function ProjectDetail() {
   const {
     project,
     meta,
+    metaLoading: headerLoading,
     providerKind,
     repoList,
     confidence,
@@ -138,6 +139,7 @@ export function ProjectDetail() {
         statusDot={statusDot}
         statusColor={statusColor}
         statusLabel={statusLabel}
+        loading={headerLoading}
         onBack={() => navigate("/projects")}
       />
 

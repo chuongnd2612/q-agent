@@ -17,6 +17,11 @@ import {
 } from "@/hooks/queries";
 import type { KnowledgeStatus, ProjectKnowledgeOut, ProjectOut } from "@/types/api";
 
+/* The project cards lay out three across on desktop, so the skeleton is one
+   full grid row rather than a count picked by eye (#750). */
+const PROJECT_GRID_COLUMNS = 3;
+import { Skeleton, useSkeleton } from "@/components/ui/Skeleton";
+
 /** Aggregate a project's per-repo knowledge rows into a single card summary. */
 interface KnowledgeSummary {
   status: KnowledgeStatus;
@@ -95,6 +100,7 @@ export function Projects() {
 
   // Both calls have landed (or knowledge has failed) — see the render gate below.
   const knowledgeSettled = projects !== undefined && (knowledgeFetched || knowledgeError);
+  const showSkeleton = useSkeleton(isLoading || refresh.isPending || !knowledgeSettled);
 
   // Group per-repo knowledge rows by their owning project and summarize each.
   const byProject = useMemo(() => {
@@ -160,10 +166,16 @@ export function Projects() {
           stays pending forever and would hold the skeleton up permanently; and an
           ERRORED knowledge call still lets the list render, since a missing badge is
           a better outcome than a page that never appears. */}
-      {isLoading || refresh.isPending || !knowledgeSettled ? (
+      {showSkeleton ? (
+        // One full grid row — the card grid is three across (#750).
         <div className="grid grid-cols-1 gap-3.5 md:grid-cols-3">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="glass h-[240px] animate-pulse rounded-[20px]" />
+          {Array.from({ length: PROJECT_GRID_COLUMNS }).map((_, i) => (
+            <Skeleton
+              key={i}
+              className="h-[240px]"
+              style={{ animationDelay: i * 90 + "ms" }}
+              testId={i === 0 ? "projects-skeleton" : undefined}
+            />
           ))}
         </div>
       ) : isError ? (

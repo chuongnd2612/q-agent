@@ -1,9 +1,16 @@
 import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ProjectMeta } from "./types";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 /** Project detail header: back link, provider glyph, name/provider line, and the
- * aggregate knowledge-status pill. */
+ * aggregate knowledge-status pill.
+ *
+ * While `loading`, the name, the provider line and the glyph are placeholders:
+ * before #750 they rendered the route key (a raw GUID) and a default `ado`
+ * glyph, which looked like real — and wrong — data rather than a load. The
+ * placeholders sit in fixed-height boxes so nothing below them moves when the
+ * name lands. */
 export function ProjectHeader({
   meta,
   glyph,
@@ -14,6 +21,7 @@ export function ProjectHeader({
   statusColor,
   statusLabel,
   onBack,
+  loading = false,
 }: {
   meta: ProjectMeta;
   glyph: string;
@@ -24,6 +32,8 @@ export function ProjectHeader({
   statusColor: string;
   statusLabel: string;
   onBack: () => void;
+  /** True while the project list is still in flight (see `metaLoading`). */
+  loading?: boolean;
 }) {
   const { t } = useTranslation("projects");
   return (
@@ -37,18 +47,39 @@ export function ProjectHeader({
 
       <div className="mb-4 flex flex-col gap-3.5 md:flex-row md:items-center">
         <div className="flex min-w-0 flex-1 items-center gap-3.5">
-          <div
-            className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] text-[18px] font-black"
-            style={{ background: glyphBg, color: glyphColor }}
-          >
-            {glyph}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="m-0 text-[22px] font-black tracking-tight md:text-[26px]">{meta.name}</h1>
-            <div className="truncate font-mono text-[12.5px] text-ink-dim">
-              {meta.repo ? `${meta.repo} · ` : ""}
-              {meta.provider}
+          {loading ? (
+            <div className="h-[46px] w-[46px] shrink-0">
+              <Skeleton className="h-full w-full" />
             </div>
+          ) : (
+            <div
+              className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] text-[18px] font-black"
+              style={{ background: glyphBg, color: glyphColor }}
+            >
+              {glyph}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            {loading ? (
+              <div data-testid="project-header-skeleton">
+                <div className="h-[26px] md:h-[31px]">
+                  <Skeleton className="h-full w-[min(260px,70%)]" />
+                </div>
+                <div className="mt-1.5 h-[15px]">
+                  <Skeleton className="h-full w-[min(150px,45%)]" style={{ animationDelay: "90ms" }} />
+                </div>
+              </div>
+            ) : (
+              <>
+                <h1 className="m-0 text-[22px] font-black tracking-tight md:text-[26px]">
+                  {meta.name}
+                </h1>
+                <div className="truncate font-mono text-[12.5px] text-ink-dim">
+                  {meta.repo ? `${meta.repo} · ` : ""}
+                  {meta.provider}
+                </div>
+              </>
+            )}
           </div>
         </div>
         <div
