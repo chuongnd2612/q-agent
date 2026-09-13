@@ -10,6 +10,7 @@ The package is split along one seam, and only one::
     storage.py           persist raw AND normalized; hash the normalized text
     pipeline.py          orchestration, the background thread, the row's status
     uploads.py           the upload entry point (no fetch: the bytes arrived)
+    distil.py            corpus -> the brief + the facts (the step after ingest)
 
 A new source is therefore **one new module** plus one line in the adapter
 registry: #821 (GitHub markdown) and #822 (Azure DevOps wiki) are written
@@ -41,6 +42,19 @@ from app.services.business_ingest.base import (
     SourceCredential,
     SourceFetchError,
     UnreadableContentError,
+)
+from app.services.business_ingest.distil import (
+    BRIEF_CHAR_BUDGET,
+    BRIEF_STATUSES,
+    BRIEF_TOKEN_BUDGET,
+    CorpusDocument,
+    build_distillation,
+    collect_corpus,
+    corpus_hash,
+    distil_project,
+    is_distilling,
+    merge_facts,
+    start_distil,
 )
 from app.services.business_ingest.normalize import (
     MIN_READABLE_CHARS,
@@ -82,6 +96,18 @@ __all__ = [
     "ingest_documents",
     "start_sync",
     "is_syncing",
+    # distillation
+    "distil_project",
+    "start_distil",
+    "is_distilling",
+    "collect_corpus",
+    "corpus_hash",
+    "build_distillation",
+    "merge_facts",
+    "CorpusDocument",
+    "BRIEF_STATUSES",
+    "BRIEF_TOKEN_BUDGET",
+    "BRIEF_CHAR_BUDGET",
     # normalization
     "normalize",
     "readable_length",
