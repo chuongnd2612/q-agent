@@ -30,6 +30,7 @@ from app.schemas import (
     ExploreStartOut,
     ExploreStatusOut,
     KnowledgeBuildRequest,
+    KnowledgePatchRequest,
     ProjectConfigOut,
     ProjectConfigUpdate,
     ProjectKnowledgeOut,
@@ -562,6 +563,73 @@ def get_repo_knowledge(
     if not row:
         raise HTTPException(status_code=404, detail=f"No knowledge base for repo '{repo}'")
     check_owned_or_404(row, user, not_found=f"No knowledge base for repo '{repo}'")
+    return row
+
+
+@router.patch("/{key}/repos/{repo}/knowledge", response_model=ProjectKnowledgeOut)
+def patch_repo_knowledge(
+    key: str,
+    repo: str,
+    body: KnowledgePatchRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+) -> ProjectKnowledge:
+    """Correct a per-repo knowledge base entry by entry (#828, ADR 0016 §5).
+
+    Until this existed the code KB was **rebuild-only**: the sole way to fix a
+    wrong selector was to re-bootstrap and hope the next build read the right
+    file. Each edited route/selector is stamped ``{"origin": "manual",
+    "pinned": true}``, which is what makes the correction survive — ``pinned`` is
+    already honoured by the machine-merge paths and carried through a rebuild by
+    ``carry_pinned_forward`` (#827).
+
+    Scoped to ``user`` (#93): another user's knowledge base 404s rather than 403s,
+    so the response does not confirm the row exists (ADR 0008/0009).
+
+    Refused with 409 while a build is in flight — ``apply_build`` assigns the blob
+    wholesale from the build thread, so an edit committed mid-build would be
+    overwritten without trace by a thread that never saw it.
+    """
+    key = project_config_service.resolve_project_identifier(db, key, user)
+    row = (
+        db.query(ProjectKnowledge).filter(ProjectKnowledge.key == compose_key(key, repo)).first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No knowledge base for repo '{repo}'")
+    check_owned_or_404(row, user, not_found=f"No knowledge base for repo '{repo}'")
+    if row.status == "indexing" or knowledge_service.is_building(row.key):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A knowledge build is running for '{repo}' — edit it once the build finishes",
+        )
+
+    try:
+        knowledge, edited = knowledge_service.apply_manual_edits(
+            row.knowledge or {},
+            routes=body.routes,
+            selectors=body.selectors,
+            domain=body.domain,
+            business_entities=body.business_entities,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not edited:
+        raise HTTPException(status_code=400, detail="No knowledge edits were supplied")
+
+    row.knowledge = knowledge
+    # Re-emit knowledge.md / knowledge.json so the prompts read the correction
+    # rather than the superseded build output.
+    config = project_config_service.get_config_visible_to(db, key, user)
+    row.doc_path = knowledge_service.write_knowledge_files(row, config)
+    db.commit()
+    db.refresh(row)
+    audit_service.record(
+        category="knowledge",
+        actor_type="user",
+        action="Edited project knowledge base",
+        target=f"{key} / {repo}",
+        meta=f"{edited} entr{'y' if edited == 1 else 'ies'} pinned",
+    )
     return row
 
 

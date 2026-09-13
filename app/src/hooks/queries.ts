@@ -29,6 +29,7 @@ import type {
   ExecutionTarget,
   ExploreRequest,
   KnowledgeBuildRequest,
+  KnowledgePatchRequest,
   ProjectConfigUpdate,
   ProviderKind,
   Readiness,
@@ -529,6 +530,22 @@ export const useBuildRepoKnowledge = (key: string) => {
     onSuccess: (data, vars) => {
       qc.setQueryData(queryKeys.repoKnowledge(key, vars.repo), data);
       qc.invalidateQueries({ queryKey: queryKeys.projectRepos(key) });
+    },
+  });
+};
+
+/** Correct a repo's knowledge base entry by entry (#828).
+ *
+ *  The response is the full updated row, so it seeds the detail query directly
+ *  rather than invalidating it — one round trip, and the pinned badge on the
+ *  entry just saved appears immediately. */
+export const useEditRepoKnowledge = (key: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repo, body }: { repo: string; body: KnowledgePatchRequest }) =>
+      api.patchRepoKnowledge(key, repo, body),
+    onSuccess: (data, vars) => {
+      qc.setQueryData(queryKeys.repoKnowledge(key, vars.repo), data);
     },
   });
 };

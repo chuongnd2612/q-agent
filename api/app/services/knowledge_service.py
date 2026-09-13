@@ -358,6 +358,168 @@ def carry_pinned_forward(previous: dict[str, Any], rebuilt: dict[str, Any]) -> d
     return merged
 
 
+#: Stamp applied to every entry a human edits through ``PATCH .../knowledge``
+#: (#828). ``pinned`` is the flag the no-clobber rule and
+#: :func:`carry_pinned_forward` already honour (#827) — a manual edit is an
+#: ordinary entry wearing it, not a second kind of record. ``origin`` says who
+#: wrote it, which is what the UI reads to badge the entry.
+MANUAL_STAMP: dict[str, Any] = {"origin": "manual", "pinned": True}
+
+#: Scalar (non-list) knowledge fields a human can edit. They have no per-entry
+#: identity to hang ``pinned`` on, so the blob records *which* of them a human
+#: set under :data:`PINNED_FIELDS_KEY` instead.
+EDITABLE_FIELDS: tuple[str, ...] = ("domain", "business_entities")
+
+#: Blob key holding the names of the scalar fields a human has overridden.
+PINNED_FIELDS_KEY = "pinned_fields"
+
+
+def _normalise_route(entry: dict[str, Any]) -> dict[str, Any]:
+    """Coerce one submitted route to the blob's stored shape.
+
+    The stored blob is snake_cased (``auth_required``) while the SPA's own type
+    is camelCase (``authRequired``), and route entries travel in the request body
+    as opaque dicts that no alias generator reaches. Accept either spelling and
+    store one.
+
+    Args:
+        entry: A route as submitted — ``path`` plus any of ``description``,
+            ``auth_required`` / ``authRequired``.
+
+    Returns:
+        A new dict in stored shape, carrying :data:`MANUAL_STAMP`.
+    """
+    auth_required = entry.get("auth_required", entry.get("authRequired", False))
+    return {
+        "path": str(entry.get("path", "") or "").strip(),
+        "description": str(entry.get("description", "") or ""),
+        "auth_required": bool(auth_required),
+        **MANUAL_STAMP,
+    }
+
+
+def _normalise_selector(entry: dict[str, Any]) -> dict[str, Any]:
+    """Coerce one submitted selector to the blob's stored shape (see above)."""
+    return {
+        "screen": str(entry.get("screen", "") or ""),
+        "element": str(entry.get("element", "") or ""),
+        "selector": str(entry.get("selector", "") or "").strip(),
+        **MANUAL_STAMP,
+    }
+
+
+def apply_manual_edits(
+    knowledge: dict[str, Any],
+    *,
+    routes: list[dict[str, Any]] | None = None,
+    selectors: list[dict[str, Any]] | None = None,
+    domain: str | None = None,
+    business_entities: list[str] | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Merge a human's per-entry edits into a knowledge blob (#828, ADR 0016 §5).
+
+    Additive to the existing JSON blob — no migration, no new table. Each edited
+    route/selector is **upserted by its identity key** (``path`` / ``selector``,
+    the same keys the machine-merge paths already key on) and stamped
+    :data:`MANUAL_STAMP`, so what a human produces here is exactly the kind of
+    entry #827's no-clobber rule and :func:`carry_pinned_forward` protect. An
+    edit therefore survives both a self-heal and a full rebuild.
+
+    Sections not mentioned in the call are left untouched: this is a PATCH, so
+    omitting ``routes`` means "leave the routes alone", never "delete them".
+
+    Args:
+        knowledge: The current blob. **Not mutated** — a new dict is returned, so
+            SQLAlchemy sees the JSON column change.
+        routes: Routes to upsert, keyed on ``path``.
+        selectors: Selectors to upsert, keyed on ``selector``.
+            An entry may carry ``replaces`` — the identity of the entry it
+            supersedes — which is how *correcting* a wrong value works: the
+            identity key IS the value being fixed, so without it "``#wrong``
+            should be ``#right``" would add ``#right`` and leave ``#wrong``
+            standing in every prompt. ``replaces`` is a locator, not stored.
+        domain: Replacement business-domain prose, when given.
+        business_entities: Replacement business-entity list, when given.
+
+    Returns:
+        ``(new_blob, edited_count)`` — the count is every entry and scalar field
+        actually written, so a caller can refuse a patch that says nothing.
+
+    Raises:
+        ValueError: An entry has a blank identity key (a route with no ``path``,
+            a selector with no ``selector``). Such an entry could never be found
+            again, so it is refused rather than appended as an orphan.
+    """
+    merged = dict(knowledge or {})
+    edited = 0
+
+    for section, id_key, normalise, submitted in (
+        ("routes", "path", _normalise_route, routes),
+        ("selectors", "selector", _normalise_selector, selectors),
+    ):
+        if submitted is None:
+            continue
+        entries = [e for e in (merged.get(section) or []) if isinstance(e, dict)]
+        by_id = {e.get(id_key): i for i, e in enumerate(entries) if e.get(id_key)}
+        for raw in submitted:
+            raw = raw if isinstance(raw, dict) else {}
+            entry = normalise(raw)
+            if not entry.get(id_key):
+                raise ValueError(f"A {section[:-1]} edit needs a non-empty '{id_key}'")
+            replaces = str(raw.get("replaces") or "").strip()
+            index = by_id.get(replaces) if replaces else by_id.get(entry[id_key])
+            if index is None:
+                by_id[entry[id_key]] = len(entries)
+                entries.append(entry)
+            else:
+                # Keep what the machine discovered about this entry that the edit
+                # form does not carry (e.g. ``verified_at_runtime``), then let the
+                # human's fields win.
+                entries[index] = {**entries[index], **entry}
+                by_id.pop(replaces, None)
+                by_id[entry[id_key]] = index
+            edited += 1
+        merged[section] = entries
+
+    pinned_fields = [f for f in (merged.get(PINNED_FIELDS_KEY) or []) if isinstance(f, str)]
+    for field, value in (("domain", domain), ("business_entities", business_entities)):
+        if value is None:
+            continue
+        merged[field] = value
+        if field not in pinned_fields:
+            pinned_fields.append(field)
+        edited += 1
+    if pinned_fields:
+        merged[PINNED_FIELDS_KEY] = pinned_fields
+    return merged, edited
+
+
+def carry_pinned_fields(previous: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str, Any]:
+    """Re-apply human-overridden **scalar** fields onto a rebuilt blob (#828).
+
+    The list sections are handled by :func:`carry_pinned_forward`; this is its
+    counterpart for the fields that have no per-entry identity to pin
+    (``domain``, ``business_entities``). Without it, making those editable would
+    ship a known silent data-loss hole — the exact failure ADR 0016 §5 calls the
+    highest-risk detail in the epic, one field over.
+
+    Args:
+        previous: The blob being replaced.
+        rebuilt: The build's fresh blob. Not mutated.
+
+    Returns:
+        A new blob carrying the previous blob's overridden scalar fields.
+    """
+    fields = [f for f in (previous or {}).get(PINNED_FIELDS_KEY) or [] if f in EDITABLE_FIELDS]
+    if not fields:
+        return dict(rebuilt or {})
+    merged = dict(rebuilt or {})
+    for field in fields:
+        merged[field] = (previous or {}).get(field)
+    merged[PINNED_FIELDS_KEY] = fields
+    return merged
+
+
 def apply_build(
     row: ProjectKnowledge, payload: dict[str, Any], *, config: "ProjectConfig | None" = None
 ) -> None:
@@ -366,7 +528,8 @@ def apply_build(
     First index stays ``v1``; each subsequent (re)build increments the version.
 
     A **rebuild** carries the previous blob's human-pinned entries forward
-    (:func:`carry_pinned_forward`); a first index has nothing to carry.
+    (:func:`carry_pinned_forward`) and its human-overridden scalar fields
+    (:func:`carry_pinned_fields`); a first index has nothing to carry.
     """
     # Detect a rebuild by prior success (the status is transiently "indexing" here).
     rebuild = row.last_indexed is not None
@@ -379,7 +542,9 @@ def apply_build(
     else:
         row.version = "v1"
     row.knowledge = (
-        carry_pinned_forward(row.knowledge or {}, payload["knowledge"])
+        carry_pinned_fields(
+            row.knowledge or {}, carry_pinned_forward(row.knowledge or {}, payload["knowledge"])
+        )
         if rebuild
         else payload["knowledge"]
     )
