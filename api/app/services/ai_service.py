@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -23,10 +24,12 @@ from app.logging import logger
 from app.models.run import Run, RunTicket
 from app.models.testcase import TestCase
 from app.models.ticket import Ticket
+from app.models.business import BusinessFact
 from app.services import (
     audit_service,
     connection_service,
     project_config_service,
+    qc_voice_gate,
     run_context,
     run_control,
     settings_store,
@@ -122,14 +125,216 @@ def _validated_repo_guess(analysis: dict, context: dict) -> str:
     return default_name or context.get("repo", "") or ""
 
 
-def _case_kwargs_from_raw(raw_case: dict) -> dict:
+@dataclass(frozen=True)
+class VoiceGate:
+    """Everything :func:`_case_kwargs_from_raw` needs to judge — and re-ask for — a case.
+
+    The QC-voice gate itself (:mod:`app.services.qc_voice_gate`) is DB-free by
+    design, so the session-bound part (the project's glossary allow-list) is
+    resolved once per ticket and carried here rather than looked up per case.
+
+    Attributes:
+        ticket: The work item the case belongs to — needed to re-issue the
+            regenerate prompt on a reject.
+        analysis: The requirement analysis, passed to that prompt for context.
+        context: The resolved project context (Knowledge Base + config).
+        allowed_terms: The project's business-glossary vocabulary, exempt from
+            every rule. Empty when the project has no glossary — the gate still
+            works, it just falls back to
+            :data:`qc_voice_gate.BASELINE_ALLOWED_TERMS`.
+        label: Human-readable label for the retry's Claude CLI call.
+    """
+
+    ticket: Ticket
+    analysis: dict
+    context: dict
+    allowed_terms: tuple[str, ...] = ()
+    label: str = ""
+
+
+def glossary_terms_for_ticket(db: Session, ticket: Ticket) -> list[str]:
+    """Resolve the business-glossary vocabulary the QC-voice gate must not flag.
+
+    A product's own words are frequently identifier-shaped (``eClaims``,
+    ``FSA_Card``), and without this allow-list the gate's ``code_identifier``
+    rule rejects *correct* test cases. So the project's glossary facts
+    (``BusinessFact`` where ``category="glossary"``, not excluded) are handed to
+    the gate as allowed terms.
+
+    Both the ticket owner's rows and the shared namespace (``owner_id IS NULL``,
+    ADR 0009 §3) contribute: a wider allow-list can only ever *reduce* false
+    rejections, so there is no reason to be strict here.
+
+    Best-effort: any resolution failure (no project GUID, no business tables on
+    an old database) returns an empty list rather than raising. An empty
+    glossary is the normal case for a project that has none, and the gate is
+    fully functional without one.
+
+    Args:
+        db: Session to query ``BusinessFact`` with.
+        ticket: The work item whose project supplies the glossary.
+
+    Returns:
+        The distinct glossary terms, in first-seen order; ``[]`` when there are
+        none or the lookup failed.
+    """
+    try:
+        project_guid = project_config_service.project_guid_for_ticket(db, ticket)
+        if not project_guid:
+            return []
+        facts = (
+            db.query(BusinessFact)
+            .filter(
+                BusinessFact.project_guid == project_guid,
+                BusinessFact.category == "glossary",
+                BusinessFact.excluded.is_(False),
+            )
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001 - an allow-list miss must never fail a run
+        logger.warning("QC-voice allow-list unavailable for {}: {}", ticket.external_id, exc)
+        return []
+    return qc_voice_gate.allowed_terms_from_facts(facts)
+
+
+def build_voice_gate(
+    db: Session, ticket: Ticket, analysis: dict, context: dict, label: str = ""
+) -> VoiceGate:
+    """Assemble the per-ticket :class:`VoiceGate` (one glossary query, reused per case).
+
+    Args:
+        db: Session used for the one glossary lookup.
+        ticket: The work item being generated for.
+        analysis: The requirement analysis, for the retry prompt.
+        context: The resolved project context, for the retry prompt.
+        label: Optional label for the retry's CLI call; defaults to a
+            ticket-scoped one.
+
+    Returns:
+        The gate context to hand to :func:`_case_kwargs_from_raw`.
+    """
+    return VoiceGate(
+        ticket=ticket,
+        analysis=analysis or {},
+        context=context or {},
+        allowed_terms=tuple(glossary_terms_for_ticket(db, ticket)),
+        label=label or f"Rewrite for QC voice: {ticket.external_id}",
+    )
+
+
+def _voice_retry_prompt(gate: VoiceGate, raw_case: dict, findings: list[dict]) -> str:
+    """The regenerate prompt, with the gate's findings appended as the reason.
+
+    Deliberately built by *appending* to :func:`build_case_regenerate_prompt`
+    rather than by adding a parameter to it: ``prompts.py`` is owned by a
+    different slice (#825), and the retry needs nothing from it beyond the
+    existing rewrite instruction plus the list of offending phrases.
+
+    Args:
+        gate: The per-ticket gate context.
+        raw_case: The case that tripped the gate.
+        findings: ``check_case`` findings — each ``{"field", "rule", "match"}``.
+
+    Returns:
+        The full prompt string for the single allowed retry.
+    """
+    phrases = "\n".join(
+        '- "{}" (in {})'.format(f.get("match", ""), f.get("field", "?")) for f in findings
+    )
+    return (
+        build_case_regenerate_prompt(gate.ticket, gate.analysis, raw_case, gate.context)
+        + "\n\nIMPORTANT - these phrases leaked technical detail into the case:\n"
+        + phrases
+        + "\n\nRewrite them the way a QC would: describe what a person DOES in the "
+        "user interface and what that person SEES. Use the product's own words for "
+        "screens, buttons and fields. Do not mention selectors, routes, endpoints, "
+        "status codes, database tables, code identifiers or template variables - "
+        "the person executing this test cannot act on any of them."
+    )
+
+
+def _voice_checked(raw_case: dict, gate: "VoiceGate | None") -> tuple[dict, list[dict]]:
+    """Run the QC-voice gate over one generated case, with ONE retry.
+
+    The contract is *degrade and surface*, never fail hard (#829): a case that
+    trips the gate is re-asked for exactly once, and if the rewrite still leaks,
+    the case is returned anyway together with its findings so the caller
+    persists it and the Review Center can badge it. A case is never dropped and
+    a run is never failed on voice alone — a case a QC can see and fix beats one
+    that vanished.
+
+    Args:
+        raw_case: The raw case dict as the generator returned it.
+        gate: The per-ticket gate context, or ``None`` to skip gating entirely
+            (used where there is no ticket/analysis context to re-ask with).
+
+    Returns:
+        ``(case, findings)`` — the case to persist (the rewrite, when a retry
+        happened) and the findings that survived it, empty when clean.
+    """
+    if gate is None or not isinstance(raw_case, dict):
+        return raw_case, []
+    report = qc_voice_gate.check_case(raw_case, allowed_terms=gate.allowed_terms)
+    if report["outcome"] == "pass":
+        return raw_case, []
+
+    findings = report["findings"]
+    logger.info(
+        "QC-voice gate rejected a case for {} ({} finding(s)) - retrying once",
+        gate.ticket.external_id,
+        len(findings),
+    )
+    try:
+        retried = run_json(
+            _voice_retry_prompt(gate, raw_case, findings),
+            skill=TEST_CASE_GENERATOR,
+            label=gate.label,
+        )
+    except Exception as exc:  # noqa: BLE001 - the retry is best-effort by design
+        logger.warning("QC-voice retry failed for {}: {}", gate.ticket.external_id, exc)
+        return raw_case, findings
+    if not isinstance(retried, dict):
+        logger.warning("QC-voice retry for {} was not a JSON object", gate.ticket.external_id)
+        return raw_case, findings
+
+    retried_report = qc_voice_gate.check_case(retried, allowed_terms=gate.allowed_terms)
+    if retried_report["outcome"] == "pass":
+        return retried, []
+    # Still leaking after the one allowed attempt. Keep the REWRITE - it is the
+    # deliberately-improved version, and its findings are the ones a reviewer
+    # will actually be reading - and let the caller persist it with them stamped.
+    logger.warning(
+        "QC-voice gate still rejects a case for {} after one retry - persisting with {} finding(s)",
+        gate.ticket.external_id,
+        len(retried_report["findings"]),
+    )
+    return retried, retried_report["findings"]
+
+
+def _case_kwargs_from_raw(raw_case: dict, gate: "VoiceGate | None" = None) -> dict:
     """Map a raw Claude case dict to ``TestCase`` column kwargs.
 
     Shared by the generation and review stages so the JSON→columns mapping —
     including the #177 fields (objective, testData, linkedAc) — lives in one
     place. ``run_id``/``ticket_external_id``/``code``/``source`` are supplied by
     the caller.
+
+    This is also the single funnel every generated case passes through (the run
+    pipeline, :func:`_review_and_expand` and :func:`regenerate_case`), which is
+    why the QC-voice gate hooks here: one hook covers all three. Pass ``gate``
+    to enable it. The returned ``voice_findings`` is empty for a clean case and
+    carries the findings that survived one retry for a case that leaked twice —
+    which is persisted anyway, never dropped (#829).
+
+    Args:
+        raw_case: The case dict as the generator returned it.
+        gate: Per-ticket QC-voice context from :func:`build_voice_gate`, or
+            ``None`` to map the fields without gating.
+
+    Returns:
+        ``TestCase`` column kwargs, including ``voice_findings``.
     """
+    raw_case, voice_findings = _voice_checked(raw_case, gate)
     steps = [
         {"a": s.get("a", ""), "e": s.get("e", "")}
         for s in (raw_case.get("steps") or [])
@@ -152,6 +357,7 @@ def _case_kwargs_from_raw(raw_case: dict) -> dict:
         "test_type": raw_case.get("testType", "Functional"),
         "automation": raw_case.get("automation", "Playwright"),
         "platform": raw_case.get("platform", "Web"),
+        "voice_findings": voice_findings,
     }
 
 
@@ -208,6 +414,10 @@ def _review_and_expand(
         additional = []
     additional = additional[:max_cases]  # cap the expansion like generation
 
+    # One glossary lookup for the whole expansion; every case goes through the
+    # QC-voice gate on its way to columns (#829).
+    gate = build_voice_gate(db, ticket, analysis, context)
+
     added = 0
     for i, raw_case in enumerate(additional, start=1):
         if not isinstance(raw_case, dict):
@@ -218,7 +428,7 @@ def _review_and_expand(
                 ticket_external_id=ticket.external_id,
                 code=f"TC-{start_offset + i:02d}",
                 source="ai-review",
-                **_case_kwargs_from_raw(raw_case),
+                **_case_kwargs_from_raw(raw_case, gate),
             )
         )
         added += 1
@@ -308,6 +518,10 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
             logger.info("Run {} cancelled mid-ticket {} — skipping persistence", run.id, ticket.external_id)
             return
 
+        # One glossary lookup for the whole ticket; every case goes through the
+        # QC-voice gate on its way to columns (#829).
+        gate = build_voice_gate(db, ticket, analysis, context)
+
         case_count = 0
         for i, raw_case in enumerate(cases, start=1):
             if not isinstance(raw_case, dict):
@@ -318,7 +532,7 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
                     ticket_external_id=ticket.external_id,
                     code=f"TC-{offset + i:02d}",
                     source="ai",
-                    **_case_kwargs_from_raw(raw_case),
+                    **_case_kwargs_from_raw(raw_case, gate),
                 )
             )
             case_count += 1
@@ -584,18 +798,25 @@ def regenerate_case(db: Session, test_case: TestCase) -> TestCase:
     if not isinstance(result, dict):
         raise ClaudeError("Claude case-regenerate response was not a JSON object")
 
-    fields = _case_kwargs_from_raw(result)
+    # Every field below is read off `fields` rather than off `result`, because
+    # the QC-voice gate may have replaced the case with its own rewrite inside
+    # the funnel (#829). `or <existing>` preserves the previous
+    # "missing key keeps the old value" behaviour.
+    fields = _case_kwargs_from_raw(
+        result, build_voice_gate(db, ticket, analysis if isinstance(analysis, dict) else {}, context)
+    )
 
-    test_case.title = result.get("title", test_case.title)
-    test_case.objective = result.get("objective", test_case.objective)
-    test_case.precondition = result.get("precondition", test_case.precondition)
+    test_case.title = fields["title"] or test_case.title
+    test_case.objective = fields["objective"] or test_case.objective
+    test_case.precondition = fields["precondition"] or test_case.precondition
     test_case.steps = fields["steps"] or test_case.steps
     test_case.test_data = fields["test_data"] or test_case.test_data
     test_case.linked_ac = fields["linked_ac"] or test_case.linked_ac
-    test_case.priority = result.get("priority", test_case.priority)
-    test_case.test_type = result.get("testType", test_case.test_type)
-    test_case.automation = result.get("automation", test_case.automation)
-    test_case.platform = result.get("platform", test_case.platform)
+    test_case.priority = fields["priority"] or test_case.priority
+    test_case.test_type = fields["test_type"] or test_case.test_type
+    test_case.automation = fields["automation"] or test_case.automation
+    test_case.platform = fields["platform"] or test_case.platform
+    test_case.voice_findings = fields["voice_findings"]
     test_case.edited = True
 
     db.add(test_case)

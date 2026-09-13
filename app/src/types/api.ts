@@ -588,6 +588,16 @@ export interface TestDatum {
 
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
+/** One QC-voice gate violation: which field, which rule, and the offending text. */
+export interface VoiceFinding {
+  /** Field path, e.g. "title" or "steps[2].e". */
+  field: string;
+  /** The gate rule that claimed it, e.g. "css_xpath_selector". */
+  rule: string;
+  /** The offending substring, verbatim. */
+  match: string;
+}
+
 export interface TestCaseOut {
   id: number;
   runId: number;
@@ -607,6 +617,13 @@ export interface TestCaseOut {
   approval: ApprovalStatus;
   source: string;
   edited: boolean;
+  /**
+   * QC-voice gate findings that survived the one allowed regenerate (#829).
+   * Empty for a clean case; a non-empty list means the case was persisted
+   * anyway (degrade and show, never drop) and should be badged as "technical
+   * wording" with a rewrite offered.
+   */
+  voiceFindings: VoiceFinding[];
 }
 
 export interface TestCaseUpdate {
