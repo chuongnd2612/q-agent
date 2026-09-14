@@ -81,6 +81,82 @@ def test_sync_tickets_upserts_and_returns_result(client, db_session):
 
 
 @respx.mock
+def test_resync_with_partial_payload_keeps_prior_content(client, db_session):
+    """A re-sync whose payload omits description/AC must not blank prior content (#864)."""
+    connection_id = _configure_ado(client)
+
+    wiql = respx.post("https://dev.azure.com/myorg/MyProj/_apis/wit/wiql").mock(
+        return_value=httpx.Response(200, json={"workItems": [{"id": 101}]})
+    )
+    workitems = respx.get("https://dev.azure.com/myorg/_apis/wit/workitems")
+    respx.get("https://dev.azure.com/myorg/_apis/wit/workItems/101/comments").mock(
+        return_value=httpx.Response(200, json={"comments": []})
+    )
+
+    workitems.mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": [
+                    {
+                        "id": 101,
+                        "fields": {
+                            "System.Title": "Login should reject bad password",
+                            "System.State": "Ready for QA",
+                            "System.Description": "<p>Body</p>",
+                            "Microsoft.VSTS.Common.AcceptanceCriteria": "<p>- AC1</p>",
+                        },
+                        "relations": [],
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.post(
+        "/tickets/sync",
+        json={"connectionId": connection_id, "mode": "sprint", "sprint": "Sprint 12"},
+    )
+    assert resp.status_code == 200
+
+    from app.models.ticket import Ticket
+
+    db_session.expire_all()
+    ticket = db_session.query(Ticket).filter(Ticket.external_id == "101").first()
+    assert ticket.description == "Body"
+    assert ticket.acceptance_criteria
+
+    # Re-sync: same work item, but this fetch's payload has no description/AC —
+    # e.g. a provider hiccup or a lighter fetch. Prior content must survive.
+    workitems.mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": [
+                    {
+                        "id": 101,
+                        "fields": {
+                            "System.Title": "Login should reject bad password",
+                            "System.State": "Ready for QA",
+                        },
+                        "relations": [],
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.post(
+        "/tickets/sync",
+        json={"connectionId": connection_id, "mode": "sprint", "sprint": "Sprint 12"},
+    )
+    assert resp.status_code == 200
+
+    db_session.expire_all()
+    ticket = db_session.query(Ticket).filter(Ticket.external_id == "101").first()
+    assert ticket.description == "Body"
+    assert ticket.acceptance_criteria
+
+
+@respx.mock
 def test_sync_tickets_unknown_provider_404(client):
     resp = client.post("/tickets/sync", json={"providerKind": "ado", "mode": "sprint"})
     assert resp.status_code == 404
