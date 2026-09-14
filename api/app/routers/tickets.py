@@ -760,14 +760,23 @@ def sync_tickets(
         ticket.sprint = item.get("sprint", "")
         ticket.area_path = item.get("area_path", "")
         ticket.epic = item.get("epic", "")
-        ticket.description = item.get("description", "")
-        ticket.note = item.get("note", "")
-        ticket.labels = item.get("labels", [])
-        ticket.acceptance_criteria = item.get("acceptance_criteria", [])
-        ticket.acceptance_criteria_html = item.get("acceptance_criteria_html", "")
-        ticket.comments = item.get("comments", [])
-        ticket.attachments = item.get("attachments", [])
-        ticket.linked_prs = item.get("linked_prs", [])
+        # Content fields fall back to the ticket's existing value (not blank) when
+        # the adapter payload omits them, so a partial re-sync response can never
+        # clobber content a previous sync already fetched — mirrors the "never
+        # clobber" contract hub_workspace.fill_ticket_detail enforces for mirrored
+        # tickets.
+        ticket.description = item.get("description") or (ticket.description if ticket.id else "")
+        ticket.note = item.get("note") or (ticket.note if ticket.id else "")
+        ticket.labels = item.get("labels") or (ticket.labels if ticket.id else [])
+        ticket.acceptance_criteria = item.get("acceptance_criteria") or (
+            ticket.acceptance_criteria if ticket.id else []
+        )
+        ticket.acceptance_criteria_html = item.get("acceptance_criteria_html") or (
+            ticket.acceptance_criteria_html if ticket.id else ""
+        )
+        ticket.comments = item.get("comments") or (ticket.comments if ticket.id else [])
+        ticket.attachments = item.get("attachments") or (ticket.attachments if ticket.id else [])
+        ticket.linked_prs = item.get("linked_prs") or (ticket.linked_prs if ticket.id else [])
         synced.append(ticket)
 
     connection.last_sync = utcnow()
