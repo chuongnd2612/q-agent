@@ -825,8 +825,8 @@ export const api = {
           providerKind: providerKind ?? undefined,
         }),
     ),
-  getTicket: (externalId: string) =>
-    get<TicketDetailOut>(`/tickets/${externalId}`),
+  getTicket: (externalId: string, hubToken: string | null = null) =>
+    getWithHubToken<TicketDetailOut>(`/tickets/${externalId}`, hubToken),
   linkedCases: (externalId: string) =>
     get<LinkedTestCaseOut[]>(
       `/tickets/${encodeURIComponent(externalId)}/linked-cases`,
