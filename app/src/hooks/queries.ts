@@ -727,7 +727,8 @@ export const useTicketFilterOptions = (
 export const useTicket = (externalId: string | null) =>
   useQuery({
     queryKey: queryKeys.ticket(externalId ?? ""),
-    queryFn: () => api.getTicket(externalId as string),
+    queryFn: async () =>
+      api.getTicket(externalId as string, await hubTokenForRead()),
     enabled: !!externalId,
   });
 
