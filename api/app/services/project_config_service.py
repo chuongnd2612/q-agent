@@ -963,6 +963,7 @@ def build_context(
         context["pageObjectNames"] = kn.get("page_object_names", [])
         context["fixtureNames"] = kn.get("fixture_names", [])
         context["utilities"] = kn.get("utilities", [])
+        context["testConventions"] = kn.get("test_conventions", {})
 
     # Business Knowledge (#825): loaded by project GUID rather than by repo, so a
     # project with no repository still gets grounded (#826).

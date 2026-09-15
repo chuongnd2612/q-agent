@@ -383,6 +383,31 @@ def render_project_context(
                 f"AUTOMATION PLAN block says what is): {', '.join(vals)}"
             )
 
+    # How this team already writes tests (#872). Deliberately rendered right after
+    # the asset names and before the accounts: it is style guidance, in the same
+    # "reuse their vocabulary" register as the names above, and — unlike the repo
+    # files #868/#870 inject — it survives a project with no local checkout.
+    conventions = context.get("testConventions") or {}
+    if conventions:
+        parts: list[str] = []
+        roots = conventions.get("spec_roots") or []
+        if roots:
+            parts.append(f"specs live in {', '.join(roots)}")
+        for label, key in (
+            ("naming", "spec_naming"),
+            ("structure", "structure"),
+            ("assertions", "assertion_style"),
+            ("test data", "data"),
+        ):
+            value = (conventions.get(key) or "").strip()
+            if value:
+                parts.append(f"{label}: {value}")
+        if parts:
+            lines.append(
+                "- How this team already writes its e2e tests (match this style; it "
+                f"describes their OWN suite, not this automation project): {'; '.join(parts)}"
+            )
+
     accounts = context.get("testAccounts") or []
     if accounts:
         if include_secrets:

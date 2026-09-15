@@ -85,7 +85,10 @@ def _build_prompt(name: str, provider: str, repo: str, framework: str, config) -
         '"environments": [{"name": string, "base_url": string, "notes": string}], '
         '"business_entities": string[], "assets": number, "pageObjects": number, '
         '"page_object_names": string[], "fixtures": number, "fixture_names": string[], '
-        '"utilities": string[], "confidence": number (0-100)}\n'
+        '"utilities": string[], '
+        '"test_conventions": {"spec_roots": string[], "spec_naming": string, '
+        '"structure": string, "assertion_style": string, "data": string}, '
+        '"confidence": number (0-100)}\n'
         "- base_url: the primary application URL (use the configured one if given).\n"
         "- routes: real application routes/URL patterns a test would navigate to.\n"
         "- selectors: real, stable selectors (prefer data-testid / role) found in the code.\n"
@@ -93,8 +96,51 @@ def _build_prompt(name: str, provider: str, repo: str, framework: str, config) -
         "- architecture/domain: 1-2 sentences each.\n"
         "- assets/pageObjects/fixtures: best-estimate COUNTS of existing Playwright assets.\n"
         "- page_object_names/fixture_names: the actual names of reusable assets to reuse.\n"
+        "- test_conventions: how this team ALREADY writes its e2e tests, from their own "
+        "suite — where specs live, how files and test titles are named, how a spec is "
+        "structured (describe/test nesting, hooks, step granularity), the assertion "
+        "idioms actually used, and how test data/accounts are supplied. One short "
+        "sentence each; leave a field empty rather than guessing, and omit the whole "
+        "object if the project has no tests yet.\n"
         "- confidence: how confident this knowledge base is (0-100). Lower it for anything guessed."
     )
+
+
+#: The fields of ``test_conventions``, and the per-field character ceiling.
+#: These land in EVERY downstream prompt (spec generation, page-object authoring,
+#: the planner), so a chatty model must not be able to grow them without bound.
+_CONVENTION_FIELDS = ("spec_naming", "structure", "assertion_style", "data")
+_CONVENTION_CHARS = 400
+_SPEC_ROOTS_MAX = 6
+
+
+def _normalise_test_conventions(raw: Any) -> dict[str, Any]:
+    """Coerce the model's ``test_conventions`` into a bounded, known shape.
+
+    Unknown keys are dropped, values are stringified and clamped, and empty fields
+    are omitted entirely so :func:`prompts.render_project_context` can treat
+    "absent" and "blank" identically. A non-dict (the model answering with prose,
+    or with null) yields ``{}``.
+
+    :param raw: Whatever came back under ``test_conventions``.
+    :returns: A dict with only the known keys, or ``{}``.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    roots = raw.get("spec_roots")
+    if isinstance(roots, list):
+        cleaned = [str(r).strip() for r in roots if str(r or "").strip()]
+        if cleaned:
+            out["spec_roots"] = cleaned[:_SPEC_ROOTS_MAX]
+    for field in _CONVENTION_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, (list, tuple)):
+            value = "; ".join(str(v).strip() for v in value if str(v or "").strip())
+        text = str(value or "").strip()
+        if text:
+            out[field] = text[:_CONVENTION_CHARS]
+    return out
 
 
 def build_knowledge_payload(
@@ -144,6 +190,10 @@ def build_knowledge_payload(
         "fixtures": int(data.get("fixtures", 0) or 0),
         "fixture_names": data.get("fixture_names", []) or [],
         "utilities": data.get("utilities", []) or [],
+        # How the team already writes its tests (#872). The checkout-reading paths
+        # (#868/#870) are richer, but they need a local clone; this is the channel
+        # that survives a remote-only repo or an agent-dispatched run.
+        "test_conventions": _normalise_test_conventions(data.get("test_conventions")),
     }
     return {"knowledge": knowledge, "confidence": confidence}
 
@@ -208,6 +258,7 @@ def write_knowledge_files(row: ProjectKnowledge, config: "ProjectConfig | None" 
             "fixture_names": kn.get("fixture_names", []),
         },
         "reusable_utilities": kn.get("utilities", []),
+        "test_conventions": kn.get("test_conventions", {}),
         "confidence": row.confidence,
         "version": row.version,
         "indexed_at": row.last_indexed.isoformat() if row.last_indexed else None,
