@@ -174,36 +174,60 @@ _AUTH_POLICY = (
 
 
 def _render_examples(examples: list[dict] | None) -> str:
-    """Render up to 2 proven passing specs as a reference block for the prompt.
+    """Render the few-shot reference specs as prompt block(s).
+
+    Two kinds arrive from ``spec_examples.select_examples``, and they must NOT be
+    captioned the same way (#868). A ``proven`` example ran green inside this very
+    automation project, so its imports and fixtures are copyable as-is. A ``repo``
+    example is a test the team already had in the application repository: worth
+    showing, because it is the house style the generated suite should read like,
+    but it lives in a different tree with its own imports, its own Playwright
+    config and its own login setup — every one of which is wrong here, where the
+    base package owns the session (see ``_AUTH_POLICY``) and library imports are
+    ``../../pages/…``. So the repo block is explicitly scoped to style.
 
     Args:
-        examples: ``[{"filename", "code"}]`` from ``spec_examples.select_examples``
-            — real specs that already passed against THIS project + repo. May be
-            None/empty.
+        examples: ``[{"filename", "code", "source"}]`` from
+            ``spec_examples.select_examples``. An absent ``source`` is treated as
+            ``"proven"`` — the pre-#868 shape. May be None/empty.
 
     Returns:
-        A clearly-labelled reference section (each example truncated to
-        ``_EXAMPLE_MAX_CHARS``), or "" when there are no usable examples so the
+        The labelled reference section(s), each example truncated to
+        ``_EXAMPLE_MAX_CHARS``, or "" when there are no usable examples so the
         prompt is unchanged in the no-grounding case.
     """
     if not examples:
         return ""
-    blocks: list[str] = []
+    proven: list[str] = []
+    from_repo: list[str] = []
     for ex in examples[:2]:
         code = (ex.get("code", "") or "")[:_EXAMPLE_MAX_CHARS].strip()
         if not code:
             continue
         filename = ex.get("filename", "") or "spec.ts"
-        blocks.append(f"// {filename}\n{code}")
-    if not blocks:
+        block = f"// {filename}\n{code}"
+        (from_repo if ex.get("source") == "repo" else proven).append(block)
+
+    sections: list[str] = []
+    if proven:
+        sections.append(
+            "REFERENCE SPECS — real, already-passing specs from THIS project. Match "
+            "their conventions exactly (fixtures, helpers, import structure, assertion "
+            "style). Do NOT copy their test logic:\n\n" + "\n\n".join(proven)
+        )
+    if from_repo:
+        sections.append(
+            "EXISTING SPECS FROM THE APPLICATION REPOSITORY — tests this team already "
+            "wrote, shown so your spec reads like the suite it joins. Follow their "
+            "locator strategy, assertion style, naming and step granularity. They are "
+            "NOT part of this automation project, so copy NOTHING structural from them: "
+            "not their imports (yours come from '@q-agent/playwright-base' and "
+            "'../../pages/…'), not their config, fixtures or helpers, not their login "
+            "or setup code, and not their test logic:\n\n" + "\n\n".join(from_repo)
+        )
+    if not sections:
         return ""
-    return (
-        "REFERENCE SPECS — real, already-passing specs from THIS project. Match "
-        "their conventions exactly (fixtures, helpers, import structure, assertion "
-        "style). Do NOT copy their test logic:\n\n"
-        + "\n\n".join(blocks)
-        + "\n\n"
-    )
+    return "\n\n".join(sections) + "\n\n"
 
 
 def build_case_context(db: Session, case: TestCase, env: str = "") -> dict[str, Any]:
