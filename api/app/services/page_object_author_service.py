@@ -58,13 +58,14 @@ from app.services import (
     automation_gate,
     automation_planner_service,
     automation_project_service,
+    repo_assets,
     claude_cli,
     settings_store,
 )
 from app.services.prompts import render_project_context
 from app.services.skills import PAGE_OBJECT_AUTHOR
 
-__all__ = ["AUTHORED_ACTIONS", "author_assets", "pending_actions", "skipped"]
+__all__ = ["AUTHORED_ACTIONS", "author_assets", "pending_actions", "repo_reference", "skipped"]
 
 # The plan actions this stage acts on. `reuse` and `reuse-base` need no file
 # written, which is exactly why a reuse-only plan costs nothing here.
@@ -179,11 +180,77 @@ def _render_actions(actions: Sequence[dict]) -> str:
     return "\n".join(lines)
 
 
+#: How much of a referenced file is shown. A page object is small; two of them at
+#: this size cost far less than the house style they anchor.
+_REFERENCE_MAX_CHARS = 4000
+
+
+def repo_reference(db, project: AutomationProject, plan: dict | None, cases: Sequence[Any]) -> str:
+    """Render the team's OWN page objects as a style reference, or "" (#870).
+
+    Only ever called for a project whose library is still empty. The prompt's
+    closing instruction is "match the conventions of the files already in the
+    library — read a neighbour first", and on a project's first ticket there is no
+    neighbour: the editor invents a class shape, and every later page object copies
+    it, because from then on there *is* one. So a single unanchored guess sets the
+    house style for the whole library. The team's real page objects are sitting in
+    the application repo already expressing the conventions they want, and nothing
+    else in the pipeline looks at them (the Knowledge Base keeps names only, by
+    #542/#544; the plan's inventory is Q-Agent's own tree, by design).
+
+    Best-effort: any failure reading the checkout returns "" and authoring proceeds
+    exactly as before.
+
+    :param db: Active session.
+    :param project: The automation project, for its project key + repo scope.
+    :param plan: The Automation Plan, whose feature text drives relevance ranking.
+    :param cases: The cases the library has to support, ditto.
+    :returns: A prompt block ending in a blank line, or "" when there is nothing.
+    """
+    query = " ".join(
+        part
+        for part in (
+            (plan or {}).get("feature") or "",
+            (plan or {}).get("ticket") or "",
+            *(getattr(case, "title", "") or "" for case in cases),
+        )
+        if part
+    )
+    try:
+        found = repo_assets.collect(
+            db, project.project_key, project.repo or "", repo_assets.is_library_file, query, 2
+        )
+    except Exception as exc:  # noqa: BLE001 - grounding is never worth failing over
+        logger.warning("page-object author: repo reference scan failed: {}", exc)
+        return ""
+    blocks = [
+        f"// {item['filename']}\n{item['code'][:_REFERENCE_MAX_CHARS].strip()}"
+        for item in found
+        if (item.get("code") or "").strip()
+    ]
+    if not blocks:
+        return ""
+    return (
+        "HOUSE STYLE — page objects this team already wrote, in the APPLICATION "
+        "REPOSITORY. Your project's library is still empty, so there is no neighbour "
+        "to read; match these instead: class shape, constructor, method naming and "
+        "granularity, locator style, comment density. They are a different project: "
+        "copy NOTHING structural from them — not their imports (yours come from "
+        "'@q-agent/playwright-base' and sibling library files at `../pages/Foo`), not "
+        "their base classes, config or auth/session plumbing (the base package owns "
+        "that), and never a file wholesale. Author what the AUTOMATION PLAN asks for, "
+        "written the way these are written:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\n"
+    )
+
+
 def _build_prompt(
     plan: dict,
     actions: Sequence[dict],
     cases: Sequence[Any],
     context: dict | None,
+    reference: str = "",
 ) -> str:
     case_lines: list[str] = []
     for case in cases:
@@ -203,6 +270,7 @@ def _build_prompt(
         + "\n".join(case_lines)
         + "\n\n"
         + (f"{project_block}\n\n" if project_block else "")
+        + reference
         + "AUTOMATION PLAN — the exhaustive list of what to author:\n"
         + _render_actions(actions)
         + "\n\nHARD BOUNDARIES (violating any one of them reverts your entire edit "
@@ -224,7 +292,8 @@ def _build_prompt(
         "- Library files sit ONE level below the project root, so a sibling import "
         "is `../pages/Foo` — `../../` is spec depth and must not appear here.\n\n"
         "Match the conventions of the files already in the library (class shape, "
-        "constructor, locator style, naming) — read a neighbour first. Finish with a "
+        "constructor, locator style, naming) — read a neighbour first; if the library "
+        "is empty, follow the HOUSE STYLE block above. Finish with a "
         "short plain-text summary: one line per file with what you added."
     )
 
@@ -373,10 +442,14 @@ def author_assets(
         )
         pre_state = automation_project_service.head_commit(project) or "HEAD"
         before = automation_project_service.inventory(project)
+        # Only for a cold library. Once the project has a neighbour of its own, that
+        # neighbour is the house style — and it is the one whose imports actually
+        # resolve — so importing a second, conflicting reference would be a regression.
+        reference = repo_reference(db, project, plan, cases) if not before else ""
 
         try:
             result = claude_cli.run_agentic(
-                _build_prompt(plan, actions, cases, context),
+                _build_prompt(plan, actions, cases, context, reference),
                 workspace_dir=project_root,
                 system=_SYSTEM_PROMPT,
                 skill=PAGE_OBJECT_AUTHOR,

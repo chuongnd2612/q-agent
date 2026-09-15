@@ -837,3 +837,134 @@ def test_pending_actions_compares_method_names_not_signatures():
     # Not on disk => always pending, whatever the methods say.
     assert len(author.pending_actions(
         _p("create", ["open()"], ["open()"], on_disk=False))) == 1
+
+
+# ---------------------------------------------------------------------------
+# House style from the application repo (#870)
+# ---------------------------------------------------------------------------
+
+
+REPO_PAGE = """import { expect, type Page } from '@playwright/test';
+
+/** Team convention: one class per screen, locators in readonly fields. */
+export class UserAdminPage {
+  readonly page: Page;
+  constructor(page: Page) { this.page = page; }
+
+  async openUserList(): Promise<void> {
+    await this.page.getByTestId('nav-users').click();
+    await expect(this.page.getByTestId('user-table')).toBeVisible();
+  }
+}
+"""
+
+
+#: The reference block's own heading. The closing instruction names the block
+#: conditionally, so only the heading proves it was actually injected.
+HOUSE_STYLE_HEADING = "HOUSE STYLE — page objects this team already wrote"
+
+
+def _point_at_repo(db_session, tmp_path, files: dict[str, str]) -> Path:
+    """Give the project a checkout containing ``{relative path: contents}``."""
+    from app.services import project_config_service
+
+    root = tmp_path / "app-repo"
+    for relative, body in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    project_config_service.upsert_config(
+        db_session,
+        "Surency Platform",
+        # The automation project's repo is "" ("the project's only repo"), which
+        # resolves to whichever repo the config flags as default.
+        {"repos": [{"name": "web", "local_repo_path": str(root), "default": True}]},
+    )
+    db_session.commit()
+    return root
+
+
+def test_repo_reference_shows_the_teams_own_page_objects(db_session, tmp_path):
+    """The cold-start anchor: the team's real page object, captioned as style-only."""
+    _point_at_repo(
+        db_session,
+        tmp_path,
+        {
+            "apps/web/e2e/pages/UserAdminPage.ts": REPO_PAGE,
+            "apps/web/e2e/users.spec.ts": "// a spec, not library code",
+            "apps/web/src/pages/Dashboard.tsx": "// application source, not a page object",
+        },
+    )
+    project = _project(db_session)
+
+    block = author.repo_reference(
+        db_session, project, {"feature": "User Management", "ticket": "SUR-1428"}, [_Case()]
+    )
+
+    assert HOUSE_STYLE_HEADING in block
+    assert "apps/web/e2e/pages/UserAdminPage.ts" in block
+    assert "openUserList" in block
+    # Neither the spec nor the app's own route component is library code.
+    assert "a spec, not library code" not in block
+    assert "application source" not in block
+    # The caveat is the whole reason this is safe to show: style, never structure.
+    assert "@q-agent/playwright-base" in block
+    assert "../pages/Foo" in block
+
+
+def test_repo_reference_is_empty_without_a_checkout(db_session):
+    """Nothing configured — authoring proceeds exactly as it did before #870."""
+    project = _project(db_session)
+    assert author.repo_reference(db_session, project, {"feature": "x"}, [_Case()]) == ""
+
+
+def test_repo_reference_survives_a_broken_checkout(db_session, monkeypatch):
+    """A dead network share must not take the authoring pass down with it."""
+    from app.services import repo_assets
+
+    def _boom(*args, **kwargs):
+        raise OSError("checkout is on a dead network share")
+
+    monkeypatch.setattr(repo_assets, "checkout_path", _boom)
+    project = _project(db_session)
+    assert author.repo_reference(db_session, project, {"feature": "x"}, [_Case()]) == ""
+
+
+@requires_git
+def test_a_cold_library_gets_the_house_style_block_and_a_warm_one_does_not(
+    db_session, gates, monkeypatch, tmp_path
+):
+    """The guard that matters: once the project HAS a neighbour, that neighbour wins.
+
+    Its imports are the ones that actually resolve, so a second, conflicting
+    reference would be a regression — not extra grounding.
+    """
+    _point_at_repo(db_session, tmp_path, {"apps/web/e2e/pages/UserAdminPage.ts": REPO_PAGE})
+    project = _project(db_session)
+    root = aps.project_dir(project)
+
+    calls = _editor(monkeypatch, lambda r: _write(r, "pages/UserPage.ts", USER_PAGE))
+    plan = _plan(project, [{"name": "UserPage", "path": "pages/UserPage.ts", "action": "create",
+                            "methods": ["open()"], "reason": "First feature."}])
+    author.author_assets(db_session, project, "RUN-1", "SUR-1428", plan, [_Case()], {})
+
+    cold_prompt = calls[0]["prompt"]
+    assert HOUSE_STYLE_HEADING in cold_prompt and "openUserList" in cold_prompt
+    assert "if the library is empty, follow the HOUSE STYLE block above" in cold_prompt
+
+    # Second ticket: the library now has a neighbour of its own.
+    assert (root / "pages" / "UserPage.ts").is_file()
+    calls2 = _editor(monkeypatch, lambda r: _write(r, "pages/RolePage.ts", USER_PAGE.replace("UserPage", "RolePage")))
+    plan2 = _plan(
+        project,
+        [{"name": "RolePage", "path": "pages/RolePage.ts", "action": "create",
+          "methods": ["open()"], "reason": "Second feature."}],
+        ticket="SUR-1429",
+    )
+    author.author_assets(db_session, project, "RUN-1", "SUR-1429", plan2, [_Case()], {})
+
+    warm_prompt = calls2[0]["prompt"]
+    assert HOUSE_STYLE_HEADING not in warm_prompt and "openUserList" not in warm_prompt
+    # The closing instruction still mentions the block by name — it is conditional
+    # ("if the library is empty"), so its presence is not the signal. The heading is.
+    assert "read a neighbour first" in warm_prompt
