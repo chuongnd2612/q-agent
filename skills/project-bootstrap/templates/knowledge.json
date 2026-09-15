@@ -26,6 +26,13 @@
   "helpers": [
     { "name": "", "path": "", "purpose": "" }
   ],
+  "test_conventions": {
+    "spec_roots": [],
+    "spec_naming": "",
+    "structure": "",
+    "assertion_style": "",
+    "data": ""
+  },
   "auth": { "login_flow": "", "login_url": "", "storage_state": "", "helpers": [] },
   "routes": [
     { "path": "", "description": "", "auth_required": false }
