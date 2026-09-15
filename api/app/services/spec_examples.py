@@ -37,8 +37,6 @@ since example selection is an optimization, not a correctness requirement.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -48,35 +46,25 @@ from app.models.execution import ExecutionResult
 from app.models.run import RunTicket
 from app.models.testcase import AutomationSpec, TestCase
 from app.models.ticket import Ticket
-from app.services import project_config_service
+from app.services import project_config_service, repo_assets
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
-# Common English / test-boilerplate words that add noise to overlap scoring.
-_STOPWORDS = frozenset(
-    {
-        "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with",
-        "is", "are", "be", "should", "test", "case", "page", "user", "when",
-        "then", "given", "verify", "check", "that", "this", "as", "it", "from",
-    }
-)
+#: The shared scoring vocabulary (``prompts`` imports this name from here).
+_keywords = repo_assets.keywords
 
 
-def _keywords(text: str) -> set[str]:
-    """Lowercase alphanumeric tokens of length >= 3, minus stopwords."""
-    return {
-        w for w in _WORD_RE.findall((text or "").lower())
-        if len(w) >= 3 and w not in _STOPWORDS
-    }
-
-
-def _case_keywords(case: Any) -> set[str]:
-    """Build the keyword set describing the target case (title + steps)."""
+def _case_query(case: Any) -> str:
+    """The relevance-ranking text describing the target case: title + steps."""
     parts: list[str] = [getattr(case, "title", "") or ""]
     for step in getattr(case, "steps", None) or []:
         if isinstance(step, dict):
             parts.append(step.get("a", ""))
             parts.append(step.get("e", ""))
-    return _keywords(" ".join(parts))
+    return " ".join(part for part in parts if part)
+
+
+def _case_keywords(case: Any) -> set[str]:
+    """Build the keyword set describing the target case (title + steps)."""
+    return _keywords(_case_query(case))
 
 
 def _repo_for_case(db: Session, test_case: TestCase) -> str:
@@ -102,14 +90,6 @@ def _project_key_for_case(db: Session, test_case: TestCase) -> str | None:
     if ticket is None:
         return None
     return project_config_service.project_key_for_ticket(db, ticket)
-
-
-# Pre-existing repo specs (#868): what counts as one, what is never walked, and the
-# ceilings that keep an inline scan from stalling generation on a large monorepo.
-_SPEC_FILE_RE = re.compile(r"\.(spec|test)\.(ts|tsx|js|mjs)$", re.IGNORECASE)
-_PRUNED_DIRS = frozenset({"node_modules", "dist", "build", "out", "coverage", "target", "vendor"})
-_REPO_SCAN_MAX_FILES = 300
-_REPO_SPEC_MAX_BYTES = 60_000
 
 
 def _proven_examples(
@@ -168,67 +148,6 @@ def _proven_examples(
     return [payload for _, payload in candidates[:limit]]
 
 
-def _repo_checkout_path(db: Session, project_key: str, repo: str) -> Path | None:
-    """The local checkout to read pre-existing specs from, or None.
-
-    Resolution mirrors how the rest of the pipeline picks a repo: the configured
-    entry whose ``name`` equals ``repo`` wins, else the project's default repo, and
-    a legacy single-repo config falls back to ``ProjectConfig.local_repo_path``. A
-    configured-but-absent directory resolves to None, so a stale path degrades to
-    "no examples" rather than an error.
-
-    :param db: Active session.
-    :param project_key: The project whose config is read.
-    :param repo: Target repository NAME ("" means "the default repo").
-    :returns: An existing directory, or None when nothing is configured or present.
-    """
-    config = project_config_service.get_config(db, project_key)
-    if config is None:
-        return None
-    repos = project_config_service.get_repos(config)
-    entry = next((r for r in repos if (r.get("name") or "") == repo), None) if repo else None
-    if entry is None:
-        entry = project_config_service.default_repo(config)
-    # A repo entry with no path of its own does NOT inherit the project-level one:
-    # that field belongs to the legacy single-repo shape, and borrowing it here would
-    # hand one repo another repo's checkout.
-    raw = (entry.get("local_repo_path") or "") if entry else (config.local_repo_path or "")
-    if not raw:
-        return None
-    path = Path(raw)
-    return path if path.is_dir() else None
-
-
-def _iter_repo_specs(root: Path) -> list[Path]:
-    """Collect candidate spec files under ``root``, pruned and bounded.
-
-    The scan runs inline in a generation request, so it is bounded on both axes:
-    :data:`_REPO_SCAN_MAX_FILES` caps how many specs are ever considered, and
-    directories holding vendored or built code are pruned rather than walked —
-    ``node_modules`` alone would otherwise dominate the walk of any JS monorepo.
-
-    :param root: The checkout to walk.
-    :returns: Matching paths, sorted for determinism, at most ``_REPO_SCAN_MAX_FILES``.
-    """
-    found: list[Path] = []
-    stack = [root]
-    while stack and len(found) < _REPO_SCAN_MAX_FILES:
-        current = stack.pop()
-        try:
-            entries = sorted(current.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.is_dir():
-                if entry.name not in _PRUNED_DIRS and not entry.name.startswith("."):
-                    stack.append(entry)
-            elif _SPEC_FILE_RE.search(entry.name):
-                found.append(entry)
-                if len(found) >= _REPO_SCAN_MAX_FILES:
-                    break
-    return sorted(found)
-
-
 def _repo_examples(db: Session, project_key: str, repo: str, case: Any, limit: int) -> list[dict]:
     """Pre-existing e2e specs from the app repo itself, relevance-ranked (#868).
 
@@ -244,36 +163,10 @@ def _repo_examples(db: Session, project_key: str, repo: str, case: Any, limit: i
     :param case: The target :class:`TestCase`; its title + steps are the query.
     :param limit: Max examples to return.
     :returns: ``[{"filename", "code", "source": "repo"}]``, most relevant first.
-        ``filename`` is the path relative to the checkout, so the prompt shows where
-        in the repo the example came from.
     """
-    if limit <= 0:
-        return []
-    root = _repo_checkout_path(db, project_key, repo)
-    if root is None:
-        return []
-
-    target_keywords = _case_keywords(case)
-    candidates: list[tuple[int, int, dict]] = []  # (-score, walk order, payload)
-    for order, path in enumerate(_iter_repo_specs(root)):
-        try:
-            if path.stat().st_size > _REPO_SPEC_MAX_BYTES:
-                continue
-            code = path.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            continue
-        if not code:
-            continue
-        try:
-            relative = path.relative_to(root).as_posix()
-        except ValueError:  # pragma: no cover - path always sits under root
-            relative = path.name
-        score = len(target_keywords & _keywords(f"{relative} {code}"))
-        candidates.append((-score, order, {"filename": relative, "code": code, "source": "repo"}))
-
-    # Most relevant first; walk order breaks ties so the result is deterministic.
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    return [payload for _, _, payload in candidates[:limit]]
+    return repo_assets.collect(
+        db, project_key, repo, repo_assets.is_spec_file, _case_query(case), limit
+    )
 
 
 def select_examples(
@@ -313,5 +206,5 @@ def select_examples(
     try:
         examples.extend(_repo_examples(db, project_key, repo, case, limit - len(examples)))
     except Exception as exc:  # noqa: BLE001 - reading the checkout is best-effort
-        logger.warning("spec_examples: repo example scan failed: {}", exc)
+        logger.warning("spec_examples: repo spec scan failed: {}", exc)
     return examples

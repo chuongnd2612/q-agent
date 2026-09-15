@@ -1,9 +1,10 @@
 """Few-shot example selection — the repo-sourced half (#868).
 
 The proven half (specs Q-Agent generated and watched pass) is exercised end-to-end
-by the generation tests; what is new here is the top-up from the application
+by the generation tests; what is covered here is the top-up from the application
 repository's OWN pre-existing e2e specs, and the ordering guarantee that keeps it
-strictly behind the proven ones.
+strictly behind the proven ones. The checkout resolution and the bounded walk the
+top-up is built on live in ``repo_assets`` (#870) — see ``test_repo_assets.py``.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services import project_config_service, spec_examples, spec_service
+from app.services import project_config_service, repo_assets, spec_examples, spec_service
 
 PROJECT = "Surency"
 
@@ -42,107 +43,6 @@ def _configure(db, root, *, repo: str = "", legacy: bool = False):
     )
     project_config_service.upsert_config(db, PROJECT, patch)
     db.commit()
-
-
-# --------------------------------------------------------------- checkout resolution
-
-
-def test_no_config_or_missing_directory_yields_no_repo_examples(db_session, tmp_path):
-    """Nothing configured, and a configured-but-absent path, both degrade to []."""
-    assert spec_examples._repo_examples(db_session, PROJECT, "", _case(), 2) == []
-
-    project_config_service.upsert_config(
-        db_session, PROJECT, {"local_repo_path": str(tmp_path / "gone")}
-    )
-    db_session.commit()
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "") is None
-    assert spec_examples._repo_examples(db_session, PROJECT, "", _case(), 2) == []
-
-
-def test_named_repo_picks_its_own_checkout(db_session, tmp_path):
-    """The repo NAME selects the checkout; "" means the project's default repo."""
-    web = _checkout(tmp_path / "a", {"e2e/web.spec.ts": "// web"})
-    admin = _checkout(tmp_path / "b", {"e2e/admin.spec.ts": "// admin"})
-    project_config_service.upsert_config(
-        db_session,
-        PROJECT,
-        {
-            "repos": [
-                {"name": "web", "local_repo_path": str(web), "default": True},
-                {"name": "admin", "local_repo_path": str(admin)},
-            ]
-        },
-    )
-    db_session.commit()
-
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "admin") == admin
-    # Empty repo name means "the project's default repo", not "any repo".
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "web") == web
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "") == web
-    # A repo entry carrying no path of its own resolves to nothing rather than
-    # borrowing the project-level (legacy) field, which belongs to another repo.
-    project_config_service.upsert_config(
-        db_session,
-        PROJECT,
-        {"local_repo_path": str(web), "repos": [{"name": "api", "default": True}]},
-    )
-    db_session.commit()
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "api") is None
-
-
-def test_legacy_single_repo_config_still_resolves(db_session, tmp_path):
-    """A project configured before per-repo paths existed keeps working."""
-    legacy = _checkout(tmp_path, {"e2e/legacy.spec.ts": "// legacy"})
-    _configure(db_session, legacy, legacy=True)
-    assert spec_examples._repo_checkout_path(db_session, PROJECT, "") == legacy
-
-
-# --------------------------------------------------------------- the scan
-
-
-def test_scan_finds_specs_and_prunes_vendored_and_built_trees(tmp_path):
-    """Only spec/test files count, and node_modules & friends are never walked."""
-    root = _checkout(
-        tmp_path,
-        {
-            "apps/web/e2e/smoke.spec.ts": "// smoke",
-            "apps/web/e2e/checkout.test.tsx": "// checkout",
-            "apps/web/src/Button.tsx": "// not a spec",
-            "e2e/README.md": "# docs",
-            "node_modules/pkg/index.spec.ts": "// vendored",
-            "dist/bundle.spec.js": "// built",
-            ".cache/stale.spec.ts": "// hidden dir",
-        },
-    )
-    found = {p.relative_to(root).as_posix() for p in spec_examples._iter_repo_specs(root)}
-    assert found == {"apps/web/e2e/smoke.spec.ts", "apps/web/e2e/checkout.test.tsx"}
-
-
-def test_scan_is_bounded_by_the_file_ceiling(tmp_path, monkeypatch):
-    """A huge suite cannot make an inline generation request walk forever."""
-    root = _checkout(tmp_path, {f"e2e/t{i}.spec.ts": f"// {i}" for i in range(12)})
-    monkeypatch.setattr(spec_examples, "_REPO_SCAN_MAX_FILES", 5)
-    assert len(spec_examples._iter_repo_specs(root)) == 5
-
-
-def test_oversized_and_empty_specs_are_skipped(db_session, tmp_path, monkeypatch):
-    """Size ceiling and blank files drop out rather than bloating the prompt."""
-    root = _checkout(
-        tmp_path,
-        {
-            "e2e/huge.spec.ts": "// profile update\n" + ("x" * 500),
-            "e2e/blank.spec.ts": "   \n",
-            "e2e/ok.spec.ts": "// profile update, small",
-        },
-    )
-    _configure(db_session, root)
-    monkeypatch.setattr(spec_examples, "_REPO_SPEC_MAX_BYTES", 200)
-
-    picked = spec_examples._repo_examples(db_session, PROJECT, "web", _case(), 5)
-    assert [ex["filename"] for ex in picked] == ["e2e/ok.spec.ts"]
-
-
-# --------------------------------------------------------------- ranking & shape
 
 
 def test_repo_examples_are_relevance_ranked_and_tagged(db_session, tmp_path):
@@ -232,7 +132,7 @@ def test_a_failing_repo_scan_never_breaks_generation(db_session, monkeypatch):
     def _boom(*args, **kwargs):
         raise OSError("checkout is on a dead network share")
 
-    monkeypatch.setattr(spec_examples, "_repo_checkout_path", _boom)
+    monkeypatch.setattr(repo_assets, "checkout_path", _boom)
     assert spec_examples.select_examples(db_session, PROJECT, "web", _case(), limit=2) == []
 
 
