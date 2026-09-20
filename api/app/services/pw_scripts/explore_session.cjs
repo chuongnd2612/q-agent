@@ -160,7 +160,19 @@ async function handle(line) {
   // Headed when QAGENT_EXPLORE_HEADED=1 (the Local Agent sets it so the user can
   // watch, and a headed browser trips WAF/bot-protection far less than headless);
   // headless otherwise (e.g. the server, which has no display).
-  browser = await chromium.launch({ headless: process.env.QAGENT_EXPLORE_HEADED !== '1' });
+  // `playwright` is installed in the API image for its `cli` subcommand (#875),
+  // but the image deliberately ships Debian's chromium (QAGENT_CHROME_BIN) rather
+  // than Playwright's ~150MB bundled browsers — `playwright install` is never run.
+  // Without an explicit executablePath, launch() looks for the bundle and dies
+  // with "Executable doesn't exist at .../ms-playwright/chromium_headless_shell-*"
+  // (#885), so server-side exploration could never start a browser. Fall back to
+  // the bundle only when QAGENT_CHROME_BIN is unset (e.g. the Local Agent, which
+  // does install browsers).
+  const chromeBin = process.env.QAGENT_CHROME_BIN;
+  browser = await chromium.launch({
+    headless: process.env.QAGENT_EXPLORE_HEADED !== '1',
+    ...(chromeBin ? { executablePath: chromeBin } : {}),
+  });
   const contextOpts = { baseURL };
   if (storageState) contextOpts.storageState = storageState;
   const context = await browser.newContext(contextOpts);
