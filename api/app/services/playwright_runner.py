@@ -54,6 +54,7 @@ from app.services import (
     execution_service,
     failure_classifier,
     knowledge_service,
+    live_authoring_service,
     page_object_healer_service,
     placeholder_gate,
     project_config_service,
@@ -64,6 +65,7 @@ from app.services import (
     spec_service,
 )
 from app.services.claude_cli import ClaudeError
+from app.services.live_authoring_service import LiveAuthoringError
 from app.services.run_status import set_run_status
 from app.services.workspace_scope import scoped_specs_dir
 from app.ws import hub
@@ -1528,6 +1530,19 @@ def heal_spec(case_id: int) -> None:
     changes nothing or is rejected, the loop falls through to the spec fixer
     exactly as before. A product defect is classified first and never reaches
     either — the app being wrong is not healed by editing the test.
+
+    Live rehearsal since #876: when the library heal doesn't apply (or isn't
+    tried), the DEFAULT fix mechanism is now a live rehearsal — driving a real
+    browser through the failing spec's own steps via
+    :func:`app.services.live_authoring_service.author_case` (the same live-driving
+    contract the local-agent live-self-heal branch already uses) — whenever the
+    project has a resolvable base URL. It falls back to the old static single-shot
+    :func:`app.services.spec_service.generate_fixed_spec_code` (a code diff from an
+    already-captured DOM snapshot, no live rehearsal) only when no base URL/live
+    browser is available for this attempt. When live rehearsal runs but cannot
+    reproduce the failure or isn't confident in a fix, the spec is marked
+    ``blocked`` with an explicit "could not heal, manual review needed" reason —
+    never left silently ``failed``.
     """
     db = db_module.SessionLocal()
     try:
@@ -1829,17 +1844,90 @@ def heal_spec(case_id: int) -> None:
                     "library heal did not apply for case {}: {}", case_id, library["reason"]
                 )
 
-            emit("fixing", attempt, "Asking Claude to fix the spec", error=final_error)
-            try:
-                fixed = spec_service.generate_fixed_spec_code(
-                    case, spec.code, final_error, final_output, context, examples, dom_snapshot
+            # Live rehearsal (#876) is now the DEFAULT heal mechanism whenever a real
+            # browser can be driven: reproduce the failure by walking the spec's own
+            # steps against the live app (same `author_case` live-driving contract
+            # the local-agent live-self-heal branch already uses — see
+            # `_enqueue_agent_authoring`), diagnose why it diverges, and emit a
+            # corrected spec built from what actually works. A resolvable base URL is
+            # the only gate here; `author_case` itself raises `LiveAuthoringError` for
+            # every other precondition (no browser-harness on this host, no
+            # authenticated profile, budget exhausted) — caught below as "live
+            # rehearsal not available for this attempt", which falls back to the
+            # static single-shot fixer exactly as before #876.
+            base_url_for_live = (context.get("baseUrl") or "").strip()
+            live_result = None
+            if base_url_for_live:
+                emit(
+                    "fixing", attempt,
+                    "Reproducing the failure live to diagnose and fix it",
+                    error=final_error,
                 )
-            except ClaudeError as exc:
-                final_error = f"Heal generation failed: {exc}"
+                try:
+                    live_result = live_authoring_service.author_case(
+                        db, case, run, owner_id=run.owner_id, run_id=run.id,
+                        heal={"code": spec.code or "", "error": final_error},
+                    )
+                except LiveAuthoringError as exc:
+                    logger.info(
+                        "Live-rehearsal heal unavailable for case {}: {}", case_id, exc
+                    )
+                    live_result = None
+
+            if live_result is not None and not (live_result.ok and (live_result.code or "").strip()):
+                # The live session could not reproduce the failure, or wrote nothing
+                # because it was not confident in a fix (skill: "if it genuinely
+                # cannot pass ... do not fabricate a passing spec"). This is an
+                # EXPLICIT terminal outcome — never fall through to a silent generic
+                # `failed` with no explanation (#876). Reuses the existing `blocked`
+                # spec status + `block_reason` (same convention as a placeholder-gate
+                # block below) rather than inventing a new status value.
+                spec.status = "blocked"
+                spec.block_reason = (
+                    "Could not heal: live rehearsal could not reproduce this failure "
+                    "or was not confident in a fix — manual review needed."
+                    + (f" {live_result.summary.strip()}" if live_result.summary else "")
+                ).strip()[:2000]
+                db.commit()
+                final_status = "fail"
+                final_error = spec.block_reason
                 rec["error"] = final_error
+                rec["couldNotHeal"] = True
                 attempts_log.append(rec)
-                emit("failed", attempt, final_error, error=final_error)
+                emit(
+                    "failed", attempt, "Could not heal — manual review needed",
+                    error=final_error,
+                )
                 break
+
+            live_rehearsal_used = live_result is not None and bool((live_result.code or "").strip())
+            if live_rehearsal_used:
+                fixed = live_result.code
+                rec["liveRehearsal"] = True
+                # Runtime-verified selectors/routes just discovered are real, not
+                # invented — fold them into the gate's `known` view (mirrors the
+                # server live-harness generation branch in `automation.py`) so a
+                # genuinely live-verified fix isn't rejected as a placeholder guess.
+                known = {
+                    "routes": list(known.get("routes") or [])
+                    + list((live_result.discovered or {}).get("routes") or []),
+                    "selectors": list(known.get("selectors") or [])
+                    + list((live_result.discovered or {}).get("selectors") or []),
+                    "base_url": known.get("base_url", ""),
+                }
+                live_authoring_service.merge_discovery_to_kb(live_result)
+            else:
+                emit("fixing", attempt, "Asking Claude to fix the spec", error=final_error)
+                try:
+                    fixed = spec_service.generate_fixed_spec_code(
+                        case, spec.code, final_error, final_output, context, examples, dom_snapshot
+                    )
+                except ClaudeError as exc:
+                    final_error = f"Heal generation failed: {exc}"
+                    rec["error"] = final_error
+                    attempts_log.append(rec)
+                    emit("failed", attempt, final_error, error=final_error)
+                    break
 
             # Anti-cheat: a fix that removes/weakens assertions is NEVER valid — it
             # only "passes" by checking less. Reject it, keep the previous good spec

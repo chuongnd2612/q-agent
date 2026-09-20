@@ -8,6 +8,9 @@ heal loop, since that loop's failure/success wiring is exercised elsewhere by
 
 from __future__ import annotations
 
+import threading
+import time
+
 from app.services import knowledge_service, playwright_runner
 
 
@@ -127,3 +130,42 @@ def test_merge_discovered_dom_to_kb_never_raises(monkeypatch):
     playwright_runner._merge_discovered_dom_to_kb(
         "P", "", "await page.locator('#a').click();\n", {"path": "/a"}, None
     )
+
+
+# ---------------------------------------------------------------------------
+# heal_run_busy / start_heal serialization (#876) — two cases in the same run
+# share the run's spec dir/report.json, so heals must never run concurrently,
+# regardless of whether one of them takes the new live-rehearsal path.
+# ---------------------------------------------------------------------------
+
+
+def test_start_heal_rejects_a_second_case_while_the_run_is_busy(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_heal_spec(case_id):
+        started.set()
+        release.wait(timeout=5)
+
+    monkeypatch.setattr(playwright_runner, "heal_spec", fake_heal_spec)
+    playwright_runner._healing.clear()
+    try:
+        assert playwright_runner.start_heal(case_id=1, run_id=100) is True
+        assert started.wait(timeout=5), "heal_spec never ran on the background thread"
+        assert playwright_runner.heal_run_busy(100) is True
+
+        # A second case in the SAME run is rejected while the first is healing —
+        # true regardless of which fix mechanism (live rehearsal or static) the
+        # first case's heal is using.
+        assert playwright_runner.start_heal(case_id=2, run_id=100) is False
+        # A case in a DIFFERENT run is unaffected.
+        assert playwright_runner.start_heal(case_id=3, run_id=101) is True
+        # Re-starting the SAME case that is already healing is idempotently True.
+        assert playwright_runner.start_heal(case_id=1, run_id=100) is True
+    finally:
+        release.set()
+        for _ in range(50):
+            if not playwright_runner._healing:
+                break
+            time.sleep(0.05)
+        playwright_runner._healing.clear()
