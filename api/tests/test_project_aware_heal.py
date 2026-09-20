@@ -276,6 +276,18 @@ def _reload_spec(case_id):
         db.close()
 
 
+def _reload_block_reason(case_id) -> str:
+    from app.db import SessionLocal
+    from app.models.testcase import AutomationSpec
+
+    db = SessionLocal()
+    try:
+        spec = db.query(AutomationSpec).filter(AutomationSpec.test_case_id == case_id).first()
+        return spec.block_reason or ""
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Import resolution — what the heal is allowed to blame, and to count
 # ---------------------------------------------------------------------------
@@ -798,6 +810,14 @@ def test_a_product_defect_is_terminal_and_never_reaches_the_library_healer(
         spec_service, "generate_fixed_spec_code",
         lambda *a, **k: pytest.fail("a product defect must not reach the spec fixer"),
     )
+    from app.services import live_authoring_service
+
+    monkeypatch.setattr(
+        live_authoring_service, "author_case",
+        lambda *a, **k: pytest.fail(
+            "a product defect must not reach the live-rehearsal heal path either (#876)"
+        ),
+    )
 
     playwright_runner.heal_spec(case.id)
 
@@ -827,6 +847,126 @@ def test_a_legacy_spec_never_reaches_the_library_healer(db_session, gates, monke
     code, status, report, _p = _reload_spec(case.id)
     assert status == "passed" and code == fixed
     assert "library" not in report["attempts"][0]
+
+
+# ---------------------------------------------------------------------------
+# Live rehearsal (#876): the DEFAULT heal mechanism whenever a real browser can
+# be driven — reproducing the failure live instead of a static single-shot diff.
+# ---------------------------------------------------------------------------
+
+
+def _fake_context_with_base_url(base_url: str = "https://example.test"):
+    return lambda *a, **k: {"baseUrl": base_url, "routes": [], "selectors": []}
+
+
+def test_live_rehearsal_heal_fires_server_side_when_base_url_resolvable(
+    db_session, gates, monkeypatch
+):
+    """A resolvable base URL is now enough to drive the live-rehearsal heal path
+    server-side — no ``executionTarget=local-agent`` needed. Pins the BRANCH
+    (``author_case`` called, ``generate_fixed_spec_code`` never reached) and an
+    observable effect (the live-authored code lands on the spec + heal report),
+    not just the resulting status."""
+    from app.services import live_authoring_service
+
+    run, case, spec, project = _seed(db_session, project=False)
+    _seed_result(db_session, run, case)
+    _runner(monkeypatch, ["failed", "passed"])
+    monkeypatch.setattr(spec_service, "build_case_context", _fake_context_with_base_url())
+    fixed_code = LAYERED_SPEC.replace("ana", "beta")
+    heal_calls: list[dict] = []
+    merged: list[live_authoring_service.AuthoringResult] = []
+
+    def fake_author_case(db_arg, case_arg, run_arg, *, owner_id, run_id, heal=None, plan=None):
+        heal_calls.append(heal)
+        return live_authoring_service.AuthoringResult(
+            ok=True,
+            code=fixed_code,
+            discovered={"routes": [{"path": "/home"}], "selectors": []},
+            summary="reproduced the failure live and fixed it",
+        )
+
+    monkeypatch.setattr(live_authoring_service, "author_case", fake_author_case)
+    monkeypatch.setattr(
+        live_authoring_service, "merge_discovery_to_kb",
+        lambda result: merged.append(result) or 0,
+    )
+    monkeypatch.setattr(
+        spec_service, "generate_fixed_spec_code",
+        lambda *a, **k: pytest.fail(
+            "the static single-shot fixer must not run — live rehearsal is available (#876)"
+        ),
+    )
+
+    playwright_runner.heal_spec(case.id)
+
+    code, status, report, _p = _reload_spec(case.id)
+    assert status == "passed" and code == fixed_code
+    # It walked the FAILING spec's own steps, seeded with the real error.
+    assert heal_calls and heal_calls[0]["code"] == LAYERED_SPEC and heal_calls[0]["error"]
+    assert report["attempts"][0]["liveRehearsal"] is True
+    assert merged and merged[0].code == fixed_code
+
+
+def test_live_rehearsal_could_not_heal_marks_spec_blocked_with_reason(
+    db_session, gates, monkeypatch
+):
+    """When live rehearsal can't reproduce the failure (or isn't confident enough
+    to write a fix) the spec must land on an EXPLICIT "could not heal, manual
+    review needed" outcome (the existing ``blocked`` status + ``block_reason``,
+    per #876) — never a silent generic ``failed`` with no explanation."""
+    from app.services import live_authoring_service
+
+    run, case, spec, project = _seed(db_session, project=False)
+    _seed_result(db_session, run, case)
+    _runner(monkeypatch, ["failed"])
+    monkeypatch.setattr(spec_service, "build_case_context", _fake_context_with_base_url())
+    monkeypatch.setattr(
+        live_authoring_service, "author_case",
+        lambda *a, **k: live_authoring_service.AuthoringResult(
+            ok=False, code="", summary="could not reproduce the failure live"
+        ),
+    )
+    monkeypatch.setattr(
+        spec_service, "generate_fixed_spec_code",
+        lambda *a, **k: pytest.fail(
+            "an unreproducible failure must not silently fall back to the static fixer"
+        ),
+    )
+
+    playwright_runner.heal_spec(case.id)
+
+    code, status, report, _p = _reload_spec(case.id)
+    assert status == "blocked"
+    assert code == LAYERED_SPEC, "the previous spec must be kept untouched"
+    block_reason = _reload_block_reason(case.id).lower()
+    assert "could not heal" in block_reason
+    assert "manual review" in block_reason
+    assert report["attempts"][0]["couldNotHeal"] is True
+
+
+def test_no_base_url_falls_back_to_the_static_single_shot_fixer(db_session, gates, monkeypatch):
+    """With no resolvable base URL there is no live browser to drive — the OLD
+    static single-shot code-diff fixer is the retained fallback (#876), and
+    ``author_case`` must never be called."""
+    from app.services import live_authoring_service
+
+    run, case, spec, project = _seed(db_session, project=False)
+    _seed_result(db_session, run, case)
+    _runner(monkeypatch, ["failed", "passed"])
+    monkeypatch.setattr(spec_service, "build_case_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        live_authoring_service, "author_case",
+        lambda *a, **k: pytest.fail("no base URL — live rehearsal must not be attempted"),
+    )
+    fixed = LAYERED_SPEC.replace("await login.open();", "await login.open(); // fixed")
+    monkeypatch.setattr(spec_service, "generate_fixed_spec_code", lambda *a, **k: fixed)
+
+    playwright_runner.heal_spec(case.id)
+
+    code, status, report, _p = _reload_spec(case.id)
+    assert status == "passed" and code == fixed
+    assert "liveRehearsal" not in report["attempts"][0]
 
 
 # ---------------------------------------------------------------------------
