@@ -300,8 +300,8 @@ export function ProjectAutomationTab() {
                 missing Specs group is called out. */}
             {!hasSpecs && (
               <div
-                className="rounded-xl border border-white/[0.09] px-3 py-2 text-[11.5px] leading-relaxed text-muted"
-                style={{ background: "rgba(8,8,13,.92)" }}
+                className="rounded-xl border border-bd2 px-3 py-2 text-[11.5px] leading-relaxed text-muted"
+                style={{ background: "var(--pop)" }}
                 data-testid="automation-no-specs-note"
               >
                 {t("automation.noSpecsNote")}
@@ -378,13 +378,13 @@ function RepoHeader({
 
   return (
     <div
-      className="rounded-2xl border border-white/[0.09] px-4 py-3.5"
-      style={{ background: "rgba(8,8,13,.92)" }}
+      className="rounded-2xl border border-bd2 px-4 py-3.5"
+      style={{ background: "var(--pop)" }}
       data-testid="automation-repo-header"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Layers size={16} className="shrink-0 text-violet" strokeWidth={2.2} />
-        <span className="font-mono text-[13.5px] font-bold text-ink">{label}</span>
+        <Layers size={16} className="shrink-0 text-ps-text-text" strokeWidth={2.2} />
+        <span className="font-mono text-[13.5px] font-bold text-txt">{label}</span>
         <span className="text-[11.5px] text-faint">
           {t("automation.repoFileCount", { count: fileCount })} ·{" "}
           {t("automation.repoSpecCount", { count: repo.specCount })}
@@ -392,7 +392,7 @@ function RepoHeader({
         {repo.baseVersion && (
           <span
             className="rounded-md px-2 py-0.5 font-mono text-[10.5px] font-bold"
-            style={{ background: "rgba(139,92,246,.14)", color: "#c4b5fd" }}
+            style={{ background: "var(--pt)", color: "var(--psText)" }}
           >
             {repo.baseVersion}
           </span>

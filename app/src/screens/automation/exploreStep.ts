@@ -1,9 +1,14 @@
 import type { TFunction } from "i18next";
 import type { ExploreStep } from "./useAutomationEvents";
 
-/** Sky-blue accent for the DOM-exploration UI — distinct from generation
- * (violet), self-heal (emerald), and the Run action (cyan). */
-export const EXPLORE_HUE = "#38bdf8";
+/** Accent for the DOM-exploration UI — distinct from generation (the accent),
+ * self-heal (`--ok`) and failure (`--danger`).
+ *
+ * Was a literal sky `var(--info)`. The token layer has no sky ramp, so this takes
+ * the closest existing one, `--info` (dark `#a5f3fc` / light `#0d6a7a`); the
+ * cost is that explore and the cyan "Run" chrome are now the same family. If
+ * #792 adds a sky token, this is its first call site. */
+export const EXPLORE_HUE = "var(--info)";
 
 /** Human-readable one-liner for an exploration step's action + args (ADR 0010
  * §3 action contract). Used by both the live step banner and the review trail.

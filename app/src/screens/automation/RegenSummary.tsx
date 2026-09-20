@@ -65,16 +65,18 @@ export function RegenSummary({
   onRevert: () => void;
 }) {
   const { t } = useTranslation("pipeline");
-  const accent = blocked ? "251,191,36" : "16,185,129"; // amber when still blocked, else green
   return (
     <div
       className="flex flex-col gap-3 rounded-2xl border p-4 md:flex-row md:items-center"
-      style={{ borderColor: `rgba(${accent},.32)`, background: `rgba(${accent},.06)` }}
+      style={{
+        borderColor: blocked ? "var(--warnTint)" : "var(--okTint)",
+        background: blocked ? "var(--warnTint)" : "var(--okTint)",
+      }}
     >
       <div className="min-w-0 md:flex-1">
         <div
           className="flex items-center gap-2 text-[13.5px] font-bold"
-          style={{ color: blocked ? "#fcd34d" : "#a7f3d0" }}
+          style={{ color: blocked ? "var(--warn)" : "var(--ok)" }}
         >
           <RotateCcw size={14} strokeWidth={2.4} className="shrink-0" />
           {t("progress.regen.summary.title", { version })}
@@ -90,7 +92,7 @@ export function RegenSummary({
       <div className="flex items-center gap-1.5">
         <button
           onClick={onFeedback}
-          className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/5 px-[11px] py-1.5 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10"
+          className="flex items-center gap-1.5 rounded-[9px] border border-bd2 bg-card2 px-[11px] py-1.5 text-[11.5px] font-semibold text-txt3 hover:bg-card3"
         >
           <MessageSquarePlus size={13} />
           {t("progress.regen.summary.feedback")}
@@ -98,12 +100,12 @@ export function RegenSummary({
         <button
           onClick={onRevert}
           disabled={reverting}
-          className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/5 px-[11px] py-1.5 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10 disabled:opacity-60"
+          className="flex items-center gap-1.5 rounded-[9px] border border-bd2 bg-card2 px-[11px] py-1.5 text-[11.5px] font-semibold text-txt3 hover:bg-card3 disabled:opacity-60"
         >
           {reverting ? (
             <span
               className="h-[13px] w-[13px] rounded-full border-2"
-              style={{ borderColor: "rgba(160,160,178,.35)", borderTopColor: "#a0a0b2", animation: "spin .8s linear infinite" }}
+              style={{ borderColor: "var(--neutralTint)", borderTopColor: "var(--muted)", animation: "spin .8s linear infinite" }}
             />
           ) : (
             <Undo2 size={13} />

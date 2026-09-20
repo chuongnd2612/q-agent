@@ -29,7 +29,7 @@ export function TargetRepoPanel({
   return (
     <GlassCard className="mb-3.5 p-4">
       <div className="mb-1 flex items-center gap-2">
-        <GitBranch size={15} className="text-violet" />
+        <GitBranch size={15} className="text-ps-text-text" />
         <span className="text-[13.5px] font-bold">{t("spec.repo.title")}</span>
       </div>
       <p className="m-0 mb-3 text-xs leading-relaxed text-muted">
@@ -43,12 +43,12 @@ export function TargetRepoPanel({
           return (
             <div
               key={rt.ticketExternalId}
-              className="flex flex-wrap items-center gap-3 rounded-[11px] border border-white/[0.07] bg-white/[0.03] px-3 py-2"
+              className="flex flex-wrap items-center gap-3 rounded-[11px] border border-bd bg-inset px-3 py-2"
             >
-              <span className="shrink-0 font-mono text-[12px] font-semibold text-violet">
+              <span className="shrink-0 font-mono text-[12px] font-semibold text-ps-text-text">
                 {rt.ticketExternalId}
               </span>
-              <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-soft">{title}</span>
+              <span className="min-w-0 flex-1 truncate text-[12.5px] text-txt3">{title}</span>
               {status && status !== "indexed" && (
                 <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-warning-soft">
                   <AlertTriangle size={12} />

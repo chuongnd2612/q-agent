@@ -58,7 +58,7 @@ import type { AutomationFileOut, SpecProvenanceEntry } from "@/types/api";
  *
  * ## Surfaces
  *
- * Opaque `rgba(8,8,13,.92)` throughout, never `GlassCard`/`backdrop-filter`: this
+ * Opaque `var(--pop)` throughout, never `GlassCard`/`backdrop-filter`: this
  * is small, text-heavy chrome over the shell's animated constellation, where a
  * translucent card makes it genuinely unreadable (the same finding as
  * `ProjectFilePanel`, `ExportProjectPanel` and slice E's `RepoHeader`). The only
@@ -95,12 +95,12 @@ function SpecProvenanceCard({
 
   return (
     <div
-      className="rounded-2xl border border-white/[0.09] px-4 py-3.5"
-      style={{ background: "rgba(8,8,13,.92)" }}
+      className="rounded-2xl border border-bd2 px-4 py-3.5"
+      style={{ background: "var(--pop)" }}
       data-testid="provenance-spec"
     >
       <div className="flex items-center gap-2">
-        <GitBranch size={14} className="shrink-0 text-violet" strokeWidth={2.2} />
+        <GitBranch size={14} className="shrink-0 text-ps-text-text" strokeWidth={2.2} />
         <span className="text-[11px] font-bold uppercase tracking-wide text-faint">
           {t("automation.provenance.title")}
         </span>
@@ -116,7 +116,7 @@ function SpecProvenanceCard({
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
             data-testid="provenance-history-toggle"
-            className="mt-3 flex w-full items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-left text-[11.5px] font-semibold text-ink-dim transition-colors hover:text-white"
+            className="mt-3 flex w-full items-center gap-1.5 rounded-lg border border-bd2 px-2.5 py-1.5 text-left text-[11.5px] font-semibold text-txt4 transition-colors hover:text-txt"
           >
             <History size={12} className="shrink-0 text-faint" />
             <span className="min-w-0 flex-1">
@@ -147,7 +147,7 @@ function SpecProvenanceCard({
                   <Info size={12} className="mt-[2px] shrink-0 text-faint" />
                   {t("automation.provenance.historyNote")}
                 </p>
-                <div className="mt-1 flex flex-col divide-y divide-white/[0.06]">
+                <div className="mt-1 flex flex-col divide-y divide-bd3">
                   {history.map((entry) => (
                     <ProvenanceEntryRow
                       key={entry.specId}
@@ -198,15 +198,15 @@ function ProvenanceEntryRow({
       {/* Ticket + case: what was asked for. */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {entry.ticketExternalId && (
-          <span className="flex items-center gap-1 font-mono text-[11px] font-bold text-violet">
+          <span className="flex items-center gap-1 font-mono text-[11px] font-bold text-ps-text-text">
             <Ticket size={11} strokeWidth={2.4} /> {entry.ticketExternalId}
           </span>
         )}
         {entry.caseCode && (
-          <span className="font-mono text-[11.5px] font-bold text-ink">{entry.caseCode}</span>
+          <span className="font-mono text-[11.5px] font-bold text-txt">{entry.caseCode}</span>
         )}
         {entry.caseTitle && (
-          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-soft" title={entry.caseTitle}>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-txt3" title={entry.caseTitle}>
             {entry.caseTitle}
           </span>
         )}
@@ -214,7 +214,7 @@ function ProvenanceEntryRow({
             because this panel has room for it where the left list does not. */}
         <span
           className="flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[10.5px] font-bold"
-          style={{ background: "rgba(255,255,255,.05)", color: SPEC_STATUS_DOT[specStatus] }}
+          style={{ background: "var(--card2)", color: SPEC_STATUS_DOT[specStatus] }}
           data-testid="provenance-spec-status"
         >
           <SpecStatusDot specStatus={entry.specStatus} />
@@ -227,7 +227,7 @@ function ProvenanceEntryRow({
         <Link
           to={to}
           data-testid="provenance-run-link"
-          className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-soft transition-colors hover:text-white"
+          className="flex min-w-0 items-center gap-1.5 text-[12px] text-txt3 transition-colors hover:text-txt"
           title={t("automation.provenance.openRun")}
         >
           <span className="font-mono font-bold">{entry.runCode}</span>
@@ -236,7 +236,7 @@ function ProvenanceEntryRow({
         </Link>
         <span
           className="shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-bold"
-          style={{ background: "rgba(255,255,255,.05)", color: run.color }}
+          style={{ background: "var(--card2)", color: run.color }}
         >
           {run.label}
         </span>
@@ -249,7 +249,7 @@ function ProvenanceEntryRow({
 
       {/* Why the gate stopped it, when it did — the spec status alone doesn't say. */}
       {entry.blockReason && (
-        <p className="m-0 text-[11px] leading-relaxed text-amber-300/80">
+        <p className="m-0 text-[11px] leading-relaxed text-warn">
           {t("automation.provenance.blockReason", { reason: entry.blockReason })}
         </p>
       )}
@@ -286,12 +286,12 @@ function SharedAssetStrip({ file }: { file: AutomationFileOut }) {
 
   return (
     <div
-      className="rounded-2xl border border-white/[0.09] px-4 py-3"
-      style={{ background: "rgba(8,8,13,.92)" }}
+      className="rounded-2xl border border-bd2 px-4 py-3"
+      style={{ background: "var(--pop)" }}
       data-testid="provenance-shared"
     >
-      <p className="m-0 flex items-start gap-2 text-[11.5px] leading-relaxed text-ink-soft">
-        <Share2 size={13} className="mt-[2px] shrink-0 text-violet" strokeWidth={2.2} />
+      <p className="m-0 flex items-start gap-2 text-[11.5px] leading-relaxed text-txt3">
+        <Share2 size={13} className="mt-[2px] shrink-0 text-ps-text-text" strokeWidth={2.2} />
         {t("automation.provenance.sharedTitle")}
       </p>
 
@@ -311,7 +311,7 @@ function SharedAssetStrip({ file }: { file: AutomationFileOut }) {
               onClick={copy}
               data-testid="provenance-sha-copy"
               title={t("automation.provenance.copySha")}
-              className="flex items-center gap-1.5 rounded-md border border-white/[0.08] px-1.5 py-0.5 font-mono text-[10.5px] text-ink-dim transition-colors hover:text-white"
+              className="flex items-center gap-1.5 rounded-md border border-bd2 px-1.5 py-0.5 font-mono text-[10.5px] text-txt4 transition-colors hover:text-txt"
             >
               <Fingerprint size={11} className="shrink-0 text-faint" />
               {short}

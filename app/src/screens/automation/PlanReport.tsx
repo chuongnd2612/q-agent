@@ -38,7 +38,7 @@ export function PlanReport({ plan }: { plan: AutomationPlan | null }) {
           {t("plan.title")}
         </span>
         {plan.feature && (
-          <span className="min-w-0 truncate text-[12px] text-ink-soft">{plan.feature}</span>
+          <span className="min-w-0 truncate text-[12px] text-txt3">{plan.feature}</span>
         )}
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -68,21 +68,21 @@ function actionKey(action: string): string {
 }
 
 const ACTION_HUE: Record<string, string> = {
-  reuse: "#34d399",
-  extend: "#60a5fa",
-  create: "#fbbf24",
-  "reuse-base": "#a78bfa",
+  reuse: "var(--ok)",
+  extend: "var(--info)",
+  create: "var(--warn)",
+  "reuse-base": "var(--psText)",
 };
 
 function CountChip({ action, count, label }: { action: string; count: number; label: string }) {
-  const hue = ACTION_HUE[action] ?? "#8b8b9e";
+  const hue = ACTION_HUE[action] ?? "var(--muted)";
   const active = count > 0;
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-medium"
       style={{
-        background: active ? `${hue}1f` : "rgba(255,255,255,.04)",
-        color: active ? hue : "#6c6c7e",
+        background: active ? `${hue}1f` : "var(--card)",
+        color: active ? hue : "var(--label)",
       }}
     >
       <span className="font-mono text-[11px]">{count}</span>
@@ -93,7 +93,7 @@ function CountChip({ action, count, label }: { action: string; count: number; la
 
 function PlanRow({ entry }: { entry: PlanEntry }) {
   const { t } = useTranslation("pipeline");
-  const hue = ACTION_HUE[entry.action] ?? "#8b8b9e";
+  const hue = ACTION_HUE[entry.action] ?? "var(--muted)";
   // A planned method the file does not actually export. Since #545 this is the same
   // computation for `extend` and `create` — both are authored before generation, so a
   // leftover here means that method never landed and the spec inlined the step.
@@ -103,7 +103,7 @@ function PlanRow({ entry }: { entry: PlanEntry }) {
       : [];
   const existing = entry.action === "reuse" ? entry.methods ?? [] : entry.existingMethods ?? [];
   return (
-    <div className="rounded-[10px] bg-white/[.03] px-2.5 py-1.5">
+    <div className="rounded-[10px] bg-inset px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <span
           className="shrink-0 rounded px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wider"
@@ -111,7 +111,7 @@ function PlanRow({ entry }: { entry: PlanEntry }) {
         >
           {t(`plan.actions.${actionKey(entry.action)}`)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-ink-soft">{entry.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-txt3">{entry.name}</span>
         {entry.path && (
           // A plain `title` rather than the portalled PathTooltip: this row is a
           // flex line inside an animated card, and the tooltip's wrapper div would
@@ -128,7 +128,7 @@ function PlanRow({ entry }: { entry: PlanEntry }) {
         <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted">{existing.join(", ")}</div>
       )}
       {pending.length > 0 && (
-        <div className="mt-0.5 truncate font-mono text-[10.5px]" style={{ color: "#fbbf24" }}>
+        <div className="mt-0.5 truncate font-mono text-[10.5px]" style={{ color: "var(--warn)" }}>
           {t("plan.notYetAuthored")}: {pending.join(", ")}
         </div>
       )}

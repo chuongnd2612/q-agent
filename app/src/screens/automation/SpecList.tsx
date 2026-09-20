@@ -38,13 +38,13 @@ export function SpecList({
             <button
               key={s.id}
               onClick={() => onSelect(s.testCaseId)}
-              className={`flex items-center gap-2 rounded-[10px] px-2.5 py-2 text-left hover:bg-white/5 ${
-                blocked ? "border border-dashed border-white/20" : ""
+              className={`flex items-center gap-2 rounded-[10px] px-2.5 py-2 text-left hover:bg-card2 ${
+                blocked ? "border border-dashed border-bd2" : ""
               }`}
-              style={active ? { background: "rgba(139,92,246,.14)" } : undefined}
+              style={active ? { background: "var(--pt)" } : undefined}
             >
-              <FileCode size={14} color={active ? "#a78bfa" : "#8b8b9e"} />
-              <span className="flex-1 truncate font-mono text-xs text-ink-soft">{s.filename}</span>
+              <FileCode size={14} color={active ? "var(--psText)" : "var(--muted)"} />
+              <span className="flex-1 truncate font-mono text-xs text-txt3">{s.filename}</span>
               <SpecStatusDot
                 specStatus={s.status}
                 execStatus={resultStatusByCase.get(s.testCaseId)}
@@ -67,12 +67,12 @@ export function SpecList({
               key={s.id}
               onClick={() => onSelect(s.testCaseId)}
               className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-left text-[11.5px] ${
-                blocked ? "border-dashed border-white/20" : "border-white/10"
+                blocked ? "border-dashed border-bd2" : "border-bd2"
               }`}
-              style={active ? { background: "rgba(139,92,246,.18)", borderColor: "rgba(139,92,246,.5)" } : undefined}
+              style={active ? { background: "var(--pt)", borderColor: "var(--pb)" } : undefined}
             >
-              <FileCode size={13} color={active ? "#a78bfa" : "#8b8b9e"} />
-              <span className="font-mono text-ink-soft">{s.filename}</span>
+              <FileCode size={13} color={active ? "var(--psText)" : "var(--muted)"} />
+              <span className="font-mono text-txt3">{s.filename}</span>
               <SpecStatusDot
                 specStatus={s.status}
                 execStatus={resultStatusByCase.get(s.testCaseId)}

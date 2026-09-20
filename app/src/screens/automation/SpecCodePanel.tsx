@@ -117,21 +117,21 @@ export function SpecCodePanel({
   return (
     <div
       className={`overflow-hidden rounded-2xl border ${
-        isBlocked ? "border-dashed border-white/20" : "border-white/[0.09]"
+        isBlocked ? "border-dashed border-bd2" : "border-bd2"
       }`}
-      style={{ background: "rgba(8,8,13,.8)", backdropFilter: "blur(22px)" }}
+      style={{ background: "var(--code)", backdropFilter: "blur(22px)" }}
     >
-      <div className="flex flex-wrap items-center gap-2.5 border-b border-white/[0.06] px-4 py-3">
-        <span className="font-mono text-[12.5px] text-ink-soft">{specDisplayPath(selectedSpec?.filename)}</span>
-        <span className="rounded-md px-2 py-0.5 text-[10px] font-bold" style={{ background: "rgba(34,211,238,.13)", color: "#67e8f9" }}>
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-bd3 px-4 py-3">
+        <span className="font-mono text-[12.5px] text-txt3">{specDisplayPath(selectedSpec?.filename)}</span>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-bold" style={{ background: "var(--infoTint)", color: "var(--cyanSoft)" }}>
           TypeScript
         </span>
         <div className="flex w-full flex-wrap items-center gap-1.5 md:ml-auto md:w-auto">
           {authoringActive ? (
-            <span className="flex items-center gap-1.5 rounded-full bg-violet-400/15 px-2.5 py-1 text-[11px] font-semibold text-violet-300">
+            <span className="flex items-center gap-1.5 rounded-full bg-pt px-2.5 py-1 text-[11px] font-semibold text-ps-text-text">
               <span
                 className="h-[11px] w-[11px] rounded-full border-2"
-                style={{ borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa", animation: "spin .8s linear infinite" }}
+                style={{ borderColor: "var(--pb)", borderTopColor: "var(--psText)", animation: "spin .8s linear infinite" }}
               />
               authoring…
             </span>
@@ -140,7 +140,7 @@ export function SpecCodePanel({
               <button
                 onClick={onSaveEdit}
                 disabled={updateSpecPending}
-                className="flex items-center gap-1.5 rounded-[9px] border border-violet/40 bg-violet/20 px-[11px] py-1.5 text-[11.5px] font-semibold text-violet hover:bg-violet/30 disabled:opacity-60"
+                className="flex items-center gap-1.5 rounded-[9px] border border-pb bg-pt px-[11px] py-1.5 text-[11.5px] font-semibold text-ps-text-text hover:bg-pb disabled:opacity-60"
               >
                 <Save size={13} />
                 {updateSpecPending ? t("spec.saving") : t("spec.save")}
@@ -148,7 +148,7 @@ export function SpecCodePanel({
               <button
                 onClick={onCancelEdit}
                 disabled={updateSpecPending}
-                className="flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/5 px-[11px] py-1.5 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10 disabled:opacity-60"
+                className="flex items-center gap-1.5 rounded-[9px] border border-bd2 bg-card2 px-[11px] py-1.5 text-[11.5px] font-semibold text-txt3 hover:bg-card3 disabled:opacity-60"
               >
                 <X size={13} />
                 {t("spec.cancel")}
@@ -164,7 +164,7 @@ export function SpecCodePanel({
                 openSignal={feedbackSignal}
               />
               {regenVersion != null && (
-                <Pill color="#a78bfa" bg="rgba(167,139,250,.14)">
+                <Pill color="var(--psText)" bg="var(--pt)">
                   v{regenVersion}
                 </Pill>
               )}
@@ -183,7 +183,7 @@ export function SpecCodePanel({
                 {runningThisSpec ? (
                   <span
                     className="h-[13px] w-[13px] rounded-full border-2"
-                    style={{ borderColor: "rgba(34,211,238,.35)", borderTopColor: "#22d3ee", animation: "spin .8s linear infinite" }}
+                    style={{ borderColor: "var(--infoTint)", borderTopColor: "var(--cyanSoft)", animation: "spin .8s linear infinite" }}
                   />
                 ) : (
                   <Play size={13} fill="currentColor" />
@@ -200,12 +200,12 @@ export function SpecCodePanel({
                       ? t("spec.heal.titleProductDefect")
                       : t("spec.heal.title")
                 }
-                className="flex items-center gap-1.5 rounded-[9px] border border-emerald-400/25 bg-emerald-400/10 px-[11px] py-1.5 text-[11.5px] font-semibold text-emerald-300 hover:bg-emerald-400/20 disabled:opacity-60"
+                className="flex items-center gap-1.5 rounded-[9px] border border-ok/25 bg-ok/10 px-[11px] py-1.5 text-[11.5px] font-semibold text-ok hover:bg-ok/20 disabled:opacity-60"
               >
                 {healingThisCase ? (
                   <span
                     className="h-[13px] w-[13px] rounded-full border-2"
-                    style={{ borderColor: "rgba(52,211,153,.35)", borderTopColor: "#34d399", animation: "spin .8s linear infinite" }}
+                    style={{ borderColor: "var(--okTint)", borderTopColor: "var(--ok)", animation: "spin .8s linear infinite" }}
                   />
                 ) : (
                   <Wand2 size={13} />
@@ -217,12 +217,12 @@ export function SpecCodePanel({
                   onClick={onStartExplore}
                   disabled={generating || specRegenerating || healingThisCase || exploringThisCase}
                   title={t("spec.explore.title")}
-                  className="flex items-center gap-1.5 rounded-[9px] border border-sky-400/25 bg-sky-400/10 px-[11px] py-1.5 text-[11.5px] font-semibold text-sky-300 hover:bg-sky-400/20 disabled:opacity-60"
+                  className="flex items-center gap-1.5 rounded-[9px] border border-info/25 bg-info/10 px-[11px] py-1.5 text-[11.5px] font-semibold text-info hover:bg-info/20 disabled:opacity-60"
                 >
                   {exploringThisCase ? (
                     <span
                       className="h-[13px] w-[13px] rounded-full border-2"
-                      style={{ borderColor: "rgba(56,189,248,.35)", borderTopColor: "#38bdf8", animation: "spin .8s linear infinite" }}
+                      style={{ borderColor: "var(--infoTint)", borderTopColor: "var(--info)", animation: "spin .8s linear infinite" }}
                     />
                   ) : (
                     <Telescope size={13} />
@@ -234,7 +234,7 @@ export function SpecCodePanel({
                 onClick={onOpenChat}
                 disabled={generating || specRegenerating}
                 title={t("spec.chat.title")}
-                className="flex items-center gap-1.5 rounded-[9px] border border-violet-400/25 bg-violet-400/10 px-[11px] py-1.5 text-[11.5px] font-semibold text-violet-300 hover:bg-violet-400/20 disabled:opacity-60"
+                className="flex items-center gap-1.5 rounded-[9px] border border-pb bg-pt px-[11px] py-1.5 text-[11.5px] font-semibold text-ps-text-text hover:bg-pb disabled:opacity-60"
               >
                 <Sparkles size={13} /> {t("spec.chat.label")}
               </button>
@@ -288,11 +288,11 @@ export function SpecCodePanel({
           onChange={(e) => setDraft(e.target.value)}
           spellCheck={false}
           wrap="off"
-          className="block w-full resize-y overflow-auto whitespace-pre px-4 py-[18px] font-mono text-[12.5px] leading-[1.75] text-ink outline-none"
-          style={{ minHeight: 380, background: "rgba(8,8,13,.6)", tabSize: 2 }}
+          className="block w-full resize-y overflow-auto whitespace-pre px-4 py-[18px] font-mono text-[12.5px] leading-[1.75] text-txt outline-none"
+          style={{ minHeight: 380, background: "var(--code)", tabSize: 2 }}
         />
       ) : authoringActive ? (
-        <div className="px-4 py-[18px]" style={{ minHeight: 380, background: "rgba(8,8,13,.6)" }}>
+        <div className="px-4 py-[18px]" style={{ minHeight: 380, background: "var(--code)" }}>
           <AuthoringTrail lines={authoringLines} done={authoringDone} paused={authoringPaused} />
           {!authoringDone && <AuthoringPauseControls caseId={selectedSpec?.testCaseId ?? 0} />}
         </div>
@@ -301,10 +301,10 @@ export function SpecCodePanel({
         // empty state instead of a blank one-line editor.
         <div
           className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center"
-          style={{ minHeight: 380, background: "rgba(8,8,13,.6)" }}
+          style={{ minHeight: 380, background: "var(--code)" }}
         >
           <FileCode2 size={30} className="text-faint" />
-          <div className="text-[13.5px] font-semibold text-ink-soft">{t("spec.notGenerated.title")}</div>
+          <div className="text-[13.5px] font-semibold text-txt3">{t("spec.notGenerated.title")}</div>
           <div className="max-w-sm text-xs text-muted">{t("spec.notGenerated.hint")}</div>
         </div>
       ) : selectedSpec ? (
@@ -327,10 +327,10 @@ export function SpecCodePanel({
           </div>
           {(generating || specRegenerating) && (
             <div className="pointer-events-none absolute inset-0 flex items-start justify-center pt-8">
-              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-3.5 py-1.5 text-[11.5px] font-semibold text-ink-soft backdrop-blur">
+              <div className="flex items-center gap-2 rounded-full border border-bd2 bg-pop/90 px-3.5 py-1.5 text-[11.5px] font-semibold text-txt3 backdrop-blur">
                 <span
                   className="h-[13px] w-[13px] rounded-full border-2"
-                  style={{ borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa", animation: "spin .8s linear infinite" }}
+                  style={{ borderColor: "var(--pb)", borderTopColor: "var(--psText)", animation: "spin .8s linear infinite" }}
                 />
                 {specRegenerating ? t("spec.overlay.regenerating") : t("spec.overlay.updating")}
               </div>

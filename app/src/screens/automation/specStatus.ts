@@ -2,17 +2,23 @@ import type { SpecStatus } from "@/types/api";
 
 /**
  * Fuchsia hue reserved for "product defect" so it reads as clearly distinct from
- * the script-failure red. Hardcoded here (the Execution slice uses the same hue).
+ * the script-failure red. Now the shared `--defect` token (#784) rather than a
+ * literal kept in sync by hand with the Execution slice: it darkens in light
+ * mode, where the dark-mode fuchsia is unreadable on paper.
  */
-export const PRODUCT_DEFECT_HUE = "#d946ef";
+export const PRODUCT_DEFECT_HUE = "var(--defect)";
 
-/** Dot colour per normalised spec status (used in the left spec list). */
+/** Dot colour per normalised spec status (used in the left spec list).
+ * `var(--token)` strings, not hexes — these are handed to inline `style`, so the
+ * browser resolves them per element and they follow `data-mode` for free. */
 export const SPEC_STATUS_DOT: Record<SpecStatus, string> = {
-  draft: "#3f3f4a",
-  blocked: "#fbbf24",
-  running: "#fbbf24",
-  passed: "#34d399",
-  failed: "#fb7185",
+  // Draft is deliberately the dimmest dot; `--paused` is the ramp's "inactive"
+  // grey and is legible on both surfaces (the old #3f3f4a vanished on paper).
+  draft: "var(--paused)",
+  blocked: "var(--warn)",
+  running: "var(--warn)",
+  passed: "var(--ok)",
+  failed: "var(--danger)",
   product_defect: PRODUCT_DEFECT_HUE,
 };
 

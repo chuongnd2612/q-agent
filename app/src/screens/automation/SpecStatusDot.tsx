@@ -22,7 +22,7 @@ export function SpecStatusDot({
     );
   }
   const running = healing || status === "running";
-  const color = running ? "#fbbf24" : SPEC_STATUS_DOT[status];
+  const color = running ? "var(--warn)" : SPEC_STATUS_DOT[status];
   return (
     <span
       className={`h-[7px] w-[7px] shrink-0 rounded-full ${running ? "animate-pulse" : ""}`}

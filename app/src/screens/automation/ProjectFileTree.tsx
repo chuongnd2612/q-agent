@@ -148,11 +148,11 @@ function FileRow({
         type="button"
         onClick={() => onSelect(file.path)}
         aria-current={active ? "true" : undefined}
-        className="flex items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left hover:bg-white/5"
-        style={active ? { background: "rgba(139,92,246,.14)" } : undefined}
+        className="flex items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left hover:bg-card2"
+        style={active ? { background: "var(--pt)" } : undefined}
       >
-        <FileCode size={13} color={active ? "#a78bfa" : "#8b8b9e"} />
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-soft">
+        <FileCode size={13} color={active ? "var(--psText)" : "var(--muted)"} />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-txt3">
           {baseName(file.path)}
         </span>
         {!editable && <Lock size={11} className="shrink-0 text-faint" aria-hidden="true" />}
@@ -169,7 +169,7 @@ function FileRow({
         aria-label={t("projectFiles.selectSpec", { name: baseName(file.path) })}
         data-testid="spec-checkbox"
         data-path={file.path}
-        className="ml-1 h-3.5 w-3.5 shrink-0 accent-violet"
+        className="ml-1 h-3.5 w-3.5 shrink-0 accent-p"
       />
       <div className="min-w-0 flex-1">{row}</div>
     </div>

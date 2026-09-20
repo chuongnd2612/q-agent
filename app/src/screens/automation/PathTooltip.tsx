@@ -45,9 +45,9 @@ export function PathTooltip({ label, children }: { label: string; children: Reac
         createPortal(
           <div
             role="tooltip"
-            className="pointer-events-none fixed z-[80] max-w-[320px] truncate rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[11px] text-ink-soft shadow-lg"
+            className="pointer-events-none fixed z-[80] max-w-[320px] truncate rounded-lg border border-bd2 px-2.5 py-1.5 font-mono text-[11px] text-txt3 shadow-lg"
             // Opaque background — never backdrop-filter over animated content.
-            style={{ top: rect.top, left: rect.left, background: "#12121a" }}
+            style={{ top: rect.top, left: rect.left, background: "var(--pop)" }}
           >
             {label}
           </div>,
