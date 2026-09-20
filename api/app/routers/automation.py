@@ -1788,11 +1788,15 @@ def heal_case_spec(
     target = stored.get("executionTarget", "server")
     heal_mode = stored.get("healMode", "classic")
 
-    # Live self-heal (#428): reuse the browser-harness live-authoring pipeline —
-    # drive the REAL app, reproduce the failure, and emit a corrected spec (seeded
-    # with the failing spec + its last failure). Needs the paired agent (that's
-    # where browser-harness + claude run), so it only applies on local-agent; any
-    # other target falls through to the classic loop below.
+    # Live self-heal via the paired agent (#428): reuse the browser-harness
+    # live-authoring pipeline on the DEVICE — drive the REAL app, reproduce the
+    # failure, and emit a corrected spec (seeded with the failing spec + its last
+    # failure). Only applies on local-agent, where the device is the one that must
+    # drive the browser. Any other target falls through to `playwright_runner
+    # .start_heal` below, whose in-process loop (#876) now does the equivalent live
+    # rehearsal itself — via the same `author_case(heal=...)` contract — whenever
+    # the project has a resolvable base URL, falling back to the old static
+    # single-shot fixer only when it doesn't.
     if heal_mode == "live-harness" and target == "local-agent":
         last_fail = (
             db.query(ExecutionResult)

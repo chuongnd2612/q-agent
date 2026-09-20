@@ -113,18 +113,53 @@ model), diverging from the brief's `/repositories/{repoId}` wording only there.
 
 - **Real engines only** (ADR 0001): real browser, real app, real Claude. No
   simulation. Tests mock only the transport (Claude/Node driver).
-- **Read-mostly.** State-changing actions (`fill`, and clicks that submit) are
-  **gated off by default** (`allow_state_changing=False`) and, when enabled,
-  confined to the configured **test environment + test account** — never a
-  production tenant.
+- **Read-mostly, by default's origin story — since amended (#877).** State-
+  changing actions (`fill`, and clicks that submit) used to be **gated off by
+  default** (`allow_state_changing=False`) with an opt-in per project. That
+  gate is now **retired**: `allow_state_changing=True` is the policy for **any
+  project with a resolvable `base_url`**, globally — not a per-project opt-in.
+  The decision (#877) is that test-case generation should be grounded in real
+  interactive behavior, not just what a read-only crawl of a screen can show
+  (most screens worth testing require filling a form or submitting one to reach
+  the state a test case actually needs to verify); confining exploration to
+  read-only reconnaissance meant proactive, ticket-driven exploration
+  (§9 below) could rarely reach anything worth recording. The loop's existing
+  bounds — step cap, cost budget, repeat detection, the fixed action contract —
+  are unchanged and are what keeps this safe: exploration still only ever
+  drives the configured **test environment + test account**, never a production
+  tenant, and every action still goes through the same observer that only
+  executes the fixed contract.
 - **Never invent.** Only actually-observed page state is written to the KB. If
   the target screen can't be reached, nothing is written and the case stays
   `blocked` (honest failure, no fabricated selectors).
 - **Credentials.** Reuse the project's auth strategy / test account
   (role + username; password injected via the existing `storageState` capture).
   Secrets never enter the model prompt.
-- **Human-driven & reviewable.** Triggered by the user from a blocked case; the
-  discovered KB additions are shown before regeneration.
+- **Human-driven & reviewable.** Triggered by the user from a blocked case (the
+  reactive path — unchanged); also triggered proactively per ticket by the
+  Planner (§9) — either way, the discovered KB additions are shown before
+  regeneration.
+
+### 9. Proactive Planner exploration feeds test-case generation (#877)
+
+Exploration was originally **reactive only**: triggered from an already-
+`blocked` case, targeting `{ticket, screen, goal}` derived from that case's
+title/objective. #877 adds a **proactive** trigger, run from
+`ai_service._process_run_ticket` **before** case authoring: when the setting
+`testCaseMode == "live-planner"` (default `"text"` — this is a separate,
+additional gate from the `allow_state_changing` policy above) and the ticket's
+project has a resolvable `base_url`, one `explore()` pass runs against a target
+derived from the **ticket's own text** (there is no case yet to derive one
+from), and its transcript — observed routes/selectors, plus the action log —
+is threaded into the `test-case-generator`/`test-case-reviewer` prompts
+(`prompts.render_exploration_context`) alongside the ticket text and KB
+context. The two case-authoring calls stay exactly as before: two cheap,
+non-agentic `run_json` calls: this is not case-authoring made agentic, it is
+case-authoring **grounded in** one agentic exploration pass that ran first.
+Discovered routes/selectors merge into the KB exactly as the reactive path does
+(`merge_verified_discovery`) — no new write path. When `testCaseMode == "text"`
+(default) or no `base_url` resolves, generation is byte-for-byte what it was
+before #877.
 
 ## Consequences
 

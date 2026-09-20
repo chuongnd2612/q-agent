@@ -332,7 +332,14 @@ def _build_prompt(
 
 
 def author_case(
-    db, case, run, *, owner_id: int | None, run_id: int | None, plan: dict | None = None
+    db,
+    case,
+    run,
+    *,
+    owner_id: int | None,
+    run_id: int | None,
+    plan: dict | None = None,
+    heal: dict | None = None,
 ) -> AuthoringResult:
     """Author one case's spec by driving the real app live (#400).
 
@@ -342,11 +349,24 @@ def author_case(
     inlining locators. ``None`` (legacy path, no persistent project, planning
     failed) keeps the pre-#569 prompt exactly.
 
+    ``heal`` (``{"code": <failing spec>, "error": <failure>}``), when given, frames
+    the task as a self-heal (#428, #876): reproduce the failing spec's steps live,
+    diagnose the divergence, and emit a CORRECTED spec — instead of authoring from
+    scratch. Same live-driving mechanism either way; only the prompt differs (see
+    :func:`_build_prompt`). This is what lets the DEFAULT (server-side) heal loop
+    (:func:`app.services.playwright_runner.heal_spec`) reuse this exact contract,
+    same as the local-agent live-self-heal branch already does via
+    :func:`app.routers.automation._enqueue_agent_authoring`.
+
     Reads Settings' ``browserDriver`` (#875) to decide which CLI drives the
     browser and which skill/env vars go with it — see :func:`skill_for_driver`.
 
     Returns an :class:`AuthoringResult` with the emitted spec code and the
-    runtime-verified discovery (already normalized for the KB). Raises
+    runtime-verified discovery (already normalized for the KB). ``ok=False`` (empty
+    ``code``) means the live session could not reproduce the failure or was not
+    confident enough in a fix to write one — see the "if it genuinely cannot pass"
+    guidance in ``skills/live-authoring/SKILL.md`` — callers must treat that as an
+    explicit "could not heal" outcome, not a silent failure. Raises
     :class:`LiveAuthoringError` on a hard precondition failure (configured driver
     unavailable, no base URL, no authenticated profile). Progress is streamed as
     ``authoring.progress`` on the run WebSocket. The launched Chrome is always torn
@@ -431,7 +451,7 @@ def author_case(
         _publish("driving", message=f"Driving the app live with {browser_driver}")
 
         prompt = _build_prompt(
-            case, context, spec_filename, sidecar_path.name, base_url, plan=plan,
+            case, context, spec_filename, sidecar_path.name, base_url, heal=heal, plan=plan,
             browser_driver=browser_driver,
         )
         session_name = _harness_name(run.code, case.code or str(case.id))

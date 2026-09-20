@@ -80,6 +80,14 @@ DEFAULTS: dict[str, Any] = {
     # changes which tool the agentic Claude call is given, not which mode
     # (blind/live-harness) runs.
     "browserDriver": "browser-harness",
+    # Whether test-case generation is grounded in a live-exploration pass BEFORE
+    # authoring cases (#877, ADR 0010 §8). "text" (default) = today's pure-text
+    # generation, unchanged. "live-planner" = when the ticket's project has a
+    # resolvable base_url, run one exploration_agent.explore() pass targeting the
+    # ticket first, then author cases grounded in what was actually observed
+    # (falls back to "text" behavior when no base_url resolves). See
+    # ai_service._process_run_ticket.
+    "testCaseMode": "text",
 }
 
 
