@@ -1,78 +1,93 @@
 ---
-name: live-authoring
-description: Author a runnable Playwright + TypeScript spec by FIRST driving the real app live with the browser-harness CLI — performing the test case's steps against a real browser, discovering the real selectors on the live DOM, creating any missing test data — and only then emitting a self-contained spec built from what actually worked. Use for the live-authoring execution mode (#400) with browserDriver="browser-harness" (default), instead of generating a spec blind and healing it afterwards. When browserDriver="playwright-cli", the live-authoring-playwright-cli skill is loaded instead (#875).
-version: 1.2.0
+name: live-authoring-playwright-cli
+description: Author a runnable Playwright + TypeScript spec by FIRST driving the real app live with Playwright's own scriptable `cli` subcommand (playwright-cli) — performing the test case's steps against a real browser via real locators/refs, discovering any not already known, creating any missing test data — and only then emitting a self-contained spec built from what actually worked. Use for the live-authoring execution mode (#400) with browserDriver="playwright-cli" (#875). For browserDriver="browser-harness" (default), the live-authoring skill is loaded instead.
+version: 1.0.0
 ---
 
-# Live Authoring (browser-harness)
+# Live Authoring (playwright-cli)
 
 ## Purpose
 
 Produce a single, runnable, self-contained Playwright + TypeScript spec for **one approved manual
 test case** — but instead of writing it blind from the Knowledge Base and healing the failures,
-**drive the real application first** with the `browser-harness` CLI: actually perform each step
-against a live browser, discover the *real* selectors on the *real* DOM, create any test data the
-case needs, confirm each expected result — and only then emit the spec, built from exactly what
-worked. The result is a clean, deterministic Playwright spec grounded in runtime-verified selectors,
-so it should run green with no heal pass.
+**drive the real application first** with `playwright-cli`: actually perform each step against a
+live browser, resolve the *real* locators on the *real* DOM, create any test data the case needs,
+confirm each expected result — and only then emit the spec, built from exactly what worked. The
+result is a clean, deterministic Playwright spec grounded in runtime-verified locators, so it
+should run green with no heal pass.
+
+Unlike a Python-DSL harness driving raw CDP coordinate clicks, `playwright-cli` acts on real
+Playwright locators and accessibility-tree refs directly — the same objects the emitted spec's
+`page.getByRole(...)`/`page.getByTestId(...)` calls resolve. There is no gap between how you drove
+the app and how the spec will run it.
 
 ## Already-verified locators come first (#875)
 
 If the task prompt carries an **"Already-verified locators (Knowledge Base)"** block, those
-routes/selectors were already confirmed live on THIS app by a prior exploration/authoring pass —
-use them **directly** for any step they cover instead of rediscovering them from scratch. Only fall
-back to the discovery workflow below for a step they don't cover, or when a listed entry no longer
-matches the live DOM (the app changed since it was verified).
+routes/selectors were already confirmed live on THIS app by a prior exploration/authoring pass.
+**Locator-first workflow:** for any step covered by a known, verified locator, pass it STRAIGHT to
+the command that needs it (`click`, `fill`, `eval`, …) instead of `find`-ing for it again — spending
+a `find` call on something already known just burns turns/budget for nothing. Only fall back to
+`find` when:
+
+- there's no known locator for what the step needs, or
+- the known one no longer matches (the app changed since it was verified) — re-`find` it, verify
+  the replacement, and use that instead.
 
 ## How you drive the browser
 
-A dedicated, already-authenticated Chrome is running and `browser-harness` is pre-wired to it (the
-`BU_CDP_URL` environment variable points at it — you do **not** configure any connection, open
-`chrome://inspect`, start a daemon, or pick a profile). Just run the CLI with a heredoc:
+A dedicated, already-authenticated Chrome is running, and `playwright-cli` is pre-wired to attach
+to it: the `PW_CLI_CDP_URL` environment variable is its CDP endpoint and `PW_CLI_SESSION` is this
+session's name — you do **not** configure any connection, launch a fresh browser, or pick a
+profile. `PLAYWRIGHT_CLI_JS` gives you the exact entry point to invoke. Run it via Bash as:
 
 ```bash
-browser-harness <<'PY'
-new_tab("<base URL from context>")
-wait_for_load()
-print(page_info())
-PY
+node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" open --headed "<base URL from context>"
+node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" resize 1280 720
 ```
 
-- A tab is **already open and signed in** to the app under test (its session was pre-restored). **Attach to it with `ensure_real_tab()` first** and continue from there — do **not** open a fresh `new_tab(url)` for the app's own origin (a new tab may not carry the restored session). Use `new_tab(url)` only for a genuinely different site. After any navigation call `wait_for_load()`.
-- **Find elements via the accessibility tree, then verify** — do not guess. `cdp("Accessibility.getFullAXTree")["nodes"]` has every element's `role`, `name`, and `backendDOMNodeId` (filter in Python before printing — it is large). To click: resolve the box center and `click_at_xy(x, y)`, then confirm with a targeted `js(...)` / `page_info()` check. Use `js(...)` for DOM inspection/extraction (e.g. read a `data-testid`, an input's label, the visible text of a result).
-- The Chrome is already signed in via its persistent profile. If you unexpectedly hit a login wall, use available SSO if Chrome is already signed in; **never** type passwords/MFA yourself, and **never** run against a production environment.
+**`resize 1280 720` is MANDATORY immediately after `open`, every time.** A headed browser's default
+viewport does not match the headless viewport the emitted spec runs under, and layouts that reflow
+at different widths (responsive nav, hidden vs. visible elements) make an interaction that worked
+while you drove it fail on first real execution. Do this before any other command.
 
-## Record the REAL selector for every interaction
+- A tab is **already open and signed in** to the app under test (its session was pre-restored) —
+  `open` attaches to it; you don't need a fresh login. If you unexpectedly hit a login wall, use
+  available SSO if Chrome is already signed in; **never** type passwords/MFA yourself, and **never**
+  run against a production environment.
+- **Resolve locators, then act.** `find "<accessible name or visible text>"` (or `find --regex
+  "<pattern>"`) returns matching refs with their role/name — inspect before acting, don't guess.
+  `snapshot [--depth=N] [locator]` gives you the accessibility tree for a region when `find` alone
+  isn't enough to disambiguate. Then `click <ref-or-locator>`, `fill <ref-or-locator> "<value>"`,
+  `type`, `press`, `select`, `hover`, `check`, `uncheck`, `upload`, `drag` act on that ref/locator
+  directly — no coordinates, no guessing where an element's box center lands.
+- Use `eval "<expr>" [ref-or-locator] --raw` for anything the built-in commands don't cover (reading
+  an attribute, checking a computed value) — `--raw` gives machine-readable output you can parse.
+- **Windows/Git-Bash gotcha:** do **not** wrap a `--regex` pattern in `/…/` — MSYS path-mangling
+  rewrites a leading `/` into a Windows path and corrupts it. Write the pattern bare (e.g.
+  `--regex "Submit.*"`, not `--regex "/Submit.*/"`); prefix the whole command with
+  `MSYS_NO_PATHCONV=1` only if a flag's value is genuinely being mangled.
+- `dialog-accept` / `dialog-dismiss` handle native `confirm`/`alert`/`prompt` popups when a step
+  triggers one. `state-save <path>` / `state-load <path>` are available if you need to checkpoint
+  session state mid-flow, though the pre-restored session already covers normal auth reuse.
 
-This is the whole point. As you perform each step, capture the concrete, stable selector that
-actually located the element on the live page — you will bake these exact selectors into the spec.
-For each element you interact with or assert on, determine and record the **highest-priority stable
-selector that exists on the live DOM**, in this order:
+## Record the REAL locator for every interaction
 
-1. `data-testid` (or `data-test`) → Playwright `getByTestId('…')` / `[data-testid="…"]` — **strategy `data-testid`**
+This is the whole point. As you perform each step, capture the concrete, stable locator that
+actually resolved the element on the live page — you will bake these exact locators into the spec.
+For each element you interact with or assert on, determine the **highest-priority stable locator
+that exists on the live DOM**, in this order:
+
+1. `data-testid` (or `data-test`) → Playwright `getByTestId('…')` — **strategy `data-testid`**
 2. ARIA role + accessible name → `getByRole('button', { name: '…' })` — **strategy `role`**
 3. Associated label → `getByLabel('…')` — **strategy `label`**
 4. A stable CSS selector (id, unique attribute) — **strategy `css`** (last resort; never `:nth-child`, bare classes, or DOM-structure combinators)
 
-Read the element's real attributes live (via `js(...)` or the AX tree) to choose — do not assume a
-`data-testid` exists; confirm it does before using it.
-
-**Verify the SELECTOR, not the pixel.** `click_at_xy(x, y)` lands on whatever element sits at that
-coordinate — often an inner `<a>` — while the spec will click the *selector you recorded*, whose
-centre may be a container the app ignores. Proving the coordinate works proves nothing about the
-locator. So for every interaction, and above all for one that must NAVIGATE, dispatch the click on
-the recorded selector itself and confirm the effect:
-
-```
-js("document.querySelector('[data-testid=\"employer-row\"]').click()")   # the selector the spec will use
-wait_for_load(); page_info()                                              # did the URL actually change?
-```
-
-If the recorded selector does nothing, it is the WRONG selector: find the descendant that does
-(usually the row's link — `js("...closest('a')")` or the AX tree's `link` node), record THAT, and
-re-verify. A step whose navigation you have not seen happen through the emitted selector is not
-verified, and the spec's next `toHaveURL` will fail while the click itself silently "passes" —
-Playwright's `click()` succeeds whenever it clicks *something*.
+`find`/`snapshot` show you an element's real role, accessible name and attributes live — do not
+assume a `data-testid` exists; confirm it does before using it. Because `playwright-cli`'s commands
+already act on the real locator/ref (not a pixel coordinate), a successful `click <locator>` IS
+proof the locator resolves and does something — there is no separate "verify the selector, not the
+pixel" step to run afterward the way a coordinate-clicking tool would need.
 
 ## Create test data if it does not exist
 
@@ -140,7 +155,7 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
      and then via `formLoginFlow` / `performFormLogin` with the real credentials from the injected
      context. **Never mock or bypass auth** — no route-mocking of identity/session endpoints, no
      `VITE_BYPASS_AUTH`, no fabricated `storageState`, no "Auth note" prose.
-   - Use the **real selectors you verified live** (with the strategy priority above). Bake in the
+   - Use the **real locators you resolved live** (with the strategy priority above). Bake in the
      real base URL, route TEMPLATES, and any test data you created.
    - **Never bake in an id the app generated at runtime.** A record's own id (`/employers/57da884a-…`)
      is not test data you control — it is whatever the app minted, and asserting it couples the spec
@@ -158,10 +173,13 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
      Same rule for choosing the row: after a search identified a specific record, click the row that
      MATCHES it (`.filter({ hasText: EMPLOYER_NAME })`), never `.nth(0)` — index after a search
      assumes an ordering the app never promised.
-   - Every "Expected Result" becomes a **web-first assertion** (`await expect(locator).toBeVisible()`,
-     `.toHaveText(…)`, `.toHaveURL(…)`, or a base helper such as `expectVisible(…)`) — rely on
-     auto-waiting. **No `page.waitForTimeout(...)`** or any hard sleep. Deterministic and independent —
-     no shared mutable state.
+   - Every "Expected Result" becomes a **web-first assertion**, matching the house style the rest of
+     Q-Agent's generated specs use — `toBeVisible()` for presence, `toHaveText()`/`toContainText()`
+     for content, `toHaveValue()` for form fields, `toBeChecked()` for checkboxes/radios,
+     `toHaveURL()` for navigation, and `toMatchAriaSnapshot()` when a whole region's structure is
+     what the case is really asserting on (not for a single element — use the specific assertion
+     instead). Rely on auto-waiting. **No `page.waitForTimeout(...)`** or any hard sleep.
+     Deterministic and independent — no shared mutable state.
 
 2. **The discovery sidecar** — unchanged: a JSON file with exactly this shape, listing the runtime-verified
    routes and selectors you actually used, so they can be merged into the Knowledge Base:
@@ -178,10 +196,8 @@ project's automation project at its planned path, `tests/<TICKET-ID>/<TICKET-ID>
 
 ## RUN the spec you just wrote — before you report anything
 
-Driving the app successfully is **not** evidence that the spec passes. You drove it with CDP calls;
-the spec runs as Playwright code with the locators you recorded, which is a different execution path
-— that gap is where live-authored specs fail on their very first real run (#657). The only thing that
-settles it is running the file.
+Driving the app successfully is **not** evidence that the spec passes. The only thing that settles
+it is running the file.
 
 **You do not run it yourself — the agent does, on the real execution path.** As soon as you finish,
 your spec is executed with the same Playwright config, authenticated session and CLI that a normal
@@ -195,9 +211,9 @@ What that means for you:
 - **If it fails, you will be handed the Playwright output and asked to fix the spec in place.** Read
   the failure literally. A `toHaveURL` failure immediately after a click almost always means the
   click navigated nowhere — so the click TARGET is wrong, not the assertion. Go back to the live
-  page, find the element that really navigates (usually a link inside the row), verify it through the
-  locator the spec will use, and emit THAT. Never "fix" a failure by loosening an assertion you
-  cannot satisfy, and never delete the step that fails.
+  page, `find` the element that really navigates (usually a link inside the row), resolve it as a
+  locator, and emit THAT. Never "fix" a failure by loosening an assertion you cannot satisfy, and
+  never delete the step that fails.
 - **If it genuinely cannot pass** (a real product defect, an impossible step, or the budget runs
   out): say so plainly in the summary. A spec reported as authored but never seen to pass is exactly
   what this section exists to prevent.
@@ -220,5 +236,5 @@ say so clearly in the summary and still write the discovery sidecar with whateve
 - Every assertion maps to a specific Expected Result and is web-first (auto-waiting); no hard waits.
 - Never mock/bypass auth; no auth-note meta-commentary — keep comments to brief step annotations.
 - Reference the Test Case ID in the `test()` title.
-- Use the REAL, live-verified selectors and REAL created/known data — no invented selectors, routes,
+- Use the REAL, live-verified locators and REAL created/known data — no invented selectors, routes,
   or placeholders.

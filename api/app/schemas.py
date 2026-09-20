@@ -475,6 +475,10 @@ class AuthoringClaimOut(ApiModel):
     # own AGENT LOG filters the same way the web trail does: "concise" hides the
     # raw tool/Bash step lines, "verbose" shows them.
     log_verbosity: str = "concise"
+    # Browser-automation CLI the agent should drive (#875): "browser-harness"
+    # (default) or "playwright-cli". Mirrors Settings' `browserDriver` at enqueue
+    # time; the system/task prompts already assume whichever one this says.
+    browser_driver: str = "browser-harness"
     # The run owner's effective Claude credential (.credentials.json content), so
     # the agent's local `claude` authenticates with the app's saved credential
     # instead of a separate `claude login` on the agent machine. Empty ⇒ the agent
@@ -1427,6 +1431,11 @@ class SettingsOut(ApiModel):
     # the placeholder/invented-reference gate, the AI automation-reviewer and the
     # playwright --list parse check, accepting every spec as runnable (#gate-toggle).
     gate_enabled: bool = True
+    # Browser-automation CLI an agentic live-authoring/live-self-heal run drives
+    # (#875): "browser-harness" (default) or "playwright-cli" (Playwright's own
+    # scriptable `cli` subcommand — acts on real locators/refs instead of raw CDP
+    # coordinate clicks).
+    browser_driver: str = "browser-harness"
 
 
 class SettingsUpdate(ApiModel):
@@ -1449,6 +1458,7 @@ class SettingsUpdate(ApiModel):
     authoring_cost_budget_usd: float | None = None
     authoring_log_verbosity: str | None = None
     gate_enabled: bool | None = None
+    browser_driver: str | None = None
 
 
 # ---------------------------------------------------------------- Auth (ADR 0007)

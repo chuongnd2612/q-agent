@@ -71,6 +71,15 @@ DEFAULTS: dict[str, Any] = {
     # generation/edit/heal (default); False = bypass gating and accept every
     # spec as runnable. See placeholder_gate + automation._gate_spec_or_bypass.
     "gateEnabled": True,
+    # Which browser-automation CLI an agentic live-authoring/live-self-heal run
+    # drives (#875). "browser-harness" (default until validated) = the
+    # third-party Python DSL over CDP. "playwright-cli" = Playwright's own
+    # scriptable `cli` subcommand (`node node_modules/playwright/cli.js cli
+    # -s=<session> <command>`), which acts on real locators/refs directly instead
+    # of raw CDP coordinate clicks. Orthogonal to authoringMode/healMode — it only
+    # changes which tool the agentic Claude call is given, not which mode
+    # (blind/live-harness) runs.
+    "browserDriver": "browser-harness",
 }
 
 

@@ -1452,18 +1452,33 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
       return;
     }
 
-    // Ensure browser-harness is installed (first run provisions it via uv). Its
-    // bin dir is prepended to the claude subprocess PATH so `browser-harness`
-    // resolves for the Bash calls Claude makes.
-    const bh = await ensureBrowserHarness();
-    if (!bh.ok) {
-      await finalize("", { routes: [], selectors: [] }, `browser-harness unavailable: ${bh.error || "unknown"}`, false);
-      return;
+    // Browser-automation CLI (#875): "browser-harness" (default) is a separate
+    // Python tool the agent self-provisions on first run; "playwright-cli" needs
+    // no such step — `playwright` already ships as the agent's own execution
+    // dependency (`paths.playwrightCli()`, the same entry `test`/`install`
+    // already resolve), so there is nothing new to install.
+    const driver = job.browserDriver || "browser-harness";
+    let harnessBinDir = "";
+    if (driver === "playwright-cli") {
+      if (!fs.existsSync(playwrightCli())) {
+        await finalize("", { routes: [], selectors: [] }, "playwright-cli unavailable: playwright is not bundled with this agent build", false);
+        return;
+      }
+    } else {
+      // Ensure browser-harness is installed (first run provisions it via uv). Its
+      // bin dir is prepended to the claude subprocess PATH so `browser-harness`
+      // resolves for the Bash calls Claude makes.
+      const bh = await ensureBrowserHarness();
+      if (!bh.ok) {
+        await finalize("", { routes: [], selectors: [] }, `browser-harness unavailable: ${bh.error || "unknown"}`, false);
+        return;
+      }
+      harnessBinDir = bh.binDir;
     }
 
     await api
       .postAuthoringEvent(cfg, job.sessionId, "authoring.progress", {
-        case: job.caseId, phase: "driving", message: "Driving the app live with browser-harness",
+        case: job.caseId, phase: "driving", message: `Driving the app live with ${driver}`,
       })
       .catch(() => {});
 
@@ -1494,19 +1509,30 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     // Prepend browser-harness's bin dir to PATH (overwrite the same-case key so
     // Windows doesn't end up with both Path and PATH).
     const pathVar = Object.keys(process.env).find((k) => k.toLowerCase() === "path") || "PATH";
+    // Per-session name (#739/#875), not a fixed one, for EITHER driver: a named
+    // daemon/session sharing a name with another fights over one tab, which is
+    // what two authoring runs would do. With the default name browser-harness
+    // attaches to `pages[0]` — whichever page is first in that Chrome — and this
+    // profile is the SAME one the manual-login capture opens for the operator, so
+    // a tab they left there is restored and taken over. Claude then drives the
+    // operator's own tab, on their own machine.
+    const sessionName = harnessName(job.sessionId, job.caseId);
     const claudeEnv: NodeJS.ProcessEnv = {
       ...process.env,
-      BU_CDP_URL: `http://127.0.0.1:${port}`,
-      // Name the daemon so browser-harness gives itself a DEDICATED tab (#739). With
-      // the default name it attaches to `pages[0]` — whichever page is first in that
-      // Chrome — and this profile is the SAME one the manual-login capture opens for
-      // the operator, so a tab they left there is restored and taken over. Claude then
-      // drives the operator's own tab, on their own machine.
-      //
-      // Per session, not a fixed name: the harness's own comment says named daemons
-      // sharing a name fight over one tab, which is what two authoring runs would do.
-      BU_NAME: harnessName(job.sessionId, job.caseId),
-      [pathVar]: `${bh.binDir}${path.delimiter}${process.env[pathVar] || ""}`,
+      ...(driver === "playwright-cli"
+        ? {
+            // playwright-cli (#875) attaches to the SAME pre-authenticated Chrome
+            // the launcher above just armed with the captured session — no PATH
+            // change needed, `playwright` already resolves via node_modules.
+            PW_CLI_CDP_URL: `http://127.0.0.1:${port}`,
+            PW_CLI_SESSION: sessionName,
+            PLAYWRIGHT_CLI_JS: playwrightCli(),
+          }
+        : {
+            BU_CDP_URL: `http://127.0.0.1:${port}`,
+            BU_NAME: sessionName,
+            [pathVar]: `${harnessBinDir}${path.delimiter}${process.env[pathVar] || ""}`,
+          }),
     };
     if (claudeConfigDir) claudeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;
     // Surface each step to the agent console + the run WebSocket so the operator

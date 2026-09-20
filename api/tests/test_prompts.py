@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.services.prompts import render_dom_snapshot, render_project_context
+from app.services.prompts import (
+    render_dom_snapshot,
+    render_project_context,
+    verified_kb_selectors_and_routes,
+)
 
 
 def test_render_project_context_ranks_routes_by_relevance():
@@ -264,3 +268,59 @@ def test_build_chat_edit_prompt_forbids_flattening_the_architecture():
         "add an assertion", context=None,
     )
     assert "Preserve the spec's architecture" in prompt
+
+
+# ------------------------------------------------------- verified_kb_selectors_and_routes (#875)
+
+def test_verified_kb_selectors_and_routes_filters_to_runtime_verified_only():
+    """Only entries stamped ``verified_at_runtime`` come back — source-inferred
+    KB entries (no stamp) are excluded, not just deprioritized."""
+    context = {
+        "projectKey": "P",
+        "routes": [
+            {"path": "/inferred", "description": "not verified"},
+            {"path": "/claims/new", "description": "New claim form", "verified_at_runtime": "2026-01-01T00:00:00Z"},
+        ],
+        "selectors": [
+            {"screen": "New claim", "element": "Amount", "selector": "#amount"},
+            {
+                "screen": "New claim", "element": "Submit", "selector": "[data-testid=\"submit\"]",
+                "verified_at_runtime": "2026-01-01T00:00:00Z", "strategy": "data-testid",
+            },
+        ],
+    }
+
+    result = verified_kb_selectors_and_routes(context)
+
+    assert [r["path"] for r in result["routes"]] == ["/claims/new"]
+    assert [s["element"] for s in result["selectors"]] == ["Submit"]
+
+
+def test_verified_kb_selectors_and_routes_ranks_by_query():
+    """Among several verified entries, the one relevant to ``rank_query`` leads —
+    the same relevance ranking `render_project_context` applies, restricted to
+    the verified subset."""
+    verified = {"verified_at_runtime": "2026-01-01T00:00:00Z"}
+    context = {
+        "projectKey": "P",
+        "selectors": [
+            {"screen": "Noise", "element": f"el-{i}", "selector": f"#noise-{i}", **verified}
+            for i in range(20)
+        ]
+        + [{"screen": "Login", "element": "SubmitButton", "selector": "#login-submit", **verified}],
+    }
+
+    result = verified_kb_selectors_and_routes(
+        context, rank_query="Submit the login form", selector_limit=5
+    )
+
+    assert result["selectors"][0]["element"] == "SubmitButton"
+    assert len(result["selectors"]) == 5
+
+
+def test_verified_kb_selectors_and_routes_empty_without_context_or_verified_entries():
+    assert verified_kb_selectors_and_routes(None) == {"routes": [], "selectors": []}
+    assert verified_kb_selectors_and_routes({"projectKey": "P", "routes": [{"path": "/x"}]}) == {
+        "routes": [],
+        "selectors": [],
+    }

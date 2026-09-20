@@ -41,8 +41,8 @@ export const MANUAL_NAV_NOTE =
   "IMPORTANT: the session was paused and a human may have driven this same browser " +
   "manually while it was paused — navigating, logging in, opening a dialog or " +
   "creating data. The page is probably NOT where you left it. Re-inspect the " +
-  "current page state with browser-harness before your next action, and continue " +
-  "from wherever the page actually is now rather than from where you expected to be.";
+  "current page state with your browser-automation CLI before your next action, and " +
+  "continue from wherever the page actually is now rather than from where you expected to be.";
 
 /** Pull Claude CLI's own `session_id` out of a stream-json envelope line. */
 export function sessionIdFrom(ev: unknown): string {

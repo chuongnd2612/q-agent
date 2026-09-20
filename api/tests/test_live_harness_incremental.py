@@ -354,11 +354,12 @@ def test_local_agent_live_harness_authors_the_library_before_enqueueing(db_sessi
     assert "AUTOMATION PLAN" in job["task_prompt"]
     assert "`pages/LoginPage.ts` (reuse)" in job["task_prompt"]
     assert "`pages/UserTablePage.ts` (extend)" in job["task_prompt"]
-    # No new wire field: the job shape the agent claims is exactly the pre-#569 one.
+    # Same job shape the agent claims as pre-#569, plus `browser_driver` (#875) —
+    # which CLI/env vars the agent should set up for this session.
     assert set(job) == {
         "session_id", "owner_id", "project_key", "repo", "base_url", "origin", "case_id",
         "run_id", "spec_filename", "system_prompt", "task_prompt", "model",
-        "max_budget_usd", "log_verbosity",
+        "max_budget_usd", "log_verbosity", "browser_driver",
     }
 
     # -- The post-back: the device's spec lands against the existing library --------

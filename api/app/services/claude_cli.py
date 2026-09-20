@@ -713,6 +713,23 @@ def browser_harness_available() -> bool:
         return False
 
 
+def playwright_cli_available() -> bool:
+    """Best-effort preflight: is Playwright's own ``cli`` subcommand usable? (#875)
+
+    Live-authoring/live-self-heal with ``browserDriver == "playwright-cli"``
+    requires Node plus an installed ``playwright`` package (``@playwright/test >=
+    1.63`` ships the `cli` subcommand this project scripts against) at
+    :attr:`settings.playwright_cli_js` — the analogue of
+    :func:`browser_harness_available` for the new driver. Returns True only when
+    both ``node`` resolves and the CLI entry file exists; never raises.
+    """
+    from shutil import which
+
+    if which("node") is None:
+        return False
+    return settings.playwright_cli_js.is_file()
+
+
 def verify_credentials(config_dir: str | Path) -> tuple[str, str]:
     """Run a minimal prompt under an explicit ``CLAUDE_CONFIG_DIR`` and classify
     the outcome for the credential-test endpoint.

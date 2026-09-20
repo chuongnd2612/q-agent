@@ -11,6 +11,11 @@
  *
  * Everything is best-effort and heavily logged: a failure returns `{ok:false}`
  * with a message the caller surfaces, rather than throwing.
+ *
+ * Only needed when `browserDriver === "browser-harness"` (#875). The alternative
+ * driver, `playwright-cli`, needs no provisioning step of its own: `playwright`
+ * already ships as the agent's own `@playwright/test` execution dependency, and
+ * `paths.playwrightCli()` resolves the exact same `cli.js` entry.
  */
 import { spawn } from "child_process";
 import * as fs from "fs";

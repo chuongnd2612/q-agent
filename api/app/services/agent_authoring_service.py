@@ -102,6 +102,7 @@ _PAYLOAD_FIELDS = (
     "model",
     "max_budget_usd",
     "log_verbosity",
+    "browser_driver",
 )
 
 
@@ -194,6 +195,7 @@ def request_authoring(
     model: str,
     max_budget_usd: float,
     log_verbosity: str = "concise",
+    browser_driver: str = "browser-harness",
 ) -> None:
     """Enqueue one authoring session for the paired agent to claim.
 
@@ -220,6 +222,7 @@ def request_authoring(
         "model": model,
         "max_budget_usd": max_budget_usd,
         "log_verbosity": log_verbosity,
+        "browser_driver": browser_driver,
     }
     with _session() as db:
         existing = (

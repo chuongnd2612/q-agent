@@ -697,6 +697,11 @@ def _enqueue_agent_authoring(
     objects exist, and the rendered plan block rides in on the existing
     ``task_prompt`` field. That is deliberate — nothing about the wire shape changes,
     so no agent release is needed to make live-harness reuse the library.
+
+    ``browserDriver`` (#875) is read from Settings and threaded through both the
+    skill selected for the system prompt (:func:`live_authoring_service.skill_for_driver`,
+    so the agent gets the matching methodology) and the queued session row, so the
+    agent knows which CLI/env vars to set up when it claims the job.
     """
     from app.services import agent_authoring_service, agent_capture_service, skills
 
@@ -712,10 +717,15 @@ def _enqueue_agent_authoring(
     if not has_device:
         raise ValueError("No local agent paired — start your local agent to author live.")
 
+    browser_driver = settings_store.load_settings().get("browserDriver", "browser-harness")
     spec_filename = spec_service.spec_filename(case.ticket_external_id, case.code)
-    system_prompt = skills.load_skill("live-authoring", include_template=True) or ""
+    system_prompt = (
+        skills.load_skill(live_authoring_service.skill_for_driver(browser_driver), include_template=True)
+        or ""
+    )
     task_prompt = live_authoring_service._build_prompt(
-        case, context, spec_filename, "discovered.json", base_url, heal=heal, plan=plan
+        case, context, spec_filename, "discovered.json", base_url, heal=heal, plan=plan,
+        browser_driver=browser_driver,
     )
     model = settings_store.load_settings().get("claudeModel") or settings.claude_model
     agent_authoring_service.request_authoring(
@@ -733,6 +743,7 @@ def _enqueue_agent_authoring(
         model=model,
         max_budget_usd=settings_store.authoring_cost_budget_usd(),
         log_verbosity=settings_store.load_settings().get("authoringLogVerbosity", "concise"),
+        browser_driver=browser_driver,
     )
 
     spec = _get_or_create_spec(db, case.id, filename=spec_filename)

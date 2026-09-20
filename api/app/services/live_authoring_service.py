@@ -2,15 +2,17 @@
 
 Instead of generating a Playwright spec blind from the Knowledge Base and healing
 the failures afterwards, this drives the *real* application first: it launches a
-dedicated, already-authenticated Chrome, points the ``browser-harness`` CLI at it,
-and lets an agentic Claude (see :func:`claude_cli.run_agentic`) perform the test
+dedicated, already-authenticated Chrome, points a browser-automation CLI at it —
+``browser-harness`` (default) or Playwright's own scriptable ``cli`` subcommand
+(``browserDriver="playwright-cli"``, #875 — see :func:`skill_for_driver`) — and
+lets an agentic Claude (see :func:`claude_cli.run_agentic`) perform the test
 case's steps live — discovering the real selectors on the real DOM, creating any
 missing test data — then write a clean ``*.spec.ts`` built from what actually
 worked (layered on ``@q-agent/playwright-base`` per #542, not self-contained:
 see ``skills/live-authoring/SKILL.md``), plus a ``discovered.json`` sidecar of runtime-verified
 routes/selectors for the KB.
 
-This runs server-side (the API host has ``browser-harness`` + a Chrome), mirroring
+This runs server-side (the API host has the configured driver + a Chrome), mirroring
 the server-branch exploration thread model — no paired-device bridge. It is bounded
 on three axes so an autonomous tool-using run can't misbehave: a per-session Claude
 cost ceiling, a max agentic-turn cap, and a wall-clock timeout (see
@@ -41,11 +43,31 @@ from app.services import (
 )
 from app.services.exploration_agent import normalize_discovered
 from app.services.knowledge_service import merge_verified_discovery
+from app.services.prompts import verified_kb_selectors_and_routes
 
 _LAUNCHER = Path(__file__).resolve().parent / "pw_scripts" / "authoring_browser.cjs"
 
 # How long to wait for the launched Chrome's CDP endpoint to come up.
 _CDP_READY_TIMEOUT_S = 25.0
+
+#: Skill folder loaded for each ``browserDriver`` setting value (#875). Both the
+#: server-side path (:func:`author_case`) and the local-agent enqueue path
+#: (``automation._enqueue_agent_authoring``, which composes the system prompt
+#: server-side since the agent has no ``skills/`` dir) resolve through
+#: :func:`skill_for_driver` so they always agree on which methodology Claude gets.
+_SKILL_BY_DRIVER = {
+    "browser-harness": "live-authoring",
+    "playwright-cli": "live-authoring-playwright-cli",
+}
+
+
+def skill_for_driver(browser_driver: str) -> str:
+    """Resolve the live-authoring skill folder name for a ``browserDriver`` value.
+
+    Falls back to the ``browser-harness`` skill for an unrecognized/legacy value,
+    so an old ``settings.json`` without the key (or a typo) never loads nothing.
+    """
+    return _SKILL_BY_DRIVER.get(browser_driver, _SKILL_BY_DRIVER["browser-harness"])
 
 
 class LiveAuthoringError(RuntimeError):
@@ -181,13 +203,14 @@ def _build_prompt(
     base_url: str,
     heal: dict | None = None,
     plan: dict | None = None,
+    browser_driver: str = "browser-harness",
 ) -> str:
     """Build the live task prompt (the skill supplies the methodology).
 
     When ``heal`` is given (``{"code": <failing spec>, "error": <failure>}``) this
     frames the task as a self-heal (#428): reproduce the failure live, find the
     real cause, and emit a CORRECTED spec — instead of authoring from scratch.
-    Reuses the same browser-harness/skill machinery either way.
+    Reuses the same browser-automation/skill machinery either way.
 
     When ``plan`` is given (#569) the ticket's Automation Plan is rendered into the
     prompt by the SAME :func:`automation_planner_service.render_plan` the blind path
@@ -197,6 +220,14 @@ def _build_prompt(
     path the block lists as importable really is on disk. ``skills/live-authoring/
     SKILL.md`` documents how to consume the block — change one and change the other
     in the same commit (#178).
+
+    ``browser_driver`` (#875) selects which CLI the intro tells Claude to drive —
+    the legacy ``browser-harness`` (a signed-in Chrome wired via ``BU_CDP_URL``) or
+    ``playwright-cli`` (Playwright's own scriptable ``cli`` subcommand, wired via
+    ``PW_CLI_CDP_URL``/``PW_CLI_SESSION`` — see :func:`author_case`). The rest of
+    the prompt (test case, project context, plan, deliverables) is identical either
+    way; only the skill loaded alongside it (:func:`skill_for_driver`) differs in
+    HOW to drive that CLI.
     """
     # Local import: `automation_planner_service` pulls in the project services, and
     # importing it at module scope makes live_authoring <-> planner a cycle.
@@ -211,12 +242,42 @@ def _build_prompt(
     routes = json.dumps(context.get("routes", []), ensure_ascii=False)[:4000]
     selectors = json.dumps(context.get("selectors", []), ensure_ascii=False)[:4000]
     auth = json.dumps(context.get("auth", {}), ensure_ascii=False)[:1500]
+
+    # Runtime-verified subset (#875): a screen a prior exploration/authoring pass
+    # already confirmed live shouldn't be re-discovered from zero every time. Feed
+    # ONLY the verified, relevance-ranked slice as its own block so it reads as an
+    # instruction ("use these directly") rather than getting lost inside the raw
+    # "Known routes/selectors" dumps above (which include unverified, source-
+    # inferred entries too).
+    verified = verified_kb_selectors_and_routes(
+        context, rank_query=f"{case.title} {_steps_lines(case)}"
+    )
+    verified_block = ""
+    if verified["routes"] or verified["selectors"]:
+        v_routes = json.dumps(verified["routes"], ensure_ascii=False)[:2000]
+        v_selectors = json.dumps(verified["selectors"], ensure_ascii=False)[:3000]
+        verified_block = (
+            "## Already-verified locators (Knowledge Base)\n"
+            "A prior exploration/authoring pass already confirmed these routes/selectors "
+            "live on THIS app — use them directly instead of rediscovering them from "
+            "scratch. Only fall back to fresh discovery for a step one of these doesn't "
+            "cover, or if a given entry no longer matches the live DOM.\n"
+            f"Verified routes: {v_routes}\n"
+            f"Verified selectors: {v_selectors}\n\n"
+        )
+
     if heal is not None:
         failing_code = (heal.get("code") or "").strip()[:8000]
         error = (heal.get("error") or "").strip()[:3000] or "(no error text captured)"
+        drive_note = (
+            "browser-harness (already wired to a signed-in Chrome via BU_CDP_URL — just run it)"
+            if browser_driver != "playwright-cli"
+            else "playwright-cli (already wired to a signed-in Chrome via PW_CLI_CDP_URL/"
+            "PW_CLI_SESSION — just run it)"
+        )
         intro = (
             f"A Playwright spec for this test case FAILED. Repair it by driving the REAL app live "
-            f"with browser-harness (already wired to a signed-in Chrome via BU_CDP_URL — just run it): "
+            f"with {drive_note}: "
             f"reproduce the failing step, find the REAL cause (wrong/stale selector, changed flow, "
             f"missing test data, timing), and emit a CORRECTED spec built from what "
             f"actually works on the live DOM. Keep the test intent + assertions, and keep the spec's "
@@ -226,9 +287,15 @@ def _build_prompt(
             f"## Failure\n{error}\n\n"
         )
     else:
+        drive_note = (
+            "browser-harness (it is already wired to a signed-in Chrome via BU_CDP_URL — just run it)"
+            if browser_driver != "playwright-cli"
+            else "playwright-cli (it is already wired to a signed-in Chrome via PW_CLI_CDP_URL/"
+            "PW_CLI_SESSION — just run it)"
+        )
         intro = (
             f"Author a Playwright spec for this test case by driving the REAL app live with "
-            f"browser-harness (it is already wired to a signed-in Chrome via BU_CDP_URL — just run it).\n\n"
+            f"{drive_note}.\n\n"
         )
     return (
         f"{intro}"
@@ -245,6 +312,7 @@ def _build_prompt(
         f"Auth: {auth}\n"
         f"Known routes: {routes}\n"
         f"Known selectors: {selectors}\n\n"
+        + verified_block
         + (f"## Shared library\n{plan_block}\n\n" if plan_block else "")
         + f"## Deliverables — write BOTH files into the current working directory\n"
         f"1. `{spec_filename}` — the Playwright spec (layered contract in the skill: import from "
@@ -266,7 +334,7 @@ def _build_prompt(
 def author_case(
     db, case, run, *, owner_id: int | None, run_id: int | None, plan: dict | None = None
 ) -> AuthoringResult:
-    """Author one case's spec by driving the real app live via browser-harness (#400).
+    """Author one case's spec by driving the real app live (#400).
 
     ``plan`` (#569) is the ticket's Automation Plan, whose ``create``/``extend``
     assets the caller has **already authored server-side** — it is rendered into the
@@ -274,14 +342,25 @@ def author_case(
     inlining locators. ``None`` (legacy path, no persistent project, planning
     failed) keeps the pre-#569 prompt exactly.
 
+    Reads Settings' ``browserDriver`` (#875) to decide which CLI drives the
+    browser and which skill/env vars go with it — see :func:`skill_for_driver`.
+
     Returns an :class:`AuthoringResult` with the emitted spec code and the
     runtime-verified discovery (already normalized for the KB). Raises
-    :class:`LiveAuthoringError` on a hard precondition failure (no browser-harness,
-    no base URL, no authenticated profile). Progress is streamed as
+    :class:`LiveAuthoringError` on a hard precondition failure (configured driver
+    unavailable, no base URL, no authenticated profile). Progress is streamed as
     ``authoring.progress`` on the run WebSocket. The launched Chrome is always torn
     down in ``finally``.
     """
-    if not claude_cli.browser_harness_available():
+    browser_driver = settings_store.load_settings().get("browserDriver", "browser-harness")
+    if browser_driver == "playwright-cli":
+        if not claude_cli.playwright_cli_available():
+            raise LiveAuthoringError(
+                "playwright-cli not found on the API host (needs `node` + an "
+                "installed `playwright` package). Bump/install it, or switch "
+                "Settings → Browser driver back to browser-harness."
+            )
+    elif not claude_cli.browser_harness_available():
         raise LiveAuthoringError(
             "browser-harness CLI not found on the API host. Install it "
             "(`uv tool install browser-harness`) to use live-authoring mode."
@@ -349,30 +428,43 @@ def author_case(
         proc = _launch_browser(base_url, port, profile_dir)
         if not _wait_cdp(port, _CDP_READY_TIMEOUT_S):
             raise LiveAuthoringError(f"Chrome CDP endpoint did not come up on port {port}.")
-        _publish("driving", message="Driving the app live with browser-harness")
+        _publish("driving", message=f"Driving the app live with {browser_driver}")
 
         prompt = _build_prompt(
-            case, context, spec_filename, sidecar_path.name, base_url, plan=plan
+            case, context, spec_filename, sidecar_path.name, base_url, plan=plan,
+            browser_driver=browser_driver,
+        )
+        session_name = _harness_name(run.code, case.code or str(case.id))
+        # Per SESSION, not a fixed name, for BOTH drivers: a named daemon/session
+        # sharing a name with another fights over one tab, which is what concurrent
+        # authoring runs would do. With the default name browser-harness attaches
+        # to `pages[0]` — whichever page is first in that Chrome — and this profile
+        # is the same one the manual login capture opens for the operator, so a tab
+        # they left there is restored and taken over; naming the session avoids that.
+        extra_env = (
+            {
+                # playwright-cli (#875) attaches to the SAME pre-authenticated
+                # Chrome the launcher above just armed with the captured session —
+                # the CDP-attach dance stays the same either way (it does the
+                # cookie/localStorage restoration, see authoring_browser.cjs; which
+                # CLI later drives clicks over that connection is orthogonal).
+                "PW_CLI_CDP_URL": f"http://127.0.0.1:{port}",
+                "PW_CLI_SESSION": session_name,
+                "PLAYWRIGHT_CLI_JS": str(settings.playwright_cli_js),
+            }
+            if browser_driver == "playwright-cli"
+            else {
+                "BU_CDP_URL": f"http://127.0.0.1:{port}",
+                "BU_NAME": session_name,
+            }
         )
         summary = claude_cli.run_agentic(
             prompt,
             workspace_dir=workspace,
-            skill="live-authoring",
+            skill=skill_for_driver(browser_driver),
             include_template=True,
             label=f"Live authoring: {case.ticket_external_id} · {case.code}",
-            extra_env={
-                "BU_CDP_URL": f"http://127.0.0.1:{port}",
-                # Name the daemon so the harness gives itself a DEDICATED tab (#739).
-                # With the default name it attaches to `pages[0]` — whichever page is
-                # first in that Chrome — and this profile is the same one the manual
-                # login capture opens for the operator, so a tab they left there is
-                # restored and taken over. Claude then drives the operator's tab.
-                #
-                # Per SESSION, not a fixed name: the harness's own comment says named
-                # daemons sharing a name fight over one tab, which is what concurrent
-                # authoring runs would do.
-                "BU_NAME": _harness_name(run.code, case.code or str(case.id)),
-            },
+            extra_env=extra_env,
             max_budget_usd=budget,
         )
     finally:

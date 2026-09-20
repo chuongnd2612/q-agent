@@ -468,6 +468,32 @@ def test_a_recovered_spec_regenerates_and_the_paired_agent_claims_it(
     assert body["systemPrompt"].strip()
 
 
+def test_enqueue_agent_authoring_threads_browser_driver_to_the_claimed_job(
+    client, db_session, workspace_dir
+):
+    """#875: the `browserDriver` setting picks the skill composed into
+    `system_prompt` AND rides along on the claim, so the agent knows which CLI
+    (and env vars) to use — the setting alone selects the whole code path."""
+    from app.routers.automation import _enqueue_agent_authoring
+    from tests.conftest import settings_override
+
+    user = _make_user(db_session)
+    token = _pair_device(db_session, user)
+    run, case, _spec = _seed_case(db_session, owner_id=user.id, spec_status=None)
+
+    with settings_override(browserDriver="playwright-cli"):
+        _enqueue_agent_authoring(db_session, run, case, _context())
+    db_session.commit()
+
+    resp = client.post("/agent/authoring/next", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["browserDriver"] == "playwright-cli"
+    # The composed system prompt is the playwright-cli skill, not browser-harness's.
+    assert "playwright-cli" in body["systemPrompt"]
+    assert "PW_CLI_CDP_URL" in body["taskPrompt"]
+
+
 # ------------------------------------------------------------ Stop must still work
 def test_stop_still_resets_stuck_specs_through_the_shared_query(workspace_dir, db_session):
     """#420's Stop path, now sharing ``reset_stuck_specs`` with the boot sweep."""
