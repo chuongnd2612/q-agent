@@ -591,6 +591,12 @@ export interface AuthoringJob {
   /** Authoring log verbosity from Settings (#438): "concise" hides raw tool/Bash
    * step lines in the agent's AGENT LOG, "verbose" shows them. */
   logVerbosity?: string;
+  /** Browser-automation CLI to drive (#875): "browser-harness" (default, a
+   * self-provisioned Python tool) or "playwright-cli" (Playwright's own
+   * scriptable `cli` subcommand — no extra provisioning, `playwright` already
+   * ships as the agent's execution dependency). Mirrors the Settings value the
+   * server composed the system/task prompts for. */
+  browserDriver?: string;
   /** The run owner's saved Claude credential (.credentials.json content) so the
    * local `claude` uses the app's Settings credential instead of a separate
    * `claude login`. Empty ⇒ fall back to the agent's own local login. */

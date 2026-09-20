@@ -1189,6 +1189,7 @@ def agent_authoring_next(
         model=claim["model"],
         max_budget_usd=claim["max_budget_usd"],
         log_verbosity=claim.get("log_verbosity", "concise"),
+        browser_driver=claim.get("browser_driver", "browser-harness"),
         claude_credentials=creds,
     ).model_dump(by_alias=True)
 

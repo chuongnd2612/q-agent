@@ -42,6 +42,7 @@ _STRING_VALUES = {
     "authoringMode": "live-harness",
     "healMode": "live-harness",
     "authoringLogVerbosity": "verbose",
+    "browserDriver": "playwright-cli",
 }
 
 

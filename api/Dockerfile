@@ -4,10 +4,11 @@
 #
 # Bakes in Python 3.13 + uv, the Node 20 runtime + the Claude Code CLI (AI runs
 # server-side; auth comes from in-app uploaded credentials, not the host), and
-# git (project-bootstrap clones application repos). It also ships chromium + the
-# browser-harness CLI so live spec-authoring (#400) can drive a real browser
-# server-side. It still ships NO Playwright test-runner — test *execution* is
-# offloaded to the paired Local Agent (set Execution target = Local Agent).
+# git (project-bootstrap clones application repos). It also ships chromium +
+# browser-harness AND Playwright's own `cli` subcommand (#875, `browserDriver`
+# setting) so live spec-authoring (#400) can drive a real browser server-side
+# either way. It still ships NO `@playwright/test` — spec *execution* is offloaded
+# to the paired Local Agent (set Execution target = Local Agent).
 #
 # Build context is the REPO ROOT (see docker-compose.yml) so it can also copy
 # the dedicated `skills/` the backend injects as Claude system prompts.
@@ -35,9 +36,20 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # over CDP via BU_CDP_URL. Isolated venv via uv tool — no clash with app deps.
 RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install browser-harness
 
+# Playwright's own scriptable `cli` subcommand (#875) — the alternative
+# `browserDriver` to browser-harness: Claude drives real locators/refs directly
+# instead of raw CDP coordinate clicks. `playwright` (>= 1.63, which ships the
+# `cli` subcommand) is installed globally alongside the Node runtime above, into
+# the SAME global node_modules Claude Code just landed in — `playwright_cli_js`
+# (app/config.py) resolves `<QAGENT_PLAYWRIGHT_NODE_MODULES>/playwright/cli.js`
+# from it, so live_authoring_service can `node` it directly with no PATH shim.
+RUN npm install -g playwright@^1.63.0 \
+ && npm cache clean --force
+
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/api/.venv \
-    PATH="/app/api/.venv/bin:${PATH}"
+    PATH="/app/api/.venv/bin:${PATH}" \
+    QAGENT_PLAYWRIGHT_NODE_MODULES=/usr/local/lib/node_modules
 
 WORKDIR /app/api
 

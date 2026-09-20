@@ -170,6 +170,68 @@ def _verified_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def verified_kb_selectors_and_routes(
+    context: dict[str, Any] | None,
+    *,
+    rank_query: str = "",
+    route_limit: int = 10,
+    selector_limit: int = 15,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return a project's KB routes/selectors already confirmed live (#875).
+
+    Filters ``context["routes"]``/``context["selectors"]`` down to the entries a
+    prior DOM-exploration pass stamped ``verified_at_runtime`` (ADR 0010 §6, the
+    same flag :func:`_verified_first` prefers), then relevance-ranks the survivors
+    against ``rank_query`` with the same :func:`_rank_by_relevance` used elsewhere
+    in this module. Live authoring feeds the result into its task prompt so Claude
+    is told which locators are already verified on the live app and can be used
+    directly instead of re-discovered from scratch (a screen the Planner already
+    explored isn't paid for twice).
+
+    Args:
+        context: Output of ``project_config_service.build_context`` (or None).
+        rank_query: Free text (typically the case's title + steps) to rank
+            candidates before truncating to the limits below.
+        route_limit: Max routes returned.
+        selector_limit: Max selectors returned.
+
+    Returns:
+        ``{"routes": [...], "selectors": [...]}`` — only ``verified_at_runtime``
+        entries, most relevant to ``rank_query`` first; empty lists when the
+        project has none (or no context at all).
+    """
+    if not context:
+        return {"routes": [], "selectors": []}
+    query_keywords = _keywords(rank_query)
+    verified_routes = [
+        r for r in (context.get("routes") or []) if isinstance(r, dict) and r.get("verified_at_runtime")
+    ]
+    verified_selectors = [
+        s for s in (context.get("selectors") or []) if isinstance(s, dict) and s.get("verified_at_runtime")
+    ]
+    ranked_routes = (
+        _rank_by_relevance(
+            verified_routes,
+            lambda r: f"{r.get('path', '')} {r.get('description', '')}",
+            query_keywords,
+            route_limit,
+        )
+        if verified_routes
+        else []
+    )
+    ranked_selectors = (
+        _rank_by_relevance(
+            verified_selectors,
+            lambda s: f"{s.get('screen', '')} {s.get('element', '')} {s.get('selector', '')}",
+            query_keywords,
+            selector_limit,
+        )
+        if verified_selectors
+        else []
+    )
+    return {"routes": ranked_routes, "selectors": ranked_selectors}
+
+
 def _pinned_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Stable-sort business facts so pinned (human-corrected) ones come first.
 

@@ -69,6 +69,12 @@ class AgentAuthoringSession(Base):
     model: Mapped[str] = mapped_column(String(120), default="")
     max_budget_usd: Mapped[float] = mapped_column(Float, default=0.0)
     log_verbosity: Mapped[str] = mapped_column(String(24), default="concise")
+    # Browser-automation CLI the agent should drive (#875): "browser-harness"
+    # (default) or "playwright-cli". Mirrors Settings' `browserDriver` at
+    # enqueue time — the system/task prompts already assume one or the other
+    # (see `live_authoring_service.skill_for_driver`), so the agent needs to know
+    # which tooling to provision and which env vars to set.
+    browser_driver: Mapped[str] = mapped_column(String(24), default="browser-harness")
 
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     created_at: Mapped[datetime] = timestamp_column()

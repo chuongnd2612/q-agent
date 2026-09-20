@@ -184,6 +184,20 @@ class Settings(BaseSettings):
     playwright_node_modules: Path = REPO_ROOT / "app" / "node_modules"
 
     @property
+    def playwright_cli_js(self) -> Path:
+        """Path to Playwright's own scriptable ``cli`` subcommand entry (#875).
+
+        Used by live-authoring/live-self-heal when ``browserDriver ==
+        "playwright-cli"`` (see ``claude_cli.playwright_cli_available`` and
+        ``live_authoring_service``) as ``node <this> cli -s=<session> <command>``,
+        replacing the third-party ``browser-harness`` CLI. Resolved off
+        :attr:`playwright_node_modules` — the same install ``@playwright/test``
+        execution already uses — rather than a separate config knob, since
+        ``playwright`` ships as its dependency.
+        """
+        return self.playwright_node_modules / "playwright" / "cli.js"
+
+    @property
     def resolved_database_url(self) -> str:
         if self.database_url:
             return self.database_url
