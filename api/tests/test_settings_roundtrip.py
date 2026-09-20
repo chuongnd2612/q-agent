@@ -43,6 +43,7 @@ _STRING_VALUES = {
     "healMode": "live-harness",
     "authoringLogVerbosity": "verbose",
     "browserDriver": "playwright-cli",
+    "testCaseMode": "live-planner",
 }
 
 
@@ -55,7 +56,13 @@ def _updatable_fields():
 def test_every_settings_field_round_trips(client, workspace_dir, alias, annotation):
     value = _STRING_VALUES.get(alias, _sample_value(alias, annotation))
     if value is None:
-        pytest.skip(f"no sample value defined for {alias}")
+        # Fail rather than skip: a skip here is the same silent hole this file
+        # exists to close. `_sample_value` returns None for str fields, so a new
+        # string setting would otherwise be "covered" by a test that never ran.
+        pytest.fail(
+            f"{alias} has no sample value — add a real alternative to its default "
+            f"in _STRING_VALUES so this field is actually round-tripped."
+        )
 
     resp = client.put("/settings", json={alias: value})
 
