@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.prompts import render_dom_snapshot, render_project_context
+from app.services.prompts import render_dom_snapshot, render_exploration_context, render_project_context
 
 
 def test_render_project_context_ranks_routes_by_relevance():
@@ -95,6 +95,47 @@ def test_render_dom_snapshot_lists_identified_elements():
 def test_render_dom_snapshot_empty_is_blank():
     assert render_dom_snapshot(None) == ""
     assert render_dom_snapshot({"elements": []}) == ""
+
+
+def test_render_exploration_context_blank_when_none_or_empty():
+    """No exploration ran, or nothing was observed — the section renders as "" (#877)."""
+    assert render_exploration_context(None) == ""
+    assert render_exploration_context({"routes": [], "selectors": [], "log": []}) == ""
+
+
+def test_render_exploration_context_surfaces_observed_routes_selectors_and_log():
+    """A completed pass renders its goal, outcome, observed routes/selectors and steps."""
+    exploration = {
+        "target": {"ticket": "SUR-1428", "screen": "Add password reset flow", "goal": "Reach the reset screen"},
+        "stop_reason": "done",
+        "steps_taken": 2,
+        "routes": [{"path": "/reset", "description": "Observed during exploration"}],
+        "selectors": [{"screen": "Reset", "element": "Email", "selector": "#email", "strategy": "css"}],
+        "log": [
+            {"step": 1, "action": "goto", "args": {"url": "/reset"}, "reasoning": "Navigate to reset", "observedUrl": "/reset"},
+        ],
+    }
+    block = render_exploration_context(exploration)
+    assert "Live exploration" in block
+    assert "Reach the reset screen" in block
+    assert "done after 2 step(s)" in block
+    assert "/reset" in block
+    assert "#email" in block
+    assert "Navigate to reset" in block
+
+
+def test_render_exploration_context_nothing_reachable_says_so():
+    """Explored but nothing observed — says so rather than implying grounding exists."""
+    exploration = {
+        "target": {"screen": "X"},
+        "stop_reason": "unreachable",
+        "steps_taken": 3,
+        "routes": [],
+        "selectors": [],
+        "log": [{"step": 1, "action": "goto", "args": {"url": "/x"}, "reasoning": "try", "observedUrl": "/x"}],
+    }
+    block = render_exploration_context(exploration)
+    assert "Nothing was confirmed reachable" in block
 
 
 def test_build_fix_prompt_includes_discovered_selector():

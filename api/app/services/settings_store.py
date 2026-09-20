@@ -71,6 +71,14 @@ DEFAULTS: dict[str, Any] = {
     # generation/edit/heal (default); False = bypass gating and accept every
     # spec as runnable. See placeholder_gate + automation._gate_spec_or_bypass.
     "gateEnabled": True,
+    # Whether test-case generation is grounded in a live-exploration pass BEFORE
+    # authoring cases (#877, ADR 0010 §8). "text" (default) = today's pure-text
+    # generation, unchanged. "live-planner" = when the ticket's project has a
+    # resolvable base_url, run one exploration_agent.explore() pass targeting the
+    # ticket first, then author cases grounded in what was actually observed
+    # (falls back to "text" behavior when no base_url resolves). See
+    # ai_service._process_run_ticket.
+    "testCaseMode": "text",
 }
 
 
