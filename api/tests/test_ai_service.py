@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.models.run import Run, RunTicket
 from app.models.testcase import TestCase
-from app.services import ai_service
+from app.services import ai_service, exploration_agent
 from app.services.claude_cli import ClaudeError
 from app.services.skills import TEST_CASE_REVIEWER
 
@@ -339,6 +339,188 @@ def test_pipeline_parallel_processes_all_tickets(db_session, seed_ticket, monkey
         assert n == len(CANNED_CASES)
     db_session.refresh(run)
     assert run.status == "review"
+
+
+def _fake_exploration_result(**overrides) -> exploration_agent.ExplorationResult:
+    defaults = dict(
+        discovered={
+            "routes": [{"path": "/reset", "description": "Observed during exploration"}],
+            "selectors": [
+                {"screen": "Add password reset flow", "element": "Reset link", "selector": "#reset", "strategy": "css"}
+            ],
+        },
+        log=[
+            {
+                "step": 1,
+                "reasoning": "Navigate to the reset screen",
+                "action": "goto",
+                "args": {"url": "/reset"},
+                "observedUrl": "/reset",
+            }
+        ],
+        stop_reason="done",
+        steps_taken=1,
+        budget_spent={"usd": 0.01, "tokens": 100},
+        wrote_kb=True,
+    )
+    defaults.update(overrides)
+    return exploration_agent.ExplorationResult(**defaults)
+
+
+# --------------------------------------------------- testCaseMode="live-planner" (#877)
+def test_live_planner_mode_is_off_by_default(db_session, seed_ticket, monkeypatch):
+    """`testCaseMode` defaults to "text" — exploration never runs unless opted in."""
+    run = _make_run(db_session, seed_ticket.external_id)
+
+    def _boom(*a, **k):
+        raise AssertionError("explore() must not run under the default testCaseMode")
+
+    monkeypatch.setattr(ai_service.exploration_agent, "explore", _boom)
+    responses = iter([{"analysis": CANNED_ANALYSIS, "cases": CANNED_CASES}, CANNED_REVIEW_EMPTY])
+    monkeypatch.setattr(ai_service, "run_json", lambda *a, **k: next(responses))
+
+    ai_service.run_generation_pipeline(run.id, blocking=True)
+
+    run_ticket = db_session.query(RunTicket).filter(RunTicket.run_id == run.id).first()
+    assert run_ticket.gen_status == "done"
+
+
+def test_live_planner_explores_before_authoring_when_base_url_resolves(db_session, seed_ticket, monkeypatch):
+    """live-planner + a resolvable base_url explores first, grounding both prompts."""
+    from app.services import settings_store
+
+    run = _make_run(db_session, seed_ticket.external_id)
+    monkeypatch.setattr(
+        settings_store, "load_settings",
+        lambda: {"testCaseMode": "live-planner", "maxCasesPerTicket": 8},
+    )
+    monkeypatch.setattr(
+        ai_service.project_config_service, "context_for_ticket",
+        lambda *a, **k: {"projectKey": "surency", "repo": "web", "baseUrl": "https://app.test"},
+    )
+
+    explore_calls: list[dict] = []
+
+    def _fake_explore(db, *, project_key, repo, target, run_id, owner_id, allow_state_changing):
+        explore_calls.append(
+            {
+                "project_key": project_key,
+                "repo": repo,
+                "target": target,
+                "run_id": run_id,
+                "allow_state_changing": allow_state_changing,
+            }
+        )
+        return _fake_exploration_result()
+
+    monkeypatch.setattr(ai_service.exploration_agent, "explore", _fake_explore)
+    monkeypatch.setattr(ai_service.exploration_agent, "audit_exploration_result", lambda **k: None)
+
+    prompts_seen: list[str] = []
+
+    def _fake_run_json(prompt, **k):
+        prompts_seen.append(prompt)
+        if k.get("skill") == TEST_CASE_REVIEWER:
+            return CANNED_REVIEW_EMPTY
+        return {"analysis": CANNED_ANALYSIS, "cases": CANNED_CASES}
+
+    monkeypatch.setattr(ai_service, "run_json", _fake_run_json)
+
+    ai_service.run_generation_pipeline(run.id, blocking=True)
+
+    # Exploration ran exactly once, before either case-authoring call, targeting
+    # the ticket's own text (no case exists yet to derive a target from), with
+    # the ADR 0010 §8 amendment's state-changing policy applied unconditionally.
+    assert len(explore_calls) == 1
+    assert explore_calls[0]["project_key"] == "surency"
+    assert explore_calls[0]["repo"] == "web"
+    assert explore_calls[0]["run_id"] == run.id
+    assert explore_calls[0]["allow_state_changing"] is True
+    assert explore_calls[0]["target"]["ticket"] == seed_ticket.external_id
+    assert explore_calls[0]["target"]["screen"] == seed_ticket.title
+
+    # Both case-authoring prompts (generate + review) are grounded in the
+    # exploration transcript.
+    assert len(prompts_seen) == 2
+    for prompt in prompts_seen:
+        assert "Live exploration" in prompt
+        assert "/reset" in prompt
+
+    run_ticket = db_session.query(RunTicket).filter(RunTicket.run_id == run.id).first()
+    assert run_ticket.gen_status == "done"
+
+
+def test_live_planner_falls_back_to_text_without_base_url(db_session, seed_ticket, monkeypatch):
+    """live-planner with NO resolvable base_url skips exploration cleanly (#877)."""
+    from app.services import settings_store
+
+    run = _make_run(db_session, seed_ticket.external_id)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"testCaseMode": "live-planner"})
+    # seed_ticket has no project config, so context_for_ticket resolves no baseUrl —
+    # explore() must never be called.
+
+    def _boom(*a, **k):
+        raise AssertionError("explore() must not run without a resolvable base_url")
+
+    monkeypatch.setattr(ai_service.exploration_agent, "explore", _boom)
+
+    prompts_seen: list[str] = []
+
+    def _fake_run_json(prompt, **k):
+        prompts_seen.append(prompt)
+        if k.get("skill") == TEST_CASE_REVIEWER:
+            return CANNED_REVIEW_EMPTY
+        return {"analysis": CANNED_ANALYSIS, "cases": CANNED_CASES}
+
+    monkeypatch.setattr(ai_service, "run_json", _fake_run_json)
+
+    ai_service.run_generation_pipeline(run.id, blocking=True)
+
+    run_ticket = db_session.query(RunTicket).filter(RunTicket.run_id == run.id).first()
+    assert run_ticket.gen_status == "done"
+    assert prompts_seen and "Live exploration" not in prompts_seen[0]
+
+
+def test_live_planner_exploration_failure_falls_back_to_text_only(db_session, seed_ticket, monkeypatch):
+    """A crashed exploration pass is best-effort — generation still completes (#877)."""
+    from app.services import settings_store
+
+    run = _make_run(db_session, seed_ticket.external_id)
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"testCaseMode": "live-planner"})
+    monkeypatch.setattr(
+        ai_service.project_config_service, "context_for_ticket",
+        lambda *a, **k: {"projectKey": "surency", "repo": "web", "baseUrl": "https://app.test"},
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError("Playwright driver crashed")
+
+    monkeypatch.setattr(ai_service.exploration_agent, "explore", _boom)
+
+    responses = iter([{"analysis": CANNED_ANALYSIS, "cases": CANNED_CASES}, CANNED_REVIEW_EMPTY])
+    monkeypatch.setattr(ai_service, "run_json", lambda *a, **k: next(responses))
+
+    ai_service.run_generation_pipeline(run.id, blocking=True)
+
+    run_ticket = db_session.query(RunTicket).filter(RunTicket.run_id == run.id).first()
+    assert run_ticket.gen_status == "done"
+
+
+def test_exploration_target_derives_from_ticket_text():
+    """No case exists yet for a proactive Planner target — it's derived off the ticket."""
+    from app.models.ticket import Ticket
+
+    ticket = Ticket(
+        external_id="SUR-1428",
+        provider_kind="ado",
+        title="Add password reset flow",
+        acceptance_criteria=["Given a valid email, a reset link is sent", "Reset link expires after 30 minutes"],
+    )
+    target = ai_service._exploration_target_for_ticket(ticket)
+    assert target["ticket"] == "SUR-1428"
+    assert target["screen"] == "Add password reset flow"
+    assert "Add password reset flow" in target["goal"]
+    assert "Given a valid email" in target["goal"]
 
 
 def test_next_case_code_increments(db_session, seed_ticket):
