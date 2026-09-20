@@ -66,12 +66,12 @@ export function ExportProjectPanel({
 
   return (
     <div
-      className="mb-3.5 rounded-2xl border border-white/[0.09] p-4"
+      className="mb-3.5 rounded-2xl border border-bd2 p-4"
       // Opaque surface, not GlassCard: this panel is long-form text over the shell's
       // animated constellation background, and a translucent card made the hint text
       // genuinely hard to read (verified in the runtime screenshots). Same reasoning —
       // and the same value — as ProjectFilePanel.
-      style={{ background: "rgba(8,8,13,.92)" }}
+      style={{ background: "var(--pop)" }}
     >
       <CollapsibleSection title={t("export.title")}>
         <p className="m-0 mb-3.5 text-xs leading-relaxed text-muted">
@@ -94,18 +94,18 @@ export function ExportProjectPanel({
             </span>
           </div>
 
-          <div className="h-px bg-white/[0.07]" />
+          <div className="h-px bg-card3" />
 
           <div className="flex items-start gap-2.5" data-testid="export-remote-coming-soon">
-            <GitBranch size={15} className="mt-0.5 shrink-0 text-ink-soft" strokeWidth={2} />
+            <GitBranch size={15} className="mt-0.5 shrink-0 text-txt3" strokeWidth={2} />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[12.5px] font-semibold text-ink-soft">
+                <span className="text-[12.5px] font-semibold text-txt3">
                   {t("export.remoteTitle")}
                 </span>
                 <span
-                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(139,92,246,.32)] px-2 py-0.5 text-[10.5px] font-semibold text-violet"
-                  style={{ background: "rgba(139,92,246,.12)" }}
+                  className="inline-flex items-center gap-1 rounded-full border border-pb px-2 py-0.5 text-[10.5px] font-semibold text-ps-text-text"
+                  style={{ background: "var(--pt)" }}
                 >
                   <Clock3 size={11} strokeWidth={2.4} />
                   {t("export.comingSoon")}

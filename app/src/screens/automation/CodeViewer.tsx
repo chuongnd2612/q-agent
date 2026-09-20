@@ -166,10 +166,16 @@ export function CodeHighlight({
     return set;
   }, [folded, endByStart]);
 
-  const gutterBg = "#0b0b12";
+  // The gutter is `position: sticky` over horizontally-scrolling code, so it has
+  // to be OPAQUE or the code slides visibly underneath it. `--pop` is the token
+  // for exactly that (#191921 dark / #ffffff light); the changed-line variant
+  // layers `--okTint` over the same opaque base rather than hard-coding a second
+  // near-black, which is why it is a two-stop background rather than one colour.
+  const gutterBg = "var(--pop)";
+  const gutterChangedBg = "linear-gradient(var(--okTint),var(--okTint)), var(--pop)";
 
   return (
-    <div className="overflow-x-auto font-mono text-[12.5px] leading-[1.75] text-ink">
+    <div className="overflow-x-auto font-mono text-[12.5px] leading-[1.75] text-txt">
       <div className="min-w-max py-[18px]">
         {lines.map((line, i) => {
           if (hidden.has(i)) return null;
@@ -182,23 +188,23 @@ export function CodeHighlight({
               key={i}
               ref={i === scrollToLine ? scrollTargetRef : undefined}
               className="flex"
-              style={isChanged ? { background: "rgba(16,185,129,.10)" } : undefined}
+              style={isChanged ? { background: "var(--okTint)" } : undefined}
             >
               <span
                 className="sticky left-0 z-10 flex select-none items-center gap-1 pl-4 pr-3"
-                style={{ background: isChanged ? "#0c1512" : gutterBg }}
+                style={{ background: isChanged ? gutterChangedBg : gutterBg }}
               >
                 {isFoldable ? (
                   <button
                     type="button"
                     onClick={() => onToggle(i)}
-                    className="flex h-[14px] w-[14px] items-center justify-center text-faint hover:text-ink-soft"
+                    className="flex h-[14px] w-[14px] items-center justify-center text-faint hover:text-txt3"
                     aria-label={isFolded ? t("spec.code.expandRegion") : t("spec.code.collapseRegion")}
                   >
                     {isFolded ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                   </button>
                 ) : isChanged ? (
-                  <span className="flex h-[14px] w-[14px] items-center justify-center font-bold text-emerald-400">+</span>
+                  <span className="flex h-[14px] w-[14px] items-center justify-center font-bold text-ok">+</span>
                 ) : (
                   <span className="h-[14px] w-[14px]" />
                 )}
@@ -234,14 +240,14 @@ function highlightLine(line: string) {
   if (last < line.length) tokens.push({ text: line.slice(last) });
 
   return tokens.map((t, i) => {
-    if (t.cls === "cmt") return <span key={i} style={{ color: "#6c6c7e" }}>{t.text}</span>;
-    if (t.cls === "str") return <span key={i} style={{ color: "#a5d6a7" }}>{t.text}</span>;
+    if (t.cls === "cmt") return <span key={i} style={{ color: "var(--label)" }}>{t.text}</span>;
+    if (t.cls === "str") return <span key={i} style={{ color: "var(--ok)" }}>{t.text}</span>;
     const parts = t.text.split(TS_KEYWORD_SPLIT);
     return (
       <span key={i}>
         {parts.map((p, j) =>
           TS_KEYWORDS.has(p) ? (
-            <span key={j} style={{ color: "#c792ea" }}>
+            <span key={j} style={{ color: "var(--psText)" }}>
               {p}
             </span>
           ) : (

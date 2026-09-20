@@ -32,21 +32,21 @@ export function GenerationFailureBanner({
   return (
     <div
       className="mb-3.5 rounded-[18px] border px-4 py-3.5"
-      style={{ background: "rgba(244,63,94,.10)", borderColor: "rgba(244,63,94,.30)" }}
+      style={{ background: "var(--dangerTint)", borderColor: "var(--dangerTint)" }}
     >
       <div className="flex items-start gap-3">
-        <AlertTriangle size={18} className="mt-[1px] shrink-0 text-danger-soft" strokeWidth={2.2} />
+        <AlertTriangle size={18} className="mt-[1px] shrink-0 text-danger" strokeWidth={2.2} />
         <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-bold text-danger-soft">
+          <div className="text-[13.5px] font-bold text-danger">
             {t("spec.genFailed.title", { failed, attempted: error.attempted })}
           </div>
           <ul className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0">
             {error.failures.map((f) => (
               <li key={f.caseId} className="flex flex-wrap items-baseline gap-2 text-[12.5px]">
-                <span className="rounded-md bg-white/[0.07] px-1.5 py-[1px] font-mono text-[11.5px] text-ink-soft">
+                <span className="rounded-md bg-card3 px-1.5 py-[1px] font-mono text-[11.5px] text-txt3">
                   {f.code}
                 </span>
-                <span className="text-ink-dim">{f.message}</span>
+                <span className="text-txt4">{f.message}</span>
               </li>
             ))}
           </ul>

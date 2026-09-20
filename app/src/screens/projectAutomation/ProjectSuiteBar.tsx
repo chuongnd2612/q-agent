@@ -61,8 +61,8 @@ export function ProjectSuiteBar({
 
   return (
     <div
-      className="flex flex-col gap-2.5 rounded-2xl border border-white/[0.09] px-4 py-3.5"
-      style={{ background: "rgba(8,8,13,.92)" }}
+      className="flex flex-col gap-2.5 rounded-2xl border border-bd2 px-4 py-3.5"
+      style={{ background: "var(--pop)" }}
       data-testid="project-suite-bar"
     >
       <div className="flex flex-col gap-2.5 md:flex-row md:items-center">
@@ -75,13 +75,13 @@ export function ProjectSuiteBar({
           disabled={pending || !runnable}
           title={reason}
           data-testid="project-suite-run"
-          className="flex w-full items-center justify-center gap-2 rounded-xl px-[18px] py-2.5 text-[13px] font-bold text-white disabled:opacity-60 md:w-auto md:shrink-0"
+          className="flex w-full items-center justify-center gap-2 rounded-xl px-[18px] py-2.5 text-[13px] font-bold text-p-on disabled:opacity-60 md:w-auto md:shrink-0"
           style={{
-            background: "linear-gradient(135deg,#8b5cf6,#6366f1)",
-            boxShadow: "0 8px 22px -8px rgba(139,92,246,.8)",
+            background: "var(--pg)",
+            boxShadow: "0 8px 22px -8px var(--pglow)",
           }}
         >
-          {pending ? <Spinner size={14} /> : <Play size={14} fill="#fff" />}
+          {pending ? <Spinner size={14} /> : <Play size={14} fill="var(--pOn)" />}
           {t("automation.runSuite.label", { count: selectedCount })}
         </button>
       </div>
@@ -121,29 +121,29 @@ function ExecutionProgress({ execution }: { execution: ProjectExecutionOut }) {
   const percent = active ? Math.max(0, Math.min(100, execution.progress)) : 100;
 
   return (
-    <div className="flex flex-col gap-1.5 border-t border-white/[0.07] pt-2.5" data-testid="project-exec-progress">
+    <div className="flex flex-col gap-1.5 border-t border-bd pt-2.5" data-testid="project-exec-progress">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11.5px]">
         {active && <Spinner size={12} />}
-        <span className="font-mono font-bold text-ink">#{execution.id}</span>
+        <span className="font-mono font-bold text-txt">#{execution.id}</span>
         <span className="text-muted">
           {t(`automation.runSuite.status.${active ? "running" : "finished"}`)}
         </span>
-        <span className="text-emerald-400">
+        <span className="text-ok">
           {t("automation.runSuite.passed", { count: execution.passed })}
         </span>
-        <span className={execution.failed > 0 ? "text-rose-400" : "text-faint"}>
+        <span className={execution.failed > 0 ? "text-danger" : "text-faint"}>
           {t("automation.runSuite.failed", { count: execution.failed })}
         </span>
         <span className="text-faint">
           {t("automation.runSuite.ofTotal", { count: execution.total })}
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.08]">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-card3">
         <div
           className="h-full rounded-full transition-all"
           style={{
             width: `${percent}%`,
-            background: execution.failed > 0 ? "#f43f5e" : "linear-gradient(90deg,#8b5cf6,#6366f1)",
+            background: execution.failed > 0 ? "var(--danger)" : "var(--pg)",
           }}
         />
       </div>

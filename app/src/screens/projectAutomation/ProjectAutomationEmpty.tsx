@@ -78,17 +78,17 @@ export function NoFileSelected() {
   const { t } = useTranslation("projects");
   return (
     <div
-      className="flex flex-col items-center justify-center rounded-2xl border border-white/[0.09] px-8 py-16 text-center"
-      style={{ background: "rgba(8,8,13,.92)", minHeight: 260 }}
+      className="flex flex-col items-center justify-center rounded-2xl border border-bd2 px-8 py-16 text-center"
+      style={{ background: "var(--pop)", minHeight: 260 }}
       data-testid="automation-no-file-selected"
     >
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.05]">
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-card2">
         <MousePointerClick size={24} className="text-muted" />
       </div>
       <h3 className="m-0 mb-1.5 text-[15px] font-extrabold">
         {t("automation.selectFileTitle")}
       </h3>
-      <p className="m-0 max-w-[380px] text-[12.5px] leading-relaxed text-ink-dim">
+      <p className="m-0 max-w-[380px] text-[12.5px] leading-relaxed text-txt4">
         {t("automation.selectFileBody")}
       </p>
     </div>
@@ -100,12 +100,12 @@ export function NoFileSelected() {
 export function FileLoadingSkeleton() {
   return (
     <div
-      className="overflow-hidden rounded-2xl border border-white/[0.09]"
-      style={{ background: "rgba(8,8,13,.92)" }}
+      className="overflow-hidden rounded-2xl border border-bd2"
+      style={{ background: "var(--pop)" }}
       data-testid="automation-file-loading"
       aria-busy="true"
     >
-      <div className="flex items-center gap-2.5 border-b border-white/[0.06] px-4 py-3">
+      <div className="flex items-center gap-2.5 border-b border-bd3 px-4 py-3">
         <ShimmerBar className="h-3.5 w-[220px]" />
         <ShimmerBar className="h-3.5 w-[70px]" />
       </div>
@@ -127,7 +127,7 @@ function ShimmerBar({
 }) {
   return (
     <div
-      className={`rounded bg-white/[0.06] ${className ?? ""}`}
+      className={`rounded bg-card3 ${className ?? ""}`}
       // `glowPulse` is the shell's existing opacity breathe (index.css); there is
       // no bare `pulse` keyframe to lean on, and adding one would duplicate it.
       style={{ animation: "glowPulse 1.6s ease-in-out infinite", ...style }}

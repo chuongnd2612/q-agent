@@ -29,14 +29,14 @@ export function NoAutomationEmptyState({
     <div className="glass flex flex-col items-center rounded-[22px] px-5 py-10 text-center md:px-8 md:py-14">
       <div
         className="mb-5 flex h-[70px] w-[70px] items-center justify-center rounded-[22px]"
-        style={{ background: "linear-gradient(135deg,rgba(139,92,246,.24),rgba(99,102,241,.12))" }}
+        style={{ background: "linear-gradient(135deg,var(--pb),var(--pt))" }}
       >
-        <FileCode size={30} color="#a78bfa" strokeWidth={1.9} />
+        <FileCode size={30} color="var(--psText)" strokeWidth={1.9} />
       </div>
       <h2 className="m-0 mb-2 text-xl font-extrabold">{t("spec.empty.title")}</h2>
       {automatableCount > 0 ? (
         <>
-          <p className="m-0 mb-[22px] max-w-[420px] text-[13.5px] leading-relaxed text-ink-dim">
+          <p className="m-0 mb-[22px] max-w-[420px] text-[13.5px] leading-relaxed text-txt4">
             {automatableCount === 1
               ? t("spec.empty.readyOne", { count: automatableCount })
               : t("spec.empty.readyOther", { count: automatableCount })}
@@ -46,7 +46,7 @@ export function NoAutomationEmptyState({
           </Button>
         </>
       ) : failed ? null : (
-        <p className="m-0 max-w-[420px] text-[13.5px] leading-relaxed text-ink-dim">
+        <p className="m-0 max-w-[420px] text-[13.5px] leading-relaxed text-txt4">
           {t("spec.empty.none")}
         </p>
       )}

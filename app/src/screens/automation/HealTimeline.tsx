@@ -21,16 +21,16 @@ export function healTimeAgo(iso: string, t: TFunction): string {
 /** Renders a unified-diff string with +/-/@@ lines colored. */
 export function DiffBlock({ diff }: { diff: string }) {
   return (
-    <div className="mt-2 overflow-x-auto rounded-lg border border-white/[0.07] bg-[rgba(8,8,13,.6)] p-2.5">
+    <div className="mt-2 overflow-x-auto rounded-lg border border-bd bg-[var(--code)] p-2.5">
       <pre className="m-0 font-mono text-[11.5px] leading-[1.6]">
         {diff.split("\n").map((line, i) => {
           const c = line.startsWith("+")
-            ? "#6ee7b7"
+            ? "var(--ok)"
             : line.startsWith("-")
-              ? "#fb7185"
+              ? "var(--danger)"
               : line.startsWith("@@")
-                ? "#67e8f9"
-                : "#8b8b9e";
+                ? "var(--cyanSoft)"
+                : "var(--muted)";
           return (
             <div key={i} style={{ color: c, whiteSpace: "pre" }}>
               {line || " "}
@@ -50,19 +50,19 @@ export function HealTimeline({ report }: { report: HealReport }) {
   const healed = report.finalStatus === "pass";
   const n = report.attempts.length;
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/[0.09]" style={{ background: "rgba(8,8,13,.55)" }}>
+    <div className="overflow-hidden rounded-2xl border border-bd2" style={{ background: "var(--code)" }}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2.5 border-b border-white/[0.06] px-4 py-3 text-left hover:bg-white/[0.03]"
+        className="flex w-full items-center gap-2.5 border-b border-bd3 px-4 py-3 text-left hover:bg-inset"
       >
-        <Wand2 size={14} className="shrink-0 text-emerald-300" />
+        <Wand2 size={14} className="shrink-0 text-ok" />
         <span className="text-[13px] font-bold">{t("progress.heal.timeline.title")}</span>
         <span
           className="rounded-full px-2 py-0.5 text-[11px] font-bold"
           style={
             healed
-              ? { background: "rgba(16,185,129,.14)", color: "#6ee7b7" }
-              : { background: "rgba(244,63,94,.14)", color: "#fb7185" }
+              ? { background: "var(--okTint)", color: "var(--ok)" }
+              : { background: "var(--dangerTint)", color: "var(--danger)" }
           }
         >
           {healed
@@ -79,15 +79,15 @@ export function HealTimeline({ report }: { report: HealReport }) {
       {open && (
         <div className="flex flex-col gap-2.5 p-3.5">
           {report.attempts.map((a: HealAttempt) => (
-            <div key={a.attempt} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+            <div key={a.attempt} className="rounded-xl border border-bd3 bg-inset p-3">
               <div className="flex items-center gap-2">
                 <span className="text-[12.5px] font-bold">{t("progress.heal.timeline.attempt", { n: a.attempt })}</span>
                 <span
                   className="rounded-md px-1.5 py-0.5 text-[10px] font-bold"
                   style={
                     a.status === "pass"
-                      ? { background: "rgba(16,185,129,.14)", color: "#6ee7b7" }
-                      : { background: "rgba(244,63,94,.14)", color: "#fb7185" }
+                      ? { background: "var(--okTint)", color: "var(--ok)" }
+                      : { background: "var(--dangerTint)", color: "var(--danger)" }
                   }
                 >
                   {a.status === "pass" ? t("progress.heal.timeline.passed") : t("progress.heal.timeline.failed")}
@@ -97,15 +97,15 @@ export function HealTimeline({ report }: { report: HealReport }) {
                 </span>
               </div>
               {a.error && (
-                <div className="mt-2 max-h-40 overflow-auto rounded-lg border border-white/[0.06] bg-[rgba(8,8,13,.6)] p-2.5">
-                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[#f2b8c0]">
+                <div className="mt-2 max-h-40 overflow-auto rounded-lg border border-bd3 bg-[var(--code)] p-2.5">
+                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[var(--danger)]">
                     {a.error}
                   </pre>
                 </div>
               )}
               {a.fixed && (
                 <>
-                  <div className="mt-2 flex items-center gap-1.5 text-[11.5px] font-semibold text-emerald-300">
+                  <div className="mt-2 flex items-center gap-1.5 text-[11.5px] font-semibold text-ok">
                     <Wand2 size={12} /> {t("progress.heal.timeline.claudeRewrote")}
                   </div>
                   {a.diff && <DiffBlock diff={a.diff} />}

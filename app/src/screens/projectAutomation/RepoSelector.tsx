@@ -51,7 +51,7 @@ export function RepoSelector({
   if (repos.length <= SEGMENTED_MAX) {
     return (
       <div
-        className="flex items-center gap-0.5 rounded-[10px] border border-white/[0.08] bg-white/[0.04] p-0.5"
+        className="flex items-center gap-0.5 rounded-[10px] border border-bd2 bg-card p-0.5"
         role="group"
         aria-label={t("automation.repoSelectorLabel")}
         data-testid="repo-selector-segmented"
@@ -67,16 +67,16 @@ export function RepoSelector({
               title={`${labelOf(r)} · ${countOf(r)}`}
               className={cn(
                 "flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-semibold transition-colors",
-                active ? "text-white" : "text-ink-dim hover:text-white",
+                active ? "text-p-on" : "text-txt4 hover:text-txt",
               )}
               style={
                 active
-                  ? { background: "linear-gradient(135deg,rgba(139,92,246,.9),rgba(99,102,241,.75))" }
+                  ? { background: "var(--pg)" }
                   : undefined
               }
             >
               <span className="max-w-[160px] truncate font-mono">{labelOf(r)}</span>
-              <span className={active ? "text-white/70" : "text-faint"}>{r.specCount}</span>
+              <span className={active ? "text-p-on/70" : "text-faint"}>{r.specCount}</span>
             </button>
           );
         })}
@@ -108,10 +108,10 @@ export function RepoSelector({
                     close();
                   }}
                   data-on={active}
-                  className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-white/[0.06] data-[on=true]:bg-[rgba(139,92,246,.16)]"
+                  className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[13px] hover:bg-card3 data-[on=true]:bg-[var(--pt)]"
                 >
                   <span className="min-w-0 flex-1 truncate font-mono">{labelOf(r)}</span>
-                  <span className="shrink-0 text-[11px] text-ink-dim">{countOf(r)}</span>
+                  <span className="shrink-0 text-[11px] text-txt4">{countOf(r)}</span>
                 </button>
               );
             })}

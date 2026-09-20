@@ -41,16 +41,16 @@ export function ProjectFilePanel({ file }: { file: ProjectFile }) {
 
   return (
     <div
-      className="overflow-hidden rounded-2xl border border-white/[0.09]"
+      className="overflow-hidden rounded-2xl border border-bd2"
       // Opaque surface (no backdrop-filter): this panel layers over the animated
       // shell, and a filter would also trap child stacking contexts.
-      style={{ background: "rgba(8,8,13,.92)" }}
+      style={{ background: "var(--pop)" }}
     >
-      <div className="flex flex-wrap items-center gap-2.5 border-b border-white/[0.06] px-4 py-3">
-        <span className="font-mono text-[12.5px] text-ink-soft">{file.path}</span>
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-bd3 px-4 py-3">
+        <span className="font-mono text-[12.5px] text-txt3">{file.path}</span>
         <span
           className="rounded-md px-2 py-0.5 text-[10px] font-bold"
-          style={{ background: "rgba(139,92,246,.14)", color: "#c4b5fd" }}
+          style={{ background: "var(--pt)", color: "var(--psText)" }}
         >
           {t(`projectFiles.kinds.${kindLabelKey(file.kind)}`)}
         </span>
@@ -105,7 +105,7 @@ export function ProjectFilePanel({ file }: { file: ProjectFile }) {
           {t("projectFiles.emptyFile")}
         </div>
       )}
-      <div className="border-t border-white/[0.06] px-4 py-3">
+      <div className="border-t border-bd3 px-4 py-3">
         <span className="text-xs text-muted">{t("projectFiles.footer")}</span>
       </div>
     </div>

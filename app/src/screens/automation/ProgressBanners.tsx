@@ -24,13 +24,13 @@ function isToolLine(line: string): boolean {
 export function ThinkingBanner({ runCode, thinkStep }: { runCode: string | undefined; thinkStep: number }) {
   const { t } = useTranslation("pipeline");
   return (
-    <GlassCard className="p-4 md:p-[26px]" style={{ borderColor: "rgba(139,92,246,.28)" }}>
+    <GlassCard className="p-4 md:p-[26px]" style={{ borderColor: "var(--pb)" }}>
       <div className="mb-[22px] flex items-center gap-[13px]">
         <div
           className="flex h-11 w-11 items-center justify-center rounded-[14px]"
-          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)", boxShadow: "0 0 26px rgba(139,92,246,.6)" }}
+          style={{ background: "var(--pg)", boxShadow: "0 0 26px var(--pglow)" }}
         >
-          <Sparkles size={22} color="#fff" />
+          <Sparkles size={22} color="var(--pOn)" />
         </div>
         <div>
           <div className="text-[15px] font-bold">{t("progress.thinking.title")}</div>
@@ -45,16 +45,20 @@ export function ThinkingBanner({ runCode, thinkStep }: { runCode: string | undef
           return (
             <div key={key} className="flex items-center gap-3 text-[13.5px]">
               {done ? (
-                <span className="flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full bg-success">
-                  <Check size={12} color="#fff" strokeWidth={3} />
+                <span className="flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full bg-ok">
+                  {/* `--bg`, not white: the semantic fills have no `--*On` pair, and
+                      `--ok` is a pale mint in dark mode (a white tick on it is
+                      invisible) and a deep green in light mode. The page background
+                      is the one colour that contrasts with the fill in BOTH modes. */}
+                  <Check size={12} color="var(--bg)" strokeWidth={3} />
                 </span>
               ) : (
                 <span
                   className="h-[19px] w-[19px] shrink-0 rounded-full border-2"
-                  style={{ borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa", animation: "spin .8s linear infinite" }}
+                  style={{ borderColor: "var(--pb)", borderTopColor: "var(--psText)", animation: "spin .8s linear infinite" }}
                 />
               )}
-              <span className={done ? "text-muted" : "font-semibold text-ink"}>{t(key)}</span>
+              <span className={done ? "text-muted" : "font-semibold text-txt"}>{t(key)}</span>
             </div>
           );
         })}
@@ -67,10 +71,10 @@ export function ThinkingBanner({ runCode, thinkStep }: { runCode: string | undef
 export function GeneratingBanner({ genProgress }: { genProgress: GenProgress | null }) {
   const { t } = useTranslation("pipeline");
   return (
-    <GlassCard className="mb-3.5 flex items-center gap-3 p-4" style={{ borderColor: "rgba(139,92,246,.28)" }}>
+    <GlassCard className="mb-3.5 flex items-center gap-3 p-4" style={{ borderColor: "var(--pb)" }}>
       <span
         className="h-[18px] w-[18px] shrink-0 rounded-full border-2"
-        style={{ borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa", animation: "spin .8s linear infinite" }}
+        style={{ borderColor: "var(--pb)", borderTopColor: "var(--psText)", animation: "spin .8s linear infinite" }}
       />
       <div className="min-w-0">
         <div className="text-[13.5px] font-bold">
@@ -93,10 +97,10 @@ export function GeneratingBanner({ genProgress }: { genProgress: GenProgress | n
 export function HealProgressBanner({ healProgress }: { healProgress: HealProgress }) {
   const { t } = useTranslation("pipeline");
   return (
-    <GlassCard className="mb-3.5 flex items-center gap-3 p-4" style={{ borderColor: "rgba(16,185,129,.32)" }}>
+    <GlassCard className="mb-3.5 flex items-center gap-3 p-4" style={{ borderColor: "var(--okTint)" }}>
       <span
         className="h-[18px] w-[18px] shrink-0 rounded-full border-2"
-        style={{ borderColor: "rgba(52,211,153,.35)", borderTopColor: "#34d399", animation: "spin .8s linear infinite" }}
+        style={{ borderColor: "var(--okTint)", borderTopColor: "var(--ok)", animation: "spin .8s linear infinite" }}
       />
       <div className="min-w-0">
         <div className="text-[13.5px] font-bold">
@@ -157,9 +161,9 @@ export function AuthoringTrail({
         <div className="flex items-center gap-2 text-[12px]">
           <span
             className="h-[14px] w-[14px] shrink-0 rounded-full border-2"
-            style={{ borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa", animation: "spin .8s linear infinite" }}
+            style={{ borderColor: "var(--pb)", borderTopColor: "var(--psText)", animation: "spin .8s linear infinite" }}
           />
-          <span className="text-ink">working…</span>
+          <span className="text-txt">working…</span>
         </div>
       )}
     </div>
@@ -187,7 +191,7 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
   const fail = (err: unknown) =>
     toast.error((err as { message?: string })?.message || String(err));
   return (
-    <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.06] pt-3">
+    <div className="mt-3 flex flex-col gap-2 border-t border-bd3 pt-3">
       <div className="flex flex-wrap items-center gap-2">
       {paused ? (
         <PausedGuidance
@@ -208,7 +212,7 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
           onClick={() => {
             pause.mutateAsync().catch(fail);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[12px] font-semibold text-ink disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-card3 px-2.5 py-1.5 text-[12px] font-semibold text-txt disabled:opacity-50"
         >
           <Pause size={13} />{" "}
           {data.pausePending ? t("progress.authoring.pausing") : t("progress.authoring.pause")}
@@ -230,7 +234,7 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
             )
             .catch(fail);
         }}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(244,63,94,.28)] bg-[rgba(244,63,94,.12)] px-2.5 py-1.5 text-[12px] font-semibold text-[#fb7185] disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--dangerTint)] bg-[var(--dangerTint)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--danger)] disabled:opacity-50"
       >
         <XCircle size={13} /> {t("progress.authoring.cancel")}
       </button>
@@ -242,7 +246,7 @@ export function AuthoringPauseControls({ caseId }: { caseId: number }) {
           : t("progress.authoring.pauseHint")}
       </span>
       {typeof data.remainingBudgetUsd === "number" && data.remainingBudgetUsd > 0 && (
-        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-muted">
+        <span className="rounded-full bg-card3 px-2 py-0.5 font-mono text-[11px] text-muted">
           {t("progress.authoring.budgetLeft", {
             amount: data.remainingBudgetUsd.toFixed(2),
           })}
@@ -295,7 +299,7 @@ function PausedGuidance({
           {shown.map((line, i) => (
             <div
               key={i}
-              className="rounded-[9px] border border-white/[0.07] bg-white/[0.03] px-2.5 py-1.5 text-[12px] leading-relaxed text-ink-dim"
+              className="rounded-[9px] border border-bd bg-inset px-2.5 py-1.5 text-[12px] leading-relaxed text-txt4"
             >
               {line}
             </div>
@@ -317,14 +321,14 @@ function PausedGuidance({
           rows={2}
           disabled={busy}
           placeholder={t("progress.authoring.guidancePlaceholder")}
-          className="min-w-0 flex-1 resize-y rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2 text-[12.5px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-[rgba(139,92,246,.55)] disabled:opacity-60"
+          className="min-w-0 flex-1 resize-y rounded-[10px] border border-bd2 bg-card px-3 py-2 text-[12.5px] leading-relaxed text-txt outline-none placeholder:text-faint focus:border-[var(--pglow)] disabled:opacity-60"
         />
         <button
           type="button"
           disabled={busy}
           onClick={submit}
-          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold text-white disabled:opacity-50"
-          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)" }}
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold text-p-on disabled:opacity-50"
+          style={{ background: "var(--pg)" }}
         >
           <Play size={13} />{" "}
           {text.trim()
@@ -340,7 +344,7 @@ function PausedGuidance({
 export function AuthoringCost({ costUsd }: { costUsd: number | undefined }) {
   if (typeof costUsd !== "number") return null;
   return (
-    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-muted">
+    <span className="rounded-full bg-card3 px-2 py-0.5 font-mono text-[11px] text-muted">
       ${costUsd.toFixed(2)}
     </span>
   );
@@ -351,13 +355,13 @@ export function AuthoringCost({ costUsd }: { costUsd: number | undefined }) {
 export function AuthoringProgressBanner({ authoringProgress }: { authoringProgress: AuthoringProgress }) {
   const { lines, done, costUsd, paused } = authoringProgress;
   return (
-    <GlassCard className="mb-3.5 p-4 md:p-[22px]" style={{ borderColor: "rgba(139,92,246,.32)" }}>
+    <GlassCard className="mb-3.5 p-4 md:p-[22px]" style={{ borderColor: "var(--pb)" }}>
       <div className="mb-[14px] flex items-center gap-[13px]">
         <div
           className="flex h-11 w-11 items-center justify-center rounded-[14px]"
-          style={{ background: "linear-gradient(135deg,#8b5cf6,#6366f1)", boxShadow: "0 0 26px rgba(139,92,246,.55)" }}
+          style={{ background: "var(--pg)", boxShadow: "0 0 26px var(--pglow)" }}
         >
-          <Sparkles size={22} color="#fff" />
+          <Sparkles size={22} color="var(--pOn)" />
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[15px] font-bold">
@@ -380,13 +384,13 @@ export function ExploreProgressBanner({ exploreProgress }: { exploreProgress: Ex
   const { steps } = exploreProgress;
   const latest = steps[steps.length - 1] as ExploreStep | undefined;
   return (
-    <GlassCard className="mb-3.5 p-4 md:p-[22px]" style={{ borderColor: "rgba(56,189,248,.32)" }}>
+    <GlassCard className="mb-3.5 p-4 md:p-[22px]" style={{ borderColor: "var(--infoTint)" }}>
       <div className="mb-[18px] flex items-center gap-[13px]">
         <div
           className="flex h-11 w-11 items-center justify-center rounded-[14px]"
-          style={{ background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", boxShadow: "0 0 26px rgba(56,189,248,.55)" }}
+          style={{ background: "linear-gradient(135deg,var(--info),var(--cyan))", boxShadow: "0 0 26px var(--infoTint)" }}
         >
-          <Telescope size={22} color="#fff" />
+          <Telescope size={22} color="var(--bg)" />
         </div>
         <div className="min-w-0">
           <div className="text-[15px] font-bold">{t("progress.explore.banner.title")}</div>
@@ -406,13 +410,13 @@ export function ExploreProgressBanner({ exploreProgress }: { exploreProgress: Ex
             <div key={s.step} className="flex items-start gap-3 text-[13.5px]">
               <span
                 className={`mt-[1px] flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full ${
-                  failed ? "bg-rose-500/80" : "bg-sky-500"
+                  failed ? "bg-danger" : "bg-info"
                 }`}
               >
-                <Check size={12} color="#fff" strokeWidth={3} />
+                <Check size={12} color="var(--bg)" strokeWidth={3} />
               </span>
               <div className="min-w-0">
-                <span className="font-semibold text-ink">{describeExploreStep(s, t)}</span>
+                <span className="font-semibold text-txt">{describeExploreStep(s, t)}</span>
                 {s.reasoning && <span className="ml-1.5 text-xs text-muted">— {s.reasoning}</span>}
                 {s.observedUrl && !done && (
                   <span className="ml-1.5 font-mono text-[11px] text-faint">@ {s.observedUrl}</span>
@@ -425,9 +429,9 @@ export function ExploreProgressBanner({ exploreProgress }: { exploreProgress: Ex
           <div className="flex items-center gap-3 text-[13.5px]">
             <span
               className="h-[19px] w-[19px] shrink-0 rounded-full border-2"
-              style={{ borderColor: "rgba(56,189,248,.35)", borderTopColor: "#38bdf8", animation: "spin .8s linear infinite" }}
+              style={{ borderColor: "var(--infoTint)", borderTopColor: "var(--info)", animation: "spin .8s linear infinite" }}
             />
-            <span className="font-semibold text-ink">{t("progress.explore.banner.deciding")}</span>
+            <span className="font-semibold text-txt">{t("progress.explore.banner.deciding")}</span>
           </div>
         )}
       </div>

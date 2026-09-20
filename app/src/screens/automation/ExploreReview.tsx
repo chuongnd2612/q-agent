@@ -52,10 +52,10 @@ export function ExploreReview({
   const steps = progress.steps;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/[0.09]" style={{ background: "rgba(8,8,13,.55)" }}>
+    <div className="overflow-hidden rounded-2xl border border-bd2 bg-code">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2.5 border-b border-white/[0.06] px-4 py-3 text-left hover:bg-white/[0.03]"
+        className="flex w-full items-center gap-2.5 border-b border-bd3 px-4 py-3 text-left hover:bg-card"
       >
         <Telescope size={14} className="shrink-0" style={{ color: EXPLORE_HUE }} />
         <span className="text-[13px] font-bold">{t("progress.explore.review.title")}</span>
@@ -63,8 +63,8 @@ export function ExploreReview({
           className="rounded-full px-2 py-0.5 text-[11px] font-bold"
           style={
             wroteKb
-              ? { background: "rgba(56,189,248,.14)", color: EXPLORE_HUE }
-              : { background: "rgba(148,163,184,.14)", color: "#94a3b8" }
+              ? { background: "var(--infoTint)", color: EXPLORE_HUE }
+              : { background: "var(--neutralTint)", color: "var(--neutral)" }
           }
         >
           {wroteKb
@@ -86,12 +86,12 @@ export function ExploreReview({
           {steps.length > 0 && (
             <div className="flex flex-col gap-2">
               {steps.map((s) => (
-                <div key={s.step} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-2.5">
+                <div key={s.step} className="rounded-xl border border-bd3 bg-inset p-2.5">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-[11px] text-faint">{s.step}</span>
-                    <span className="text-[12.5px] font-semibold text-ink">{describeExploreStep(s, t)}</span>
+                    <span className="text-[12.5px] font-semibold text-txt">{describeExploreStep(s, t)}</span>
                     {s.ok === false && (
-                      <span className="rounded-md bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">
+                      <span className="rounded-md bg-danger-tint px-1.5 py-0.5 text-[10px] font-bold text-danger">
                         {t("progress.explore.review.noop")}
                       </span>
                     )}

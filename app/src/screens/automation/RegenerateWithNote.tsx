@@ -67,13 +67,13 @@ export function RegenerateWithNote({
 
   const spinnerStyle =
     variant === "amber"
-      ? { borderColor: "rgba(251,191,36,.35)", borderTopColor: "#fbbf24" }
-      : { borderColor: "rgba(167,139,250,.35)", borderTopColor: "#a78bfa" };
+      ? { borderColor: "var(--warnTint)", borderTopColor: "var(--warn)" }
+      : { borderColor: "var(--pb)", borderTopColor: "var(--psText)" };
 
   const triggerClass =
     variant === "amber"
-      ? "flex items-center gap-1.5 rounded-[9px] border border-amber-400/40 bg-amber-400/15 px-[11px] py-1.5 text-[11.5px] font-semibold text-amber-200 hover:bg-amber-400/25 disabled:opacity-60"
-      : "flex items-center gap-1.5 rounded-[9px] border border-white/[0.09] bg-white/5 px-[11px] py-1.5 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10 disabled:opacity-60";
+      ? "flex items-center gap-1.5 rounded-[9px] border border-warn/40 bg-warn/15 px-[11px] py-1.5 text-[11.5px] font-semibold text-warn hover:bg-warn/25 disabled:opacity-60"
+      : "flex items-center gap-1.5 rounded-[9px] border border-bd2 bg-card2 px-[11px] py-1.5 text-[11.5px] font-semibold text-txt3 hover:bg-card3 disabled:opacity-60";
 
   if (!open) {
     return (
@@ -98,8 +98,8 @@ export function RegenerateWithNote({
 
   const confirmClass =
     variant === "amber"
-      ? "rounded-[9px] border border-amber-400/40 bg-amber-400/15 px-[11px] py-1.5 text-[11.5px] font-semibold text-amber-200 hover:bg-amber-400/25 disabled:opacity-60"
-      : "rounded-[9px] border border-violet/40 bg-violet/20 px-[11px] py-1.5 text-[11.5px] font-semibold text-violet hover:bg-violet/30 disabled:opacity-60";
+      ? "rounded-[9px] border border-warn/40 bg-warn/15 px-[11px] py-1.5 text-[11.5px] font-semibold text-warn hover:bg-warn/25 disabled:opacity-60"
+      : "rounded-[9px] border border-pb bg-pt px-[11px] py-1.5 text-[11.5px] font-semibold text-ps-text-text hover:bg-pb disabled:opacity-60";
 
   return (
     <div className="flex w-full flex-col gap-2">
@@ -109,8 +109,8 @@ export function RegenerateWithNote({
         onChange={(e) => setNote(e.target.value)}
         placeholder={t("progress.regenNote.placeholder")}
         spellCheck={false}
-        className="block w-full resize-y rounded-[9px] border border-white/[0.09] px-3 py-2 font-mono text-[12px] leading-[1.6] text-ink outline-none placeholder:text-faint"
-        style={{ minHeight: 70, background: "rgba(8,8,13,.6)" }}
+        className="block w-full resize-y rounded-[9px] border border-bd2 px-3 py-2 font-mono text-[12px] leading-[1.6] text-txt outline-none placeholder:text-faint"
+        style={{ minHeight: 70, background: "var(--code)" }}
       />
       <div className="flex items-center gap-1.5">
         <button
@@ -131,7 +131,7 @@ export function RegenerateWithNote({
         <button
           onClick={cancel}
           disabled={regenerating}
-          className="rounded-[9px] border border-white/[0.09] bg-white/5 px-[11px] py-1.5 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10 disabled:opacity-60"
+          className="rounded-[9px] border border-bd2 bg-card2 px-[11px] py-1.5 text-[11.5px] font-semibold text-txt3 hover:bg-card3 disabled:opacity-60"
         >
           {t("progress.regenNote.cancel")}
         </button>
