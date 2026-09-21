@@ -59,10 +59,13 @@ WORKDIR /app/api
 COPY api/pyproject.toml api/uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Backend source (includes alembic.ini + migrations/, applied at boot) and the
-# dedicated Q-Agent skills. api/.dockerignore keeps .venv/workspace/.env out.
+# Backend source (includes alembic.ini + migrations/, applied at boot), the
+# dedicated Q-Agent skills, and the Claude Code agent definitions (#888 — the
+# browser-driving roles; services/agents.py reads them from settings.agents_dir
+# and passes them to the CLI inline). api/.dockerignore keeps .venv/workspace/.env out.
 COPY api/ ./
 COPY skills/ /app/skills/
+COPY agents/ /app/agents/
 
 # Bind on all interfaces so the web (nginx) container can reach the API. Secrets,
 # auth flags and the admin seed are supplied via the environment (compose).
