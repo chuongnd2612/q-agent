@@ -349,6 +349,7 @@ def run_prompt(
     max_budget_usd: float | None = None,
     skip_permissions: bool = False,
     extra_env: dict[str, str] | None = None,
+    agent: str | None = None,
 ) -> str:
     """Run a single prompt through the Claude CLI and return its text result.
 
@@ -371,6 +372,14 @@ def run_prompt(
     so the parser and :func:`_record_usage` below are unchanged. ``add_dir`` scopes
     file tools to a workspace dir; ``max_budget_usd`` sets the CLI's native hard
     dollar ceiling for the whole agentic run (``--max-budget-usd``).
+
+    Agents (#888): ``agent`` selects a real Claude Code agent instead of composing
+    prose into the system prompt — used by the browser-driving roles, which need
+    their own multi-turn loop. The definition is passed inline
+    (``--agent <name> --agents '{"<name>": {...}}'``) rather than discovered from
+    disk; see :mod:`app.services.agents` for why. An agent whose definition is
+    missing degrades to the plain call rather than failing the run, so a caller
+    that also passes ``skill`` still gets its methodology.
     """
     system = _compose_system(system, skill, include_template)
     model = model or _resolve_model(skill)
@@ -385,6 +394,12 @@ def run_prompt(
     ]
     if system:
         cmd += ["--append-system-prompt", system]
+    if agent:
+        from app.services.agents import agents_json  # local import: load-order parity with skills
+
+        definition = agents_json(agent)
+        if definition:
+            cmd += ["--agent", agent, "--agents", definition]
     if allowed_tools:
         # --allowedTools takes a variadic <tools...> list (space-separated), so
         # pass each tool as its own arg; commander stops collecting at the next flag.
@@ -644,6 +659,7 @@ def run_agentic(
     allowed_tools: list[str] | None = None,
     max_budget_usd: float | None = None,
     extra_env: dict[str, str] | None = None,
+    agent: str | None = None,
 ) -> str:
     """Run Claude as a Bash/file-capable agent and return its final text result (#400).
 
@@ -674,6 +690,7 @@ def run_agentic(
         max_budget_usd=max_budget_usd or settings.authoring_cost_budget_usd,
         skip_permissions=True,
         extra_env=extra_env,
+        agent=agent,
     )
 
 

@@ -140,6 +140,9 @@ class Settings(BaseSettings):
 
     # Dedicated Q-Agent skills (SKILL.md methodology injected per Claude action).
     skills_dir: Path = REPO_ROOT / "skills"
+    # Claude Code agent definitions for the browser-driving roles (#888): passed
+    # to the CLI inline via --agents, not discovered from disk. See services/agents.py.
+    agents_dir: Path = REPO_ROOT / "agents"
 
     # Playwright
     playwright_bin: str = "npx"  # fallback: npx playwright test ...
