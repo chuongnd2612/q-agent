@@ -14,7 +14,7 @@ import { FEATURES } from "@/config/features";
 import { ToggleRow } from "@/components/settings/ToggleRow";
 import { useAiModels, useProviders, useSettings, useUpdateSettings } from "@/hooks/queries";
 
-import type { AuthoringLogVerbosity, AuthoringMode, ExecutionTarget, HealMode, ProviderGroupOut, ProviderKind, SettingsOut } from "@/types/api";
+import type { AuthoringLogVerbosity, AuthoringMode, BrowserDriver, ExecutionTarget, HealMode, ProviderGroupOut, ProviderKind, SettingsOut, TestCaseMode } from "@/types/api";
 
 /** A never-configured provider: the backend catalog omits it (fresh machine),
  * so synthesize an empty group the user can add a first connection under. */
@@ -210,6 +210,46 @@ export function Settings() {
                     options={[
                       { value: "classic", label: t("execution.heal.classic") },
                       { value: "live-harness", label: t("execution.heal.liveHarness") },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-2.5 border-b border-white/[0.06] py-[13px] md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-[14px] font-semibold">{t("execution.browserDriver.title")}</div>
+                  <div className="text-[12px] text-muted">
+                    {t("execution.browserDriver.description")}
+                  </div>
+                </div>
+                <div className="w-full md:w-[170px]">
+                  <Select
+                    value={draft.browserDriver}
+                    onChange={(v) => v && set({ browserDriver: v as BrowserDriver })}
+                    placeholder={t("execution.browserDriver.placeholder")}
+                    allowClear={false}
+                    options={[
+                      { value: "browser-harness", label: t("execution.browserDriver.browserHarness") },
+                      { value: "playwright-cli", label: t("execution.browserDriver.playwrightCli") },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-2.5 border-b border-white/[0.06] py-[13px] md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-[14px] font-semibold">{t("execution.testCaseMode.title")}</div>
+                  <div className="text-[12px] text-muted">
+                    {t("execution.testCaseMode.description")}
+                  </div>
+                </div>
+                <div className="w-full md:w-[170px]">
+                  <Select
+                    value={draft.testCaseMode}
+                    onChange={(v) => v && set({ testCaseMode: v as TestCaseMode })}
+                    placeholder={t("execution.testCaseMode.placeholder")}
+                    allowClear={false}
+                    options={[
+                      { value: "text", label: t("execution.testCaseMode.text") },
+                      { value: "live-planner", label: t("execution.testCaseMode.livePlanner") },
                     ]}
                   />
                 </div>

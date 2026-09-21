@@ -49,6 +49,20 @@
       "classic": "Classic (fix + re-run)",
       "liveHarness": "Live (browser-harness)"
     },
+    "browserDriver": {
+      "title": "Browser driver",
+      "description": "Which CLI drives the browser on live runs, and the methodology that comes with it. browser-harness uses the built-in skill; playwright-cli uses Playwright's own Test Agents (generator when authoring, healer when healing). Only applies where a live mode is already selected above.",
+      "placeholder": "Select driver",
+      "browserHarness": "browser-harness (skill)",
+      "playwrightCli": "playwright-cli (agents)"
+    },
+    "testCaseMode": {
+      "title": "Test case generation",
+      "description": "Text reads the ticket and the knowledge base only. Live planner explores the running app first and writes cases from what it actually saw — needs a reachable base URL, and falls back to text without one.",
+      "placeholder": "Select mode",
+      "text": "Text (ticket + KB)",
+      "livePlanner": "Live planner (explore first)"
+    },
     "liveBudget": {
       "title": "Live session budget",
       "description": "Max Claude spend (USD) per live browser-harness session — shared by live authoring and live self-heal. Raise it if a session needs to create test data and drive a long flow before it runs out."

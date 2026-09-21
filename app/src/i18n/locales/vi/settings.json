@@ -49,6 +49,20 @@
       "classic": "Cổ điển (vá + chạy lại)",
       "liveHarness": "Trực tiếp (browser-harness)"
     },
+    "browserDriver": {
+      "title": "Trình điều khiển trình duyệt",
+      "description": "CLI nào lái trình duyệt khi chạy live, kèm theo phương pháp tương ứng. browser-harness dùng skill có sẵn; playwright-cli dùng Test Agents chính chủ của Playwright (generator khi tạo spec, healer khi sửa lỗi). Chỉ có tác dụng khi phía trên đã chọn một chế độ live.",
+      "placeholder": "Chọn trình điều khiển",
+      "browserHarness": "browser-harness (skill)",
+      "playwrightCli": "playwright-cli (agents)"
+    },
+    "testCaseMode": {
+      "title": "Cách sinh test case",
+      "description": "Text chỉ đọc ticket và knowledge base. Live planner khám phá ứng dụng đang chạy trước rồi viết case từ những gì thực sự quan sát được — cần base URL truy cập được, không có thì tự quay về text.",
+      "placeholder": "Chọn chế độ",
+      "text": "Text (ticket + KB)",
+      "livePlanner": "Live planner (khám phá trước)"
+    },
     "liveBudget": {
       "title": "Ngân sách phiên trực tiếp",
       "description": "Mức chi tiêu Claude tối đa (USD) mỗi phiên browser-harness trực tiếp — dùng chung cho tạo script trực tiếp và tự chữa trực tiếp. Tăng lên nếu một phiên cần tạo dữ liệu kiểm thử và chạy một luồng dài trước khi hết ngân sách."
