@@ -4,7 +4,8 @@ Instead of generating a Playwright spec blind from the Knowledge Base and healin
 the failures afterwards, this drives the *real* application first: it launches a
 dedicated, already-authenticated Chrome, points a browser-automation CLI at it —
 ``browser-harness`` (default) or Playwright's own scriptable ``cli`` subcommand
-(``browserDriver="playwright-cli"``, #875 — see :func:`skill_for_driver`) — and
+(``browserDriver="playwright-cli"``, #875 — which since #894 also selects the
+real Playwright Test Agents; see :func:`methodology_for`) — and
 lets an agentic Claude (see :func:`claude_cli.run_agentic`) perform the test
 case's steps live — discovering the real selectors on the real DOM, creating any
 missing test data — then write a clean ``*.spec.ts`` built from what actually
@@ -30,6 +31,7 @@ from app.config import settings
 from app.logging import logger
 from app.services import (
     agentic_browser,
+    agents,
     ai_usage_service,
     audit_service,
     claude_cli,
@@ -44,24 +46,62 @@ from app.services.prompts import verified_kb_selectors_and_routes
 # How long to wait for the launched Chrome's CDP endpoint to come up.
 _CDP_READY_TIMEOUT_S = agentic_browser.CDP_READY_TIMEOUT_S
 
-#: Skill folder loaded for each ``browserDriver`` setting value (#875). Both the
-#: server-side path (:func:`author_case`) and the local-agent enqueue path
+#: The skill that drives ``browser-harness`` — the default, and the only driver
+#: still steered by prose rather than by a real agent (#894). Both the server-side
+#: path (:func:`author_case`) and the local-agent enqueue path
 #: (``automation._enqueue_agent_authoring``, which composes the system prompt
-#: server-side since the agent has no ``skills/`` dir) resolve through
-#: :func:`skill_for_driver` so they always agree on which methodology Claude gets.
-_SKILL_BY_DRIVER = {
-    "browser-harness": "live-authoring",
-    "playwright-cli": "live-authoring-playwright-cli",
-}
+#: server-side since the device has no ``skills/`` dir) resolve through
+#: :func:`methodology_for` so they always agree on what Claude gets.
+_HARNESS_SKILL = "live-authoring"
 
 
-def skill_for_driver(browser_driver: str) -> str:
-    """Resolve the live-authoring skill folder name for a ``browserDriver`` value.
+def methodology_for(browser_driver: str, *, heal: bool) -> tuple[str | None, str | None]:
+    """Resolve ``(skill, agent)`` for a live run — exactly one of them is set.
 
-    Falls back to the ``browser-harness`` skill for an unrecognized/legacy value,
-    so an old ``settings.json`` without the key (or a typo) never loads nothing.
+    ``browserDriver="playwright-cli"`` means *use the real Playwright Test Agents*
+    (#894): they are playwright-cli-native (they ``attach --cdp`` and invoke
+    ``$PLAYWRIGHT_CLI_JS``), so the driver and the methodology are one choice, not
+    two settings to keep in sync. Which agent depends on the job, because #876 made
+    the server-side heal reuse this same function through ``heal=``:
+
+    * ``heal`` -> the healer (reproduce the failure live, fix, re-verify)
+    * otherwise -> the generator (author the spec from the plan's locators)
+
+    Anything else — including an old ``settings.json`` with no key at all — keeps
+    the ``browser-harness`` skill, so the default path does not move.
+
+    Args:
+        browser_driver: the ``browserDriver`` setting value.
+        heal: whether this run is healing an existing spec rather than authoring one.
+
+    Returns:
+        ``(skill, agent)`` with the unused one ``None``.
     """
-    return _SKILL_BY_DRIVER.get(browser_driver, _SKILL_BY_DRIVER["browser-harness"])
+    if browser_driver == "playwright-cli":
+        return None, (
+            agents.PLAYWRIGHT_TEST_HEALER if heal else agents.PLAYWRIGHT_TEST_GENERATOR
+        )
+    return _HARNESS_SKILL, None
+
+
+def system_prompt_for(browser_driver: str, *, heal: bool) -> str:
+    """The methodology as raw text, for the Local Agent dispatch path.
+
+    The agent-executed path (:func:`app.routers.automation._enqueue_agent_authoring`)
+    ships a *system prompt string* over the wire and the paired device runs its own
+    CLI with it — it has no ``--agent`` support, and teaching it any would need an
+    agent release (npm publish behind an interactive OTP). An agent definition is
+    just a prompt, so sending its body delivers the same methodology with the wire
+    shape unchanged. Returns "" when nothing resolves, matching the caller's
+    existing ``or ""``.
+    """
+    skill, agent = methodology_for(browser_driver, heal=heal)
+    if agent:
+        definition = agents.load_agent(agent)
+        return definition["prompt"] if definition else ""
+    from app.services import skills
+
+    return skills.load_skill(skill, include_template=True) or ""
 
 
 class LiveAuthoringError(RuntimeError):
@@ -170,7 +210,7 @@ def _build_prompt(
     ``playwright-cli`` (Playwright's own scriptable ``cli`` subcommand, wired via
     ``PW_CLI_CDP_URL``/``PW_CLI_SESSION`` — see :func:`author_case`). The rest of
     the prompt (test case, project context, plan, deliverables) is identical either
-    way; only the skill loaded alongside it (:func:`skill_for_driver`) differs in
+    way; only the methodology loaded alongside it (:func:`methodology_for`) differs in
     HOW to drive that CLI.
     """
     # Local import: `automation_planner_service` pulls in the project services, and
@@ -303,7 +343,7 @@ def author_case(
     :func:`app.routers.automation._enqueue_agent_authoring`.
 
     Reads Settings' ``browserDriver`` (#875) to decide which CLI drives the
-    browser and which skill/env vars go with it — see :func:`skill_for_driver`.
+    browser and which methodology goes with it — see :func:`methodology_for`.
 
     Returns an :class:`AuthoringResult` with the emitted spec code and the
     runtime-verified discovery (already normalized for the KB). ``ok=False`` (empty
@@ -411,10 +451,12 @@ def author_case(
         # authoring_browser.cjs; which CLI later drives clicks over that connection is
         # orthogonal). Shared with the planner agent run via `agentic_browser` (#889).
         extra_env = agentic_browser.driver_env(port, session_name, browser_driver)
+        skill, agent = methodology_for(browser_driver, heal=heal is not None)
         summary = claude_cli.run_agentic(
             prompt,
             workspace_dir=workspace,
-            skill=skill_for_driver(browser_driver),
+            skill=skill,
+            agent=agent,
             include_template=True,
             label=f"Live authoring: {case.ticket_external_id} · {case.code}",
             extra_env=extra_env,

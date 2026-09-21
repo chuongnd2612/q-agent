@@ -72,7 +72,7 @@ class AgentAuthoringSession(Base):
     # Browser-automation CLI the agent should drive (#875): "browser-harness"
     # (default) or "playwright-cli". Mirrors Settings' `browserDriver` at
     # enqueue time — the system/task prompts already assume one or the other
-    # (see `live_authoring_service.skill_for_driver`), so the agent needs to know
+    # (see `live_authoring_service.methodology_for`), so the agent needs to know
     # which tooling to provision and which env vars to set.
     browser_driver: Mapped[str] = mapped_column(String(24), default="browser-harness")
 
