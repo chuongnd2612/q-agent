@@ -1,7 +1,9 @@
 """Tests for the `browserDriver` setting (#875): browser-harness vs playwright-cli.
 
-Covers A1 (the setting selects the right skill/preflight/env-var code path) and
-the prompt-level half of A2 (the verified-KB block `_build_prompt` injects).
+Covers A1 (the setting selects the right methodology/preflight/env-var code path)
+and the prompt-level half of A2 (the verified-KB block `_build_prompt` injects).
+Since #894 `playwright-cli` also means "use the real Playwright Test Agents", so
+the selection returns an agent rather than a skill.
 """
 
 from __future__ import annotations
@@ -11,7 +13,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import claude_cli, live_authoring_service, settings_store
-from app.services.live_authoring_service import LiveAuthoringError, _build_prompt, skill_for_driver
+from app.services import agents
+from app.services.live_authoring_service import (
+    LiveAuthoringError,
+    _build_prompt,
+    methodology_for,
+    system_prompt_for,
+)
 
 
 def _case(**overrides):
@@ -24,16 +32,42 @@ def _case(**overrides):
     return SimpleNamespace(**defaults)
 
 
-# ------------------------------------------------------------ skill_for_driver
+# ------------------------------------------------------------- methodology_for
 
-def test_skill_for_driver_maps_each_setting_value():
-    assert skill_for_driver("browser-harness") == "live-authoring"
-    assert skill_for_driver("playwright-cli") == "live-authoring-playwright-cli"
+def test_browser_harness_still_uses_the_skill():
+    """The default path must not move."""
+    assert methodology_for("browser-harness", heal=False) == ("live-authoring", None)
+    assert methodology_for("browser-harness", heal=True) == ("live-authoring", None)
 
 
-def test_skill_for_driver_falls_back_for_unknown_value():
-    """An old/typo'd setting must not silently load NO skill."""
-    assert skill_for_driver("something-else") == "live-authoring"
+def test_playwright_cli_picks_the_agent_for_the_job():
+    """#876 routes heal through the same function, so `heal` decides which agent —
+    a generator asked to heal would author from scratch instead of reproducing."""
+    assert methodology_for("playwright-cli", heal=False) == (
+        None, agents.PLAYWRIGHT_TEST_GENERATOR,
+    )
+    assert methodology_for("playwright-cli", heal=True) == (
+        None, agents.PLAYWRIGHT_TEST_HEALER,
+    )
+
+
+def test_an_unknown_value_falls_back_to_the_skill():
+    """An old/typo'd setting must not silently load NO methodology."""
+    assert methodology_for("something-else", heal=False) == ("live-authoring", None)
+
+
+def test_system_prompt_for_sends_the_agent_body_to_the_local_agent():
+    """The paired device has no `--agent` support and no `skills/` dir, so the
+    dispatch path ships the methodology as text either way."""
+    harness = system_prompt_for("browser-harness", heal=False)
+    generator = system_prompt_for("playwright-cli", heal=False)
+    healer = system_prompt_for("playwright-cli", heal=True)
+
+    assert harness and "browser-harness" in harness
+    assert generator and 'attach --cdp "$PW_CLI_CDP_URL"' in generator
+    assert healer != generator, "heal must not ship the generator's methodology"
+    # It is the agent body, not its frontmatter.
+    assert not generator.startswith("---")
 
 
 # ---------------------------------------------------- claude_cli.playwright_cli_available
@@ -130,3 +164,58 @@ def test_build_prompt_omits_verified_kb_block_when_nothing_verified():
     context = {"routes": [{"path": "/claims/new", "description": "New claim form"}]}
     prompt = _build_prompt(_case(), context, "TCK-1-TC-01.spec.ts", "discovered.json", "https://app.test")
     assert "Already-verified locators" not in prompt
+
+
+# -------------------------------------------- the call site actually passes it
+
+def _stub_author_case_preconditions(monkeypatch, workspace_dir, driver: str):
+    """Mock only author_case's preconditions, so run_agentic's kwargs stay real."""
+    from app.services import project_config_service, spec_service
+
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"browserDriver": driver})
+    monkeypatch.setattr(claude_cli, "playwright_cli_available", lambda: True)
+    monkeypatch.setattr(claude_cli, "browser_harness_available", lambda: True)
+    monkeypatch.setattr(
+        spec_service, "build_case_context",
+        lambda *a, **k: {"baseUrl": "https://example.test", "projectKey": "P", "repo": ""},
+    )
+    monkeypatch.setattr(live_authoring_service, "_launch_browser", lambda *a, **k: SimpleNamespace(
+        stdin=None, wait=lambda timeout=None: 0,
+    ))
+    monkeypatch.setattr(live_authoring_service, "_wait_cdp", lambda *a, **k: True)
+    profile = project_config_service.auth_path("P", None).parent / "browser-profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "Default").mkdir(exist_ok=True)
+
+
+@pytest.mark.parametrize(
+    "driver,heal,expect_agent,expect_skill",
+    [
+        ("playwright-cli", None, agents.PLAYWRIGHT_TEST_GENERATOR, None),
+        ("playwright-cli", {"code": "x", "error": "boom"}, agents.PLAYWRIGHT_TEST_HEALER, None),
+        ("browser-harness", None, None, "live-authoring"),
+    ],
+)
+def test_author_case_passes_the_right_methodology_to_run_agentic(
+    monkeypatch, workspace_dir, db_session, driver, heal, expect_agent, expect_skill
+):
+    """Pins the selection where it is actually consumed.
+
+    `methodology_for` returning the right pair proves nothing on its own — the call
+    site could drop it. A generation run that silently used the healer (or a heal
+    that used the generator) would still return a spec and look green.
+    """
+    captured: dict = {}
+    _stub_author_case_preconditions(monkeypatch, workspace_dir, driver)
+    monkeypatch.setattr(
+        claude_cli, "run_agentic",
+        lambda prompt, **kw: (captured.update(kw), "done")[1],
+    )
+
+    live_authoring_service.author_case(
+        db_session, _case(), SimpleNamespace(code="RUN-1", env="dev", owner_id=None),
+        owner_id=None, run_id=None, heal=heal,
+    )
+
+    assert captured.get("agent") == expect_agent
+    assert captured.get("skill") == expect_skill

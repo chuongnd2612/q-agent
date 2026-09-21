@@ -3,7 +3,7 @@
 Carries Settings' `browserDriver` (#875 — "browser-harness" or "playwright-cli")
 into a queued local-agent authoring session, so the agent knows which CLI to
 provision and which env vars to set when it claims the job — mirroring the
-server-side path (`live_authoring_service.skill_for_driver`), which resolves the
+server-side path (`live_authoring_service.methodology_for`), which resolves the
 same setting to pick the matching skill.
 
 NOT NULL with a server default so existing queued rows (created before this

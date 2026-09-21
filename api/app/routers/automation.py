@@ -699,11 +699,11 @@ def _enqueue_agent_authoring(
     so no agent release is needed to make live-harness reuse the library.
 
     ``browserDriver`` (#875) is read from Settings and threaded through both the
-    skill selected for the system prompt (:func:`live_authoring_service.skill_for_driver`,
+    methodology sent as the system prompt (:func:`live_authoring_service.system_prompt_for`,
     so the agent gets the matching methodology) and the queued session row, so the
     agent knows which CLI/env vars to set up when it claims the job.
     """
-    from app.services import agent_authoring_service, agent_capture_service, skills
+    from app.services import agent_authoring_service, agent_capture_service
 
     base_url = (context.get("baseUrl") or "").strip()
     if not base_url:
@@ -719,9 +719,8 @@ def _enqueue_agent_authoring(
 
     browser_driver = settings_store.load_settings().get("browserDriver", "browser-harness")
     spec_filename = spec_service.spec_filename(case.ticket_external_id, case.code)
-    system_prompt = (
-        skills.load_skill(live_authoring_service.skill_for_driver(browser_driver), include_template=True)
-        or ""
+    system_prompt = live_authoring_service.system_prompt_for(
+        browser_driver, heal=heal is not None
     )
     task_prompt = live_authoring_service._build_prompt(
         case, context, spec_filename, "discovered.json", base_url, heal=heal, plan=plan,

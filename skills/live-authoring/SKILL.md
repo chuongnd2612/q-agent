@@ -1,6 +1,6 @@
 ---
 name: live-authoring
-description: Author a runnable Playwright + TypeScript spec by FIRST driving the real app live with the browser-harness CLI — performing the test case's steps against a real browser, discovering the real selectors on the live DOM, creating any missing test data — and only then emitting a self-contained spec built from what actually worked. Use for the live-authoring execution mode (#400) with browserDriver="browser-harness" (default), instead of generating a spec blind and healing it afterwards. When browserDriver="playwright-cli", the live-authoring-playwright-cli skill is loaded instead (#875).
+description: Author a runnable Playwright + TypeScript spec by FIRST driving the real app live with the browser-harness CLI — performing the test case's steps against a real browser, discovering the real selectors on the live DOM, creating any missing test data — and only then emitting a self-contained spec built from what actually worked. Use for the live-authoring execution mode (#400) with browserDriver="browser-harness" (default), instead of generating a spec blind and healing it afterwards. When browserDriver="playwright-cli", the real Playwright Test Agents drive the run instead of this skill (#894).
 version: 1.2.0
 ---
 
