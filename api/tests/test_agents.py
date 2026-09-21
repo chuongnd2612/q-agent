@@ -25,6 +25,22 @@ def test_every_declared_agent_is_present_on_disk():
         assert (settings.agents_dir / f"{name}.md").exists(), f"{name}.md missing"
 
 
+def test_the_image_ships_the_agent_definitions():
+    """The check above passes in a checkout and still shipped a broken image (#891).
+
+    `agents/` lives outside `api/`, so `COPY api/ ./` does not carry it — exactly
+    like `skills/`, which needs its own COPY. Without one, `load_agent` finds
+    nothing in the container and every role degrades to an agent-less call, warning
+    to the log and otherwise looking fine. Assert the Dockerfile ships both.
+    """
+    from app.config import REPO_ROOT
+
+    dockerfile = (REPO_ROOT / "api" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY agents/" in dockerfile, "agents/ is not copied into the image"
+    assert "COPY skills/" in dockerfile, "skills/ is not copied into the image"
+
+
 def test_load_agent_strips_frontmatter_and_keeps_the_body():
     loaded = agents.load_agent(agents.PLAYWRIGHT_TEST_PLANNER)
 
