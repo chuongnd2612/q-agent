@@ -1124,6 +1124,16 @@ export type AuthoringMode = "blind" | "live-harness";
 export type HealMode = "classic" | "live-harness";
 export type AuthoringLogVerbosity = "verbose" | "concise";
 
+/** Which browser-automation CLI a live run drives (#875) — and, since #894, which
+ * methodology comes with it: "browser-harness" uses the hand-written
+ * live-authoring skill, "playwright-cli" uses the real Playwright Test Agents
+ * (generator when authoring, healer when healing). */
+export type BrowserDriver = "browser-harness" | "playwright-cli";
+
+/** Whether test-case generation is grounded in a live exploration pass before
+ * the cases are authored (#877). "text" reads the ticket and the KB only. */
+export type TestCaseMode = "text" | "live-planner";
+
 export interface ExecutionOut {
   id: number;
   runId: number;
@@ -1326,6 +1336,12 @@ export interface SettingsOut {
    * the placeholder/invented-reference gate, the AI reviewer and the parse check,
    * accepting every generated spec as runnable. */
   gateEnabled: boolean;
+  /** Browser-automation CLI a live run drives (#875/#894). Note this only bites
+   * where a live path is already selected — with authoringMode/healMode at
+   * "live-harness", switching to "playwright-cli" moves BOTH to the agents. */
+  browserDriver: BrowserDriver;
+  /** Whether test-case generation explores the running app first (#877). */
+  testCaseMode: TestCaseMode;
 }
 export type SettingsUpdate = Partial<SettingsOut>;
 
