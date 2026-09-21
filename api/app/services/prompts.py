@@ -608,70 +608,75 @@ def render_dom_snapshot(dom_snapshot: dict[str, Any] | None, *, max_elements: in
     return "\n".join(lines)
 
 
-def render_exploration_context(exploration: dict[str, Any] | None, *, max_log_lines: int = 12) -> str:
-    """Render a just-completed Planner exploration pass as prompt grounding (#877).
+#: Header of the planner-plan grounding block. Named so tests (and a future reader
+#: grepping a captured prompt) can pin the block without matching prose.
+PLANNER_PLAN_HEADER = "Live test plan (planner agent, run against the real app just before this generation)"
 
-    Live-planner mode (``settings.testCaseMode == "live-planner"``) runs one
-    ``exploration_agent.explore()`` pass against the ticket BEFORE case authoring
-    (ADR 0010 §8 amendment). This renders that pass's transcript — the goal it
-    pursued, the routes/selectors it actually observed on the running app, and a
-    short action log — so cases describe what was actually seen instead of only
-    what the ticket text implies. The observed routes/selectors are ALSO merged
-    into the Knowledge Base (unchanged, via ``merge_verified_discovery``) and so
-    already appear in :func:`render_project_context`'s "✓ runtime-verified"
-    entries; this block additionally carries the narrative (why/how they were
-    reached) that the KB's flat route/selector lists don't.
+
+def render_planner_plan(plan: dict[str, Any] | None) -> str:
+    """Render a planner-agent plan as prompt grounding (#889, replaces #877's block).
+
+    Live-planner mode (``settings.testCaseMode == "live-planner"``) runs the
+    ``playwright-test-planner`` agent against the running app BEFORE any case is
+    authored (see :mod:`app.services.planner_agent_service`). Its scenarios are
+    rendered here so the generator writes ``steps: [{a, e}]`` from steps that were
+    actually *performed* and outcomes that were actually *seen*, instead of
+    inventing them from the ticket text.
+
+    Locators are shown as evidence — "this step really did target a real element" —
+    and explicitly not for copying into a case's steps: ``TestCase.steps`` is
+    ``{a, e}`` only and would silently drop them (#882). They reach spec generation
+    through the Knowledge Base instead
+    (:func:`planner_agent_service.merge_plan_to_kb`).
 
     Args:
-        exploration: ``{target, stop_reason, steps_taken, routes, selectors,
-            log}`` as built by ``ai_service._explore_before_authoring``, or
-            ``None`` when no exploration pass ran (text mode, or live-planner
-            with nothing to explore) — in which case this returns "".
-        max_log_lines: Cap on rendered action-log lines, to bound prompt size.
+        plan: A normalized plan from
+            :func:`app.services.planner_agent_service.normalize_plan`, or ``None``
+            when no planner run happened (text mode, no base URL, or the run
+            failed) — in which case this returns "".
 
     Returns:
         A markdown block, or "" when there is nothing to render.
     """
-    if not exploration:
+    if not plan:
         return ""
-    routes = exploration.get("routes") or []
-    selectors = exploration.get("selectors") or []
-    log = exploration.get("log") or []
-    if not routes and not selectors and not log:
+    scenarios = plan.get("scenarios") or []
+    if not scenarios:
         return ""
 
-    target = exploration.get("target") or {}
     lines = [
-        "Live exploration (Planner pass, run just before this generation — ground "
-        "cases in what was ACTUALLY seen on the running app, not just the ticket "
-        "text):",
-        f"- Goal pursued: {target.get('goal') or target.get('screen') or '(unspecified)'}",
-        f"- Outcome: {exploration.get('stop_reason', '')} after {exploration.get('steps_taken', 0)} step(s)",
+        f"{PLANNER_PLAN_HEADER}:",
+        "These scenarios were explored live. Write the test cases' steps FROM THEM — "
+        "each step's action becomes a case step's \"a\" and its expected outcome the "
+        "\"e\" — rather than restating the ticket text. You may merge, split or "
+        "re-word for readability, and you still supply all the ADO metadata "
+        "(objective, precondition, testData, linkedAc, priority, testType, "
+        "automation, platform) yourself.",
+        "Do NOT copy the `locator:` values into the steps: a case step holds only an "
+        "action and an expected result, and locators reach automation through the "
+        "Knowledge Base.",
     ]
+    if plan.get("overview"):
+        lines.append(f"- Application under test: {plan['overview']}")
+    if plan.get("auth"):
+        lines.append(f"- Auth assumption: {plan['auth']}")
+    routes = plan.get("routes") or []
     if routes:
-        rendered = "; ".join(f"{r.get('path', '')} ({r.get('description', '')})" for r in routes if isinstance(r, dict))
-        lines.append(f"- Routes actually reached: {rendered}")
-    if selectors:
         rendered = "; ".join(
-            f"{s.get('screen', '')}:{s.get('element', '')}=`{s.get('selector', '')}`"
-            for s in selectors
-            if isinstance(s, dict)
+            f"{r.get('path', '')} ({r.get('description', '')})" for r in routes if isinstance(r, dict)
         )
-        lines.append(f"- Selectors actually confirmed: {rendered}")
-    if log:
-        lines.append("- What the exploration did, step by step:")
-        for entry in log[:max_log_lines]:
-            if not isinstance(entry, dict):
-                continue
-            action = entry.get("action", "")
-            reasoning = (entry.get("reasoning") or "")[:200]
-            url = entry.get("observedUrl") or ""
-            lines.append(f"  - {action} @ {url}: {reasoning}" if reasoning else f"  - {action} @ {url}")
-    if not routes and not selectors:
-        lines.append(
-            "- Nothing was confirmed reachable — write cases from the ticket text "
-            "alone rather than guessing at what this exploration didn't reach."
-        )
+        lines.append(f"- Routes actually reached: {rendered}")
+
+    for i, scenario in enumerate(scenarios, start=1):
+        lines.append(f"- Scenario {i}: {scenario.get('title', '')}")
+        for j, step in enumerate(scenario.get("steps") or [], start=1):
+            lines.append(f"  {j}. {step.get('action', '')}")
+            if step.get("locator"):
+                lines.append(f"     - locator: `{step['locator']}`")
+            if step.get("expect"):
+                lines.append(f"     - expect: {step['expect']}")
+            if step.get("expectLocator"):
+                lines.append(f"       - locator: `{step['expectLocator']}`")
     return "\n".join(lines)
 
 
@@ -698,7 +703,7 @@ def build_combined_prompt(
     ticket: Ticket,
     max_cases: int = 8,
     context: dict[str, Any] | None = None,
-    exploration: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> str:
     """One-call prompt that both analyzes the work item AND writes the baseline
     happy-path cases (#174), returning ``{"analysis": {...}, "cases": [...]}``.
@@ -708,8 +713,8 @@ def build_combined_prompt(
     and test-case-generator skills as the system prompt so neither stage loses its
     methodology; this prompt carries the explicit output contract for both.
 
-    ``exploration`` (#877) is the just-completed live-planner exploration pass's
-    transcript, rendered by :func:`render_exploration_context`; ``None`` (the
+    ``plan`` (#889, replacing #877's exploration transcript) is the just-completed
+    planner-agent plan, rendered by :func:`render_planner_plan`; ``None`` (the
     default, and always the case in ``testCaseMode="text"``) omits the section
     entirely, leaving the prompt byte-for-byte what it was before #877.
     """
@@ -718,15 +723,15 @@ def build_combined_prompt(
     business_section = f"{business_block}\n\n" if business_block else ""
     project_block = render_project_context(context, rank_query=rank_query)
     project_section = f"{project_block}\n\n" if project_block else ""
-    exploration_block = render_exploration_context(exploration)
-    exploration_section = f"{exploration_block}\n\n" if exploration_block else ""
+    plan_block = render_planner_plan(plan)
+    plan_section = f"{plan_block}\n\n" if plan_block else ""
     repo_section = _repo_section(context)
     return (
         "You are a senior QA analyst and engineer. In a SINGLE response, do two "
         "things for the work item below.\n\n"
         f"{business_section}"
         f"{project_section}"
-        f"{exploration_section}"
+        f"{plan_section}"
         f"{repo_section}"
         f"{_ticket_context(ticket)}\n\n"
         "STEP 1 — Analyze. Identify: business rules implied by the requirements, "
@@ -763,7 +768,7 @@ def build_review_prompt(
     existing_cases: list[dict],
     max_cases: int = 8,
     context: dict[str, Any] | None = None,
-    exploration: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> str:
     """Prompt for the second stage: review the happy-path set and fill coverage gaps.
 
@@ -778,18 +783,18 @@ def build_review_prompt(
     not yet covered) and ``additionalCases`` (new cases in the standard case
     shape). ``max_cases`` caps how many additional cases to add.
 
-    ``exploration`` (#877) mirrors :func:`build_combined_prompt`'s param — the
-    same live-planner transcript, so edge/negative coverage is grounded in the
-    same observed routes/selectors as the happy-path set. ``None`` (default)
-    omits the section, unchanged from before #877.
+    ``plan`` (#889) mirrors :func:`build_combined_prompt`'s param — the same
+    planner-agent plan, so edge/negative coverage is grounded in the same observed
+    scenarios as the happy-path set. ``None`` (default) omits the section,
+    unchanged from before #877.
     """
     rank_query = _ticket_rank_query(ticket)
     business_block = render_business_context(context, rank_query=rank_query)
     business_section = f"{business_block}\n\n" if business_block else ""
     project_block = render_project_context(context, rank_query=rank_query)
     project_section = f"{project_block}\n\n" if project_block else ""
-    exploration_block = render_exploration_context(exploration)
-    exploration_section = f"{exploration_block}\n\n" if exploration_block else ""
+    plan_block = render_planner_plan(plan)
+    plan_section = f"{plan_block}\n\n" if plan_block else ""
     return (
         "You are a senior QA reviewer. The happy-path test cases below were "
         "generated to cover the PRIMARY successful flow of each acceptance "
@@ -806,7 +811,7 @@ def build_review_prompt(
         "3. Give an overall verdict.\n\n"
         f"{business_section}"
         f"{project_section}"
-        f"{exploration_section}"
+        f"{plan_section}"
         f"{_ticket_context(ticket)}\n\n"
         f"Prior analysis (JSON):\n{analysis}\n\n"
         f"Existing happy-path cases (JSON):\n{existing_cases}\n\n"

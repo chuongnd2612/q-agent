@@ -28,7 +28,7 @@ from app.models.business import BusinessFact
 from app.services import (
     audit_service,
     connection_service,
-    exploration_agent,
+    planner_agent_service,
     project_config_service,
     qc_voice_gate,
     run_context,
@@ -374,7 +374,7 @@ def _review_and_expand(
     existing_cases: list,
     start_offset: int,
     max_cases: int,
-    exploration: dict | None = None,
+    plan: dict | None = None,
 ) -> int:
     """Second-stage coverage expansion (#173).
 
@@ -392,10 +392,9 @@ def _review_and_expand(
             so it doesn't duplicate them).
         start_offset: The TC-NN number to continue from (last happy-path number).
         max_cases: Cap on how many additional cases to add.
-        exploration: The same live-planner exploration transcript passed to
-            :func:`build_combined_prompt` (#877), or ``None`` — so the edge/
-            negative coverage this stage adds is grounded in the same observed
-            routes/selectors as the happy-path set.
+        plan: The same live-planner plan passed to :func:`build_combined_prompt`
+            (#889), or ``None`` — so the edge/negative coverage this stage adds is
+            grounded in the same observed scenarios as the happy-path set.
 
     Returns:
         The number of additional cases persisted.
@@ -407,7 +406,7 @@ def _review_and_expand(
         review = run_json(
             build_review_prompt(
                 ticket, analysis, existing_cases, max_cases=max_cases, context=context,
-                exploration=exploration,
+                plan=plan,
             ),
             skill=TEST_CASE_REVIEWER,
             label=f"Review cases: {ticket.external_id}",
@@ -478,14 +477,14 @@ def grounding_for(context: dict | None) -> list[dict]:
 
 
 def _exploration_target_for_ticket(ticket: Ticket) -> dict[str, str]:
-    """Derive an exploration target ``{ticket, screen, goal}`` straight off a ticket (#877).
+    """Derive a live-planning target ``{ticket, screen, goal}`` straight off a ticket (#877).
 
     The existing reactive "Explore to unblock" caller (``routers/projects.py``)
     derives its target from an already-generated, `blocked` case's title/
     objective — but this Planner call runs BEFORE any case exists, so there is
     nothing to derive a target from except the ticket's own text. The ticket
     title stands in for the screen, and the goal is spelled out from the title
-    plus (up to 3) acceptance criteria so the exploration loop has something
+    plus (up to 3) acceptance criteria so the planner agent has something
     concrete to confirm.
 
     Args:
@@ -502,80 +501,64 @@ def _exploration_target_for_ticket(ticket: Ticket) -> dict[str, str]:
     return {"ticket": ticket.external_id, "screen": ticket.title, "goal": goal}
 
 
-def _explore_before_authoring(
-    db: Session, run: Run, ticket: Ticket, context: dict
-) -> dict | None:
-    """Run one proactive live-exploration pass before case authoring (#877).
+def _plan_before_authoring(run: Run, ticket: Ticket, context: dict) -> dict | None:
+    """Run the planner agent against the live app before case authoring (#889).
 
-    The Planner step of ``testCaseMode="live-planner"``: drives the live app
-    (:func:`exploration_agent.explore`) targeting the ticket's own text BEFORE
-    any case is written, so cases can be grounded in what was actually observed.
-    Per the ADR 0010 §8 amendment, ``allow_state_changing=True`` is passed
-    unconditionally here — the policy is now "any project with a resolvable
-    base_url", which the caller has already confirmed via ``context["baseUrl"]``
-    before calling this.
+    The Planner step of ``testCaseMode="live-planner"``. It replaces #877's
+    per-step ``exploration_agent.explore()`` loop (which the reactive "Explore to
+    unblock" flow still uses, unchanged) with a real Claude Code agent run — see
+    :mod:`app.services.planner_agent_service` for the measurements that motivated
+    the swap. The agent targets the ticket's own text, because this runs BEFORE
+    any case exists.
 
-    Discovered routes/selectors merge into the Knowledge Base exactly as the
-    existing reactive "Explore to unblock" flow does (unchanged); the terminal
-    outcome is also recorded to the run's activity timeline the same way.
+    The plan's observed locators/routes are merged into the Knowledge Base as
+    ``verified_at_runtime`` here, so spec generation later prefers them; the
+    scenarios themselves go into both authoring prompts as grounding.
 
-    Best-effort: a Playwright/Claude failure here must never block case
-    authoring — on any exception this logs a warning and returns ``None``,
-    which is exactly the "nothing to ground with" signal
-    :func:`app.services.prompts.render_exploration_context` already handles.
+    Best-effort: ``planner_agent_service.plan_ticket`` already swallows its own
+    failures and returns ``None``, and this wraps the whole thing again so a KB
+    write or a programming error can never fail a run — ``None`` is exactly the
+    "nothing to ground with" signal
+    :func:`app.services.prompts.render_planner_plan` handles.
 
     Args:
-        db: Active session (used to resolve config/KB and read exploration spend).
-        run: The run this ticket belongs to (spend/credential attribution).
-        ticket: The work item being explored for.
+        run: The run this ticket belongs to (workspace/spend attribution).
+        ticket: The work item being planned for.
         context: The resolved project context (already confirmed to carry a
             ``baseUrl`` by the caller).
 
     Returns:
-        ``{"target", "stop_reason", "steps_taken", "routes", "selectors",
-        "log"}`` for :func:`prompts.render_exploration_context`, or ``None``
-        when exploration could not be attempted.
+        A normalized plan for :func:`prompts.render_planner_plan`, or ``None``.
     """
-    target = _exploration_target_for_ticket(ticket)
     try:
-        result = exploration_agent.explore(
-            db,
-            project_key=context.get("projectKey") or "",
-            repo=context.get("repo") or "",
-            target=target,
-            run_id=run.id,
+        plan = planner_agent_service.plan_ticket(
+            run,
+            ticket,
+            context,
             owner_id=ticket.owner_id,
-            allow_state_changing=True,
+            target=_exploration_target_for_ticket(ticket),
         )
-    except Exception as exc:  # noqa: BLE001 - exploration is best-effort grounding
+    except Exception as exc:  # noqa: BLE001 - live planning is best-effort grounding
         logger.warning(
-            "Live-planner exploration failed for {}: {} — falling back to text-only",
+            "Live-planner run failed for {}: {} — falling back to text-only",
             ticket.external_id,
             exc,
         )
         return None
+    if plan is None:
+        return None
 
-    exploration_agent.audit_exploration_result(
-        target=target,
-        stop_reason=result.stop_reason,
-        steps_taken=result.steps_taken,
-        discovered_routes=len(result.discovered.get("routes", [])),
-        discovered_selectors=len(result.discovered.get("selectors", [])),
-        wrote_kb=result.wrote_kb,
+    merged = planner_agent_service.merge_plan_to_kb(plan, context, owner_id=ticket.owner_id)
+    audit_service.record(
+        category="automation",
+        actor_type="ai",
+        action="Planned test scenarios live",
+        target=ticket.external_id,
+        status="ok",
+        meta=f"{len(plan.get('scenarios') or [])} scenario(s), {merged} KB entr(ies) merged",
         run_code=run.code,
-        log=result.log,
-        routes=result.discovered.get("routes", []),
-        selectors=result.discovered.get("selectors", []),
     )
-
-    return {
-        "target": target,
-        "stop_reason": result.stop_reason,
-        "steps_taken": result.steps_taken,
-        "routes": result.discovered.get("routes", []),
-        "selectors": result.discovered.get("selectors", []),
-        "log": result.log,
-    }
+    return plan
 
 
 def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
@@ -619,17 +602,18 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
         # Continue numbering from existing provider test cases (match convention).
         offset = provider_case_offset(db, ticket)
 
-        # Planner step (#877, ADR 0010 §8 amendment): when live-planner mode is on
-        # AND the project has a resolvable base_url, explore the live app for THIS
-        # ticket BEFORE authoring cases, so generation is grounded in what was
-        # actually observed rather than pure ticket text. Falls back to text-only
-        # unchanged when the mode is off (default) or there's nothing to explore.
-        exploration_ctx: dict | None = None
+        # Planner step (#877 → #889, ADR 0010 §8 amendment): when live-planner mode
+        # is on AND the project has a resolvable base_url, run the planner AGENT
+        # against the live app for THIS ticket BEFORE authoring cases, so the steps
+        # come from what was actually performed rather than guessed from ticket
+        # text. Falls back to text-only unchanged when the mode is off (default),
+        # there is no base_url, or the planner run fails for any reason.
+        plan: dict | None = None
         if loaded_settings.get("testCaseMode", "text") == "live-planner" and context.get("baseUrl"):
             _publish_phase(
-                run.id, ticket.external_id, PHASE_EXPLORING, "Exploring the live application..."
+                run.id, ticket.external_id, PHASE_EXPLORING, "Planning against the live application..."
             )
-            exploration_ctx = _explore_before_authoring(db, run, ticket, context)
+            plan = _plan_before_authoring(run, ticket, context)
 
         _publish_phase(run.id, ticket.external_id, PHASE_GENERATING, "Generating test cases...")
 
@@ -638,7 +622,7 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
         # neither the analysis nor the generation loses its methodology.
         combined = run_json(
             build_combined_prompt(
-                ticket, max_cases=max_cases, context=context, exploration=exploration_ctx
+                ticket, max_cases=max_cases, context=context, plan=plan
             ),
             skill=TEST_CASE_GENERATOR,
             system=load_skill(REQUIREMENT_ANALYST),
@@ -699,7 +683,7 @@ def _process_run_ticket(db: Session, run: Run, run_ticket: RunTicket) -> None:
                 existing_cases=cases,
                 start_offset=offset + case_count,
                 max_cases=max_cases,
-                exploration=exploration_ctx,
+                plan=plan,
             )
 
         run_ticket.gen_status = "done"
