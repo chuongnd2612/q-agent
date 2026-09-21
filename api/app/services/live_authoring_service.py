@@ -22,18 +22,14 @@ cost ceiling, a max agentic-turn cap, and a wall-clock timeout (see
 from __future__ import annotations
 
 import json
-import os
-import re
-import socket
 import subprocess
-import time
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import settings
 from app.logging import logger
 from app.services import (
+    agentic_browser,
     ai_usage_service,
     audit_service,
     claude_cli,
@@ -45,10 +41,8 @@ from app.services.exploration_agent import normalize_discovered
 from app.services.knowledge_service import merge_verified_discovery
 from app.services.prompts import verified_kb_selectors_and_routes
 
-_LAUNCHER = Path(__file__).resolve().parent / "pw_scripts" / "authoring_browser.cjs"
-
 # How long to wait for the launched Chrome's CDP endpoint to come up.
-_CDP_READY_TIMEOUT_S = 25.0
+_CDP_READY_TIMEOUT_S = agentic_browser.CDP_READY_TIMEOUT_S
 
 #: Skill folder loaded for each ``browserDriver`` setting value (#875). Both the
 #: server-side path (:func:`author_case`) and the local-agent enqueue path
@@ -98,84 +92,34 @@ class AuthoringResult:
     owner_id: int | None = None
 
 
-#: `BU_NAME` must match this — the harness turns it into a socket/pid filename and
-#: rejects anything else (`_ipc._check`).
-_HARNESS_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
-
-
 def _harness_name(run_code: str, case_code: str) -> str:
     """A per-session browser-harness daemon name (#739).
 
-    Unique per (run, case) so each authoring session gets its own dedicated tab, and
-    sanitised to ``[A-Za-z0-9_-]{1,64}`` because the harness builds a filename from it
-    and refuses anything else.
+    Unique per (run, case) so each authoring session gets its own dedicated tab.
+    Thin wrapper over :func:`agentic_browser.session_name`, kept for the callers
+    that already name it and because (run, case) is this module's key.
     """
-    raw = f"qagent-{run_code}-{case_code}"
-    return _HARNESS_NAME_RE.sub("-", raw)[:64].strip("-") or "qagent-authoring"
+    return agentic_browser.session_name(run_code, case_code)
 
 
 def _free_port() -> int:
     """Pick a free localhost TCP port for the dedicated Chrome's CDP endpoint."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+    return agentic_browser.free_port()
 
 
 def _wait_cdp(port: int, timeout_s: float) -> bool:
     """Poll the Chrome DevTools ``/json/version`` endpoint until it responds."""
-    deadline = time.monotonic() + timeout_s
-    url = f"http://127.0.0.1:{port}/json/version"
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=3) as r:  # noqa: S310 - localhost only
-                if r.status == 200:
-                    return True
-        except Exception:  # noqa: BLE001 - endpoint not up yet
-            time.sleep(0.3)
-    return False
+    return agentic_browser.wait_cdp(port, timeout_s)
 
 
 def _launch_browser(base_url: str, port: int, profile_dir: Path) -> subprocess.Popen[str]:
-    """Start the long-lived pre-authenticated Chrome launcher (Node subprocess).
-
-    The launcher (``authoring_browser.cjs``) uses only Node built-ins — no
-    Playwright/node_modules — so it runs from its own dir and needs no NODE_PATH
-    (the API image ships chromium + node but no Playwright). It finds Chrome via
-    ``QAGENT_CHROME_BIN`` (set in the image) or platform defaults. stdin is a
-    pipe: closing it (in :func:`_teardown`) tells the launcher to kill Chrome —
-    cross-platform cleanup that works on Windows where ``terminate()`` won't run
-    signal handlers.
-    """
-    cmd = ["node", str(_LAUNCHER), base_url, str(port), str(profile_dir)]
-    logger.info("Live authoring: launching browser {}", " ".join(cmd))
-    return subprocess.Popen(  # noqa: S603
-        cmd,
-        cwd=str(_LAUNCHER.parent),
-        env=os.environ.copy(),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    )
+    """Start the long-lived pre-authenticated Chrome launcher (Node subprocess)."""
+    return agentic_browser.launch_browser(base_url, port, profile_dir)
 
 
 def _teardown(proc: subprocess.Popen[str] | None) -> None:
     """Stop the launcher (and thus Chrome). Best-effort, never raises."""
-    if proc is None:
-        return
-    try:
-        if proc.stdin and not proc.stdin.closed:
-            proc.stdin.close()  # triggers the launcher's stdin-end → kills Chrome
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        proc.wait(timeout=10)
-    except Exception:  # noqa: BLE001
-        try:
-            proc.kill()
-        except Exception:  # noqa: BLE001
-            pass
+    agentic_browser.teardown(proc)
 
 
 def _steps_lines(case) -> str:
@@ -461,23 +405,12 @@ def author_case(
         # to `pages[0]` — whichever page is first in that Chrome — and this profile
         # is the same one the manual login capture opens for the operator, so a tab
         # they left there is restored and taken over; naming the session avoids that.
-        extra_env = (
-            {
-                # playwright-cli (#875) attaches to the SAME pre-authenticated
-                # Chrome the launcher above just armed with the captured session —
-                # the CDP-attach dance stays the same either way (it does the
-                # cookie/localStorage restoration, see authoring_browser.cjs; which
-                # CLI later drives clicks over that connection is orthogonal).
-                "PW_CLI_CDP_URL": f"http://127.0.0.1:{port}",
-                "PW_CLI_SESSION": session_name,
-                "PLAYWRIGHT_CLI_JS": str(settings.playwright_cli_js),
-            }
-            if browser_driver == "playwright-cli"
-            else {
-                "BU_CDP_URL": f"http://127.0.0.1:{port}",
-                "BU_NAME": session_name,
-            }
-        )
+        # playwright-cli (#875) attaches to the SAME pre-authenticated Chrome the
+        # launcher above just armed with the captured session — the CDP-attach dance
+        # stays the same either way (it does the cookie/localStorage restoration, see
+        # authoring_browser.cjs; which CLI later drives clicks over that connection is
+        # orthogonal). Shared with the planner agent run via `agentic_browser` (#889).
+        extra_env = agentic_browser.driver_env(port, session_name, browser_driver)
         summary = claude_cli.run_agentic(
             prompt,
             workspace_dir=workspace,

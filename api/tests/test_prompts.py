@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from app.services.prompts import (
+    PLANNER_PLAN_HEADER,
     render_dom_snapshot,
-    render_exploration_context,
+    render_planner_plan,
     render_project_context,
     verified_kb_selectors_and_routes,
 )
@@ -102,45 +103,63 @@ def test_render_dom_snapshot_empty_is_blank():
     assert render_dom_snapshot({"elements": []}) == ""
 
 
-def test_render_exploration_context_blank_when_none_or_empty():
-    """No exploration ran, or nothing was observed — the section renders as "" (#877)."""
-    assert render_exploration_context(None) == ""
-    assert render_exploration_context({"routes": [], "selectors": [], "log": []}) == ""
+#: A plan shaped exactly as ``planner_agent_service.normalize_plan`` returns one.
+PLAN = {
+    "overview": "Docs site with a top navigation bar.",
+    "auth": "storage state (tests_generated/auth.setup.ts)",
+    "scenarios": [
+        {
+            "title": "Reach the installation docs",
+            "steps": [
+                {
+                    "action": 'From the home page, click the "Docs" link in the top navigation bar.',
+                    "locator": "getByRole('link', { name: 'Docs' })",
+                    "expect": 'Navigates to /docs/intro and shows the "Installation" heading.',
+                    "expectLocator": "getByRole('heading', { name: 'Installation' })",
+                }
+            ],
+        }
+    ],
+    "routes": [{"path": "/docs/intro", "description": "Docs landing page"}],
+    "selectors": [],
+}
 
 
-def test_render_exploration_context_surfaces_observed_routes_selectors_and_log():
-    """A completed pass renders its goal, outcome, observed routes/selectors and steps."""
-    exploration = {
-        "target": {"ticket": "SUR-1428", "screen": "Add password reset flow", "goal": "Reach the reset screen"},
-        "stop_reason": "done",
-        "steps_taken": 2,
-        "routes": [{"path": "/reset", "description": "Observed during exploration"}],
-        "selectors": [{"screen": "Reset", "element": "Email", "selector": "#email", "strategy": "css"}],
-        "log": [
-            {"step": 1, "action": "goto", "args": {"url": "/reset"}, "reasoning": "Navigate to reset", "observedUrl": "/reset"},
-        ],
-    }
-    block = render_exploration_context(exploration)
-    assert "Live exploration" in block
-    assert "Reach the reset screen" in block
-    assert "done after 2 step(s)" in block
-    assert "/reset" in block
-    assert "#email" in block
-    assert "Navigate to reset" in block
+def test_render_planner_plan_blank_when_none_or_empty():
+    """No planner run, or a plan with no scenario — the section renders as "" (#889)."""
+    assert render_planner_plan(None) == ""
+    assert render_planner_plan({"scenarios": []}) == ""
 
 
-def test_render_exploration_context_nothing_reachable_says_so():
-    """Explored but nothing observed — says so rather than implying grounding exists."""
-    exploration = {
-        "target": {"screen": "X"},
-        "stop_reason": "unreachable",
-        "steps_taken": 3,
-        "routes": [],
-        "selectors": [],
-        "log": [{"step": 1, "action": "goto", "args": {"url": "/x"}, "reasoning": "try", "observedUrl": "/x"}],
-    }
-    block = render_exploration_context(exploration)
-    assert "Nothing was confirmed reachable" in block
+def test_render_planner_plan_surfaces_observed_steps_locators_and_routes():
+    """A completed plan renders its scenarios, step-bound locators and reached routes."""
+    block = render_planner_plan(PLAN)
+    assert PLANNER_PLAN_HEADER in block
+    assert "Reach the installation docs" in block
+    assert 'click the "Docs" link' in block
+    assert "getByRole('link', { name: 'Docs' })" in block
+    assert "getByRole('heading', { name: 'Installation' })" in block
+    assert "/docs/intro" in block
+    assert "Docs site with a top navigation bar." in block
+
+
+def test_render_planner_plan_tells_the_generator_not_to_copy_locators_into_steps():
+    """Locators are evidence, not case-step content — ``TestCase.steps`` is {a,e} (#882)."""
+    block = render_planner_plan(PLAN)
+    assert "Do NOT copy the `locator:` values into the steps" in block
+
+
+def test_combined_prompt_omits_plan_section_in_text_mode():
+    """``plan=None`` (the default, and always so in testCaseMode="text") adds nothing."""
+    from types import SimpleNamespace
+
+    from app.services.prompts import build_combined_prompt
+
+    ticket = SimpleNamespace(
+        external_id="SUR-1", title="T", description="D", acceptance_criteria=[], work_item_type="User Story",
+    )
+    assert PLANNER_PLAN_HEADER not in build_combined_prompt(ticket)
+    assert PLANNER_PLAN_HEADER in build_combined_prompt(ticket, plan=PLAN)
 
 
 def test_build_fix_prompt_includes_discovered_selector():

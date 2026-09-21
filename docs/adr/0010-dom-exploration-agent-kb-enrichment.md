@@ -148,18 +148,35 @@ title/objective. #877 adds a **proactive** trigger, run from
 `ai_service._process_run_ticket` **before** case authoring: when the setting
 `testCaseMode == "live-planner"` (default `"text"` — this is a separate,
 additional gate from the `allow_state_changing` policy above) and the ticket's
-project has a resolvable `base_url`, one `explore()` pass runs against a target
+project has a resolvable `base_url`, one live pass runs against a target
 derived from the **ticket's own text** (there is no case yet to derive one
-from), and its transcript — observed routes/selectors, plus the action log —
-is threaded into the `test-case-generator`/`test-case-reviewer` prompts
-(`prompts.render_exploration_context`) alongside the ticket text and KB
-context. The two case-authoring calls stay exactly as before: two cheap,
+from), and its result is threaded into the
+`test-case-generator`/`test-case-reviewer` prompts alongside the ticket text and
+KB context. The two case-authoring calls stay exactly as before: two cheap,
 non-agentic `run_json` calls: this is not case-authoring made agentic, it is
-case-authoring **grounded in** one agentic exploration pass that ran first.
-Discovered routes/selectors merge into the KB exactly as the reactive path does
+case-authoring **grounded in** one agentic pass that ran first. What it observed
+merges into the KB exactly as the reactive path does
 (`merge_verified_discovery`) — no new write path. When `testCaseMode == "text"`
 (default) or no `base_url` resolves, generation is byte-for-byte what it was
 before #877.
+
+**#889 amendment — that pass is the planner AGENT, not the `explore()` loop.**
+Measured against playwright.dev with real credentials, the per-step
+observe→decide→act loop stopped at `repeat` after three steps without reaching
+`done` and cost ~$0.116 *per decide call*, while the ported
+`playwright-test-planner` agent (#888) completed the same goal for $0.268 total
+and produced a plan whose every step carries the locator it was actually
+performed with. So `ai_service._plan_before_authoring` now runs that agent
+(`planner_agent_service.plan_ticket`, over the shared dedicated-Chrome plumbing
+in `agentic_browser`) and the prompts are grounded by
+`prompts.render_planner_plan`. Two artifacts come back — the agent's Markdown
+plan, and a **`plan.json` sidecar that is the only source of truth** (mirroring
+live authoring's `discovered.json`; Markdown prose drifts). The plan's locators
+reach automation through the KB (`merge_plan_to_kb`, stamped
+`source="planner-agent"`), **never** on `TestCase.steps`, whose `{a, e}` schema
+silently drops extra keys (#882). Every failure — no `playwright-cli`, no
+browser, a Claude error, an unparseable sidecar — degrades to text-only. The
+reactive `explore()` path is untouched.
 
 ## Consequences
 

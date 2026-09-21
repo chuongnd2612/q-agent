@@ -1436,11 +1436,11 @@ class SettingsOut(ApiModel):
     # scriptable `cli` subcommand — acts on real locators/refs instead of raw CDP
     # coordinate clicks).
     browser_driver: str = "browser-harness"
-    # Whether test-case generation is grounded in a live-exploration pass BEFORE
-    # authoring cases (#877, ADR 0010 §8): "text" (default) = pure-text generation
-    # from the ticket + KB; "live-planner" = explore the running app first, then
-    # author cases from what was actually observed. See
-    # `ai_service._process_run_ticket`.
+    # Whether test-case generation is grounded in a live pass BEFORE authoring
+    # cases (#877 → #889, ADR 0010 §8): "text" (default) = pure-text generation
+    # from the ticket + KB; "live-planner" = run the `playwright-test-planner`
+    # agent against the running app first, then author cases from the steps it
+    # actually performed. See `ai_service._process_run_ticket`.
     test_case_mode: str = "text"
 
 
