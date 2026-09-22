@@ -62,9 +62,14 @@ from app.schemas import (
     ExploreFinalizeOut,
     ExploreFinalizeRequest,
     ExploreTarget,
+    PlanningClaimOut,
+    PlanningEventOut,
+    PlanningEventRequest,
+    PlanningFinalizeOut,
+    PlanningFinalizeRequest,
 )
 from app.models.automation_project import AutomationFile
-from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, agent_project_bundle, automation_project_service, evidence_service, execution_report_service, execution_service, exploration_agent, heal_service, knowledge_service, project_config_service, project_execution, run_context, settings_store, spec_service
+from app.services import agent_authoring_service, agent_capture_service, agent_device_service, agent_explore_service, agent_planning_service, agent_project_bundle, automation_project_service, evidence_service, execution_report_service, execution_service, exploration_agent, heal_service, knowledge_service, planner_agent_service, project_config_service, project_execution, run_context, settings_store, spec_service
 from app.services.auth_service import AuthError
 from app.services import workspace_scope
 from app.services.ownership import get_owned_or_404
@@ -1108,6 +1113,175 @@ def agent_explore_finalize(
         (body.log or [])[:6],
     )
     return ExploreFinalizeOut(ok=True, wrote_kb=wrote_kb)
+
+
+# ---------------------------------------- Agent-driven live PLANNING (#900)
+@router.post("/planning/next")
+def agent_planning_next(
+    response: Response, user: User = Depends(require_agent), db: Session = Depends(get_db)
+) -> dict | None:
+    """Claim the next queued live-planning session for this device's owner (#900).
+
+    Returns everything the device needs to plan locally - the planner agent's
+    methodology as ``systemPrompt`` plus the per-ticket ``taskPrompt``, both
+    composed server-side because the device has no ``--agent`` support and no
+    ``agents/`` directory - or 204 when nothing is queued.
+
+    Note the server is BLOCKED on this session (the plan feeds the very next
+    generation prompt), so a claim that never finalizes costs the run its plan.
+    """
+    claim = agent_planning_service.claim_next(user.id)
+    if claim is None:
+        response.status_code = 204
+        return None
+    # The owner's effective saved Claude credential, so the device's `claude`
+    # authenticates with the app's Settings credential rather than its own
+    # `claude login`. Best-effort, exactly as for authoring.
+    creds = ""
+    try:
+        from app.services import claude_credentials
+
+        config_dir = claude_credentials.resolve_effective_config_dir(db, user.id)
+        if config_dir is not None:
+            creds_file = config_dir / ".credentials.json"
+            if creds_file.exists():
+                creds = creds_file.read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - creds are optional; log and continue
+        logger.warning("Planning claim: could not resolve Claude credential: {}", exc)
+
+    return PlanningClaimOut(
+        session_id=claim["session_id"],
+        base_url=claim["base_url"],
+        origin=claim["origin"],
+        project_key=claim["project_key"],
+        repo=claim["repo"],
+        run_code=claim["run_code"],
+        ticket=claim["ticket"],
+        sidecar_filename=claim["sidecar_filename"],
+        system_prompt=claim["system_prompt"],
+        task_prompt=claim["task_prompt"],
+        model=claim["model"],
+        max_budget_usd=claim["max_budget_usd"],
+        log_verbosity=claim.get("log_verbosity", "concise"),
+        claude_credentials=creds,
+    ).model_dump(by_alias=True)
+
+
+@router.post("/planning/{session_id}/events", response_model=PlanningEventOut)
+def agent_planning_events(
+    session_id: str,
+    body: PlanningEventRequest,
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+) -> PlanningEventOut:
+    """Relay one planning progress event onto the run's WebSocket.
+
+    The reply's ``alive`` flag rides this existing channel (as authoring's
+    ``control`` does) rather than needing a second poller: it goes False once the
+    session is no longer ``running`` - the run was stopped, or the server hit its
+    deadline and gave up - which tells the device to abort instead of spending
+    budget on a plan nobody will read.
+    """
+    session = agent_planning_service.get_session(session_id, user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Planning session not found")
+    run_id = session.get("run_id")
+    if run_id is not None:
+        hub.publish(str(run_id), body.event, body.payload or {})
+    return PlanningEventOut(ok=True, alive=session.get("status") == "running")
+
+
+@router.post("/planning/{session_id}/finalize", response_model=PlanningFinalizeOut)
+def agent_planning_finalize(
+    session_id: str,
+    body: PlanningFinalizeRequest,
+    user: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+) -> PlanningFinalizeOut:
+    """Store the plan the device produced, unblocking the waiting generation pass.
+
+    The sidecar arrives as RAW TEXT and is stored as such: parsing and
+    normalisation stay in ``planner_agent_service`` so the device cannot fork
+    that contract. ``scenarios`` in the reply is the normalised count, which is
+    also how the device learns whether what it wrote was usable.
+    """
+    session = agent_planning_service.get_session(session_id, user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Planning session not found")
+    plan = planner_agent_service.parse_plan_text(body.plan_json or "")
+    ok = bool(body.ok) and plan is not None
+    agent_planning_service.set_result(
+        session_id,
+        plan_json=body.plan_json or "",
+        summary=body.summary or "",
+        ok=ok,
+        cost_usd=body.cost_usd,
+    )
+    # Auto-rotate the uploaded credential (#cred-rotate) - the same best-effort
+    # pair of writes authoring does: the local row, and the hub (which in hub-data
+    # mode is where the credential actually lives, so skipping it would silently
+    # lose the rotation and invalidate the refresh token the hub still holds).
+    if body.refreshed_credentials:
+        try:
+            from app.services import claude_credentials
+
+            if claude_credentials.persist_refreshed_from_raw(
+                db, user.id, body.refreshed_credentials
+            ):
+                logger.info("Captured a Claude token the agent refreshed (owner={})", user.id)
+        except Exception as exc:  # noqa: BLE001 - rotation is additive; never break finalize
+            logger.warning("Could not persist agent-refreshed Claude credential: {}", exc)
+        try:
+            from app.services import hub_credentials
+
+            hub_credentials.capture_rotated_credential_raw(
+                session.get("run_id"), body.refreshed_credentials
+            )
+        except Exception as exc:  # noqa: BLE001 - rotation is additive; never break finalize
+            logger.warning("Could not post the agent-refreshed token to the hub: {}", exc)
+    # The planner's Claude ran on the paired device, so the server never saw that
+    # spend - record it against the run or it is missing from the cost breakdown.
+    if body.cost_usd and body.cost_usd > 0:
+        try:
+            from app.services import ai_usage_service
+
+            ai_usage_service.record(
+                model=session.get("model") or "",
+                input_tokens=0,
+                output_tokens=0,
+                cache_read=0,
+                cache_write=0,
+                cost_usd=float(body.cost_usd),
+                duration_ms=0,
+                action="live-planning",
+                run_id=session.get("run_id"),
+                owner_id=user.id,
+                ticket_external_id=session.get("ticket") or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - cost recording is additive
+            logger.warning("Planning cost record skipped: {}", exc)
+    if not ok:
+        # The device is the only thing that knows why its planning pass produced
+        # nothing usable (Chrome never attached, the profile was not
+        # authenticated, Claude errored, the sidecar was never written). Without
+        # this line a blind run leaves no server-side trace at all.
+        logger.warning(
+            "Live planning produced NO usable plan (session={} run={} ticket={}): {}",
+            session_id,
+            session.get("run_id"),
+            session.get("ticket"),
+            (body.summary or "(the agent sent no summary)")[:800],
+        )
+    scenarios = len(plan.get("scenarios") or []) if plan else 0
+    logger.info(
+        "Planning finalize (session={} run={} ticket={}): ok={} scenarios={}",
+        session_id,
+        session.get("run_id"),
+        session.get("ticket"),
+        ok,
+        scenarios,
+    )
+    return PlanningFinalizeOut(ok=ok, scenarios=scenarios)
 
 
 # ------------------------------------------ Agent-driven live authoring (#400/403)

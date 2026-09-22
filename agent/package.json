@@ -20,7 +20,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -34,10 +34,10 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.0",
-    "@playwright/test": "^1.61.1",
+    "@playwright/test": "^1.63.0",
     "commander": "^12.1.0",
     "electron-updater": "^6.3.9",
-    "playwright": "^1.61.1"
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

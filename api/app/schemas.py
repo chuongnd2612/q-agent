@@ -438,6 +438,89 @@ class ExploreFinalizeOut(ApiModel):
     wrote_kb: bool = False
 
 
+# ---------------------------------------- Agent-driven live PLANNING (#900)
+class PlanningClaimOut(ApiModel):
+    """Claim payload for ``POST /agent/planning/next``.
+
+    Everything the paired device needs to plan test scenarios against the real
+    app locally: it launches its own pre-authenticated Chrome (the profile the
+    manual-login capture wrote on THAT machine), points Playwright's scriptable
+    ``cli`` at it, and runs its local ``claude`` with ``system_prompt`` +
+    ``task_prompt``, writing the plan into ``sidecar_filename``.
+
+    ``system_prompt`` carries the ``playwright-test-planner`` agent definition's
+    body as raw text because the device's CLI has no ``--agent`` support and no
+    ``agents/`` directory — the same wire shape live authoring already uses
+    (#894/#901). No ``browser_driver`` field: the planner agent is
+    playwright-cli-native and the server hardcodes that driver, so a per-session
+    choice could only drift from it.
+    """
+
+    session_id: str
+    base_url: str
+    origin: str
+    project_key: str
+    repo: str
+    run_code: str
+    ticket: str
+    sidecar_filename: str = "plan.json"
+    system_prompt: str
+    task_prompt: str
+    model: str
+    max_budget_usd: float = 0.0
+    log_verbosity: str = "concise"
+    # The run owner's saved Claude credential, so the device's `claude` uses the
+    # app's Settings credential rather than needing its own `claude login`.
+    # Empty ⇒ fall back to the device's own login. Never logged.
+    claude_credentials: str = ""
+
+
+class PlanningEventRequest(ApiModel):
+    """Body for ``POST /agent/planning/{id}/events`` — a progress event to relay
+    onto the run WebSocket (when the session has a run)."""
+
+    event: str
+    payload: dict = Field(default_factory=dict)
+
+
+class PlanningEventOut(ApiModel):
+    """Reply to a planning progress post.
+
+    ``alive`` is ``False`` once the session is no longer waiting for this device
+    — the run was stopped, or the server already gave up on the deadline — which
+    tells the device to abort instead of burning budget on a result nobody will
+    read.
+    """
+
+    ok: bool = True
+    alive: bool = True
+
+
+class PlanningFinalizeRequest(ApiModel):
+    """Body for ``POST /agent/planning/{id}/finalize``.
+
+    ``plan_json`` is the sidecar's RAW TEXT, not a parsed object: parsing and
+    normalisation stay server-side (``planner_agent_service.normalize_plan``), so
+    a device on its own release cadence cannot fork that contract. An empty
+    string means "no usable sidecar" and the server falls back to text-only.
+    """
+
+    plan_json: str = ""
+    summary: str = ""
+    ok: bool = True
+    cost_usd: float = 0.0
+    # As for authoring: the `.credentials.json` content after the device's run,
+    # so an OAuth token the CLI rotated locally is captured back. Never logged.
+    refreshed_credentials: str = ""
+
+
+class PlanningFinalizeOut(ApiModel):
+    """Finalize response — whether the posted plan carried usable scenarios."""
+
+    ok: bool = True
+    scenarios: int = 0
+
+
 # ------------------------------------------ Agent-driven live authoring (#400/403)
 class AuthoringClaimOut(ApiModel):
     """Claim payload for ``POST /agent/authoring/next`` — everything the paired

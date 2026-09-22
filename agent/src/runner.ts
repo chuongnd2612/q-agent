@@ -18,6 +18,7 @@ import { emit } from "./bus";
 import { AgentConfig } from "./config";
 import { ensureChromium } from "./ensureBrowser";
 import { agentNodeModules, childNodeEnv, claudeCli, nodeBin, playwrightCli, vendorAuthoringScript, vendorCaptureScript, vendorExploreScript, vendorLiveReporter } from "./paths";
+import { playwrightCliFindAvailable } from "./playwrightCliCapability";
 import { ensureBrowserHarness } from "./ensureTooling";
 import { applyFixtures, writeConfig } from "./playwrightConfig";
 import { installBaseFramework, materializeProject, writeProjectFile } from "./projectBundle";
@@ -1460,8 +1461,14 @@ export async function processAuthoringJob(cfg: AgentConfig, job: api.AuthoringJo
     const driver = job.browserDriver || "browser-harness";
     let harnessBinDir = "";
     if (driver === "playwright-cli") {
-      if (!fs.existsSync(playwrightCli())) {
-        await finalize("", { routes: [], selectors: [] }, "playwright-cli unavailable: playwright is not bundled with this agent build", false);
+      // Prove the CAPABILITY, not the path (#899): `cli.js` is also the entry for
+      // `test`/`install`, so it exists in every Playwright — including ones with
+      // no `cli find`, the first-choice discovery command in every ported agent.
+      // The old existence check passed on 1.61.1 and the session then died
+      // mid-run on `Unknown command: find`.
+      const pw = await playwrightCliFindAvailable();
+      if (!pw.ok) {
+        await finalize("", { routes: [], selectors: [] }, pw.error || "playwright-cli unavailable", false);
         return;
       }
     } else {
@@ -1880,6 +1887,253 @@ ${tail}
   }
 }
 
+/**
+ * Run ONE live-planning session locally (#900).
+ *
+ * The device half of the planner dispatch: `testCaseMode="live-planner"` with
+ * `executionTarget="local-agent"` now enqueues a planning session server-side
+ * instead of launching Chrome in the API container, because that container
+ * usually cannot reach the app under test and — worse — the manual login lives
+ * in THIS machine's browser profile, so a server-side plan explores what an
+ * anonymous visitor sees and writes test cases describing the login screen.
+ *
+ * Deliberately the same four moves `processAuthoringJob` makes — vendored
+ * launcher for a pre-authenticated Chrome, playwright-cli preflight, one local
+ * `claude` pass driven by the server-composed system+task prompts, finalize —
+ * and deliberately NOT its pause/resume, project staging or spec verification:
+ * a planning pass produces a JSON sidecar, not a runnable spec, and the SERVER
+ * IS BLOCKED waiting for it (the plan feeds the very next generation prompt),
+ * so there is nothing for a human to step into mid-session.
+ *
+ * Always playwright-cli: the planner agent is written against it and the server
+ * hardcodes it, so there is no `browserDriver` to honour here.
+ *
+ * Never throws. Every failure path still posts a finalize, because the waiting
+ * server otherwise learns nothing until its deadline expires — turning a
+ * five-second "no captured login" into a multi-minute stall.
+ */
+export async function processPlanningJob(cfg: AgentConfig, job: api.PlanningJob): Promise<void> {
+  let origin = job.origin;
+  if (!origin && job.baseUrl) {
+    try { origin = new URL(job.baseUrl).origin; } catch { origin = ""; }
+  }
+  const sess = origin ? sessionPathsForOrigin(origin) : null;
+  const profileDir = sess ? path.join(sess.dir, "browser-profile") : "";
+
+  const finalize = async (
+    planJson: string,
+    summary: string,
+    ok: boolean,
+    costUsd = 0,
+    refreshedCredentials = "",
+  ) => {
+    await api
+      .postPlanningFinalize(cfg, job.sessionId, { planJson, summary, ok, costUsd, refreshedCredentials })
+      .catch((err) => console.error("postPlanningFinalize failed:", err));
+  };
+
+  if (!profileDir || !fs.existsSync(profileDir)) {
+    await finalize("", "No authenticated browser profile for this origin — capture a manual login first.", false);
+    return;
+  }
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "qagent-planning-"));
+  const port = await getFreePort();
+  let launcher: ChildProcess | null = null;
+  let claudeChild: ChildProcess | null = null;
+  try {
+    await api
+      .postPlanningEvent(cfg, job.sessionId, "planning.progress", {
+        ticket: job.ticket, phase: "launching", message: "Starting authenticated browser",
+      })
+      .catch(() => {});
+
+    // 1) The same vendored launcher authoring uses: a dedicated Chrome with the
+    //    captured sessionStorage + storageState replayed in, so the planner
+    //    explores the app SIGNED IN. Nothing here declares a storageState in a
+    //    spec or saves a state file — the profile and the captured state are the
+    //    only auth material, which is the #901 contract.
+    const nm = agentNodeModules();
+    launcher = spawn(
+      nodeBin(),
+      [
+        vendorAuthoringScript(),
+        job.baseUrl,
+        String(port),
+        profileDir,
+        sess ? sess.sessionStoragePath : "",
+        sess ? sess.storageStatePath : "",
+      ],
+      { env: nodePathEnv(nm), stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
+    );
+    activeChild = launcher;
+    let launcherErr = "";
+    launcher.stderr?.on("data", (d) => { launcherErr += String(d); });
+    const ready = await new Promise<boolean>((resolve) => {
+      const to = setTimeout(() => resolve(false), AUTHORING_CDP_READY_TIMEOUT_MS);
+      launcher!.stdout?.on("data", (d) => {
+        if (String(d).includes("AUTHORING_BROWSER_READY")) { clearTimeout(to); resolve(true); }
+      });
+      launcher!.on("exit", () => { clearTimeout(to); resolve(false); });
+    });
+    if (!ready) {
+      await finalize("", `Planning browser did not become ready on port ${port}. ${launcherErr.trim()}`.trim(), false);
+      return;
+    }
+
+    // 2) Preflight the CAPABILITY, not the path (#899): the planner's very first
+    //    discovery step is `cli find`, which the agent's previously pinned
+    //    Playwright did not have — and `cli.js` exists in every version, so the
+    //    old existence check let the session start and die mid-plan.
+    const pw = await playwrightCliFindAvailable();
+    if (!pw.ok) {
+      await finalize("", pw.error || "playwright-cli unavailable", false);
+      return;
+    }
+
+    await api
+      .postPlanningEvent(cfg, job.sessionId, "planning.progress", {
+        ticket: job.ticket, phase: "driving", message: "Exploring the app live to plan scenarios",
+      })
+      .catch(() => {});
+
+    const systemFile = path.join(workDir, "system-prompt.txt");
+    fs.writeFileSync(systemFile, job.systemPrompt, "utf-8");
+    let claudeConfigDir = "";
+    if (job.claudeCredentials) {
+      claudeConfigDir = path.join(workDir, ".claude-config");
+      fs.mkdirSync(claudeConfigDir, { recursive: true });
+      const credFile = path.join(claudeConfigDir, ".credentials.json");
+      fs.writeFileSync(credFile, job.claudeCredentials, "utf-8");
+      try { fs.chmodSync(credFile, 0o600); } catch { /* best-effort on Windows */ }
+    }
+    // Per-session CDP session name, as authoring does: a shared name would make
+    // two concurrent runs fight over one tab.
+    const sessionName = harnessName(job.sessionId, 0);
+    const claudeEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      PW_CLI_CDP_URL: `http://127.0.0.1:${port}`,
+      PW_CLI_SESSION: sessionName,
+      PLAYWRIGHT_CLI_JS: playwrightCli(),
+    };
+    if (claudeConfigDir) claudeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;
+
+    const conciseLog = (job.logVerbosity ?? "concise") === "concise";
+    let aborted = false;
+    const emitStep = (line: string): void => {
+      const trimmed = line.length > 300 ? line.slice(0, 300) + "…" : line;
+      console.log(`[planning ${job.ticket}] ${trimmed}`);
+      if (!(conciseLog && trimmed.trimStart().startsWith("▷"))) {
+        emit("planning-step", { ticket: job.ticket, line: trimmed });
+      }
+      void api
+        .postPlanningEvent(cfg, job.sessionId, "planning.progress", {
+          ticket: job.ticket, phase: "step", message: trimmed,
+        })
+        .then(({ alive }) => {
+          // `alive: false` means the server stopped waiting (the run was stopped,
+          // or its deadline passed) — stop burning budget on a plan nobody will
+          // read. Same abort-on-stop contract authoring has, carried on the
+          // channel the device already posts on rather than a second poller.
+          if (!alive && !aborted) {
+            aborted = true;
+            console.log(`[planning ${job.ticket}] server is no longer waiting — aborting Claude`);
+            try { claudeChild?.kill(); } catch { /* already exited */ }
+          }
+        })
+        .catch(() => { /* a flaky post is not evidence the session died */ });
+    };
+
+    let cerr = "";
+    let costUsd = 0;
+    let buf = "";
+    const handleEvent = (ev: {
+      type?: string;
+      message?: { content?: Array<Record<string, unknown>> };
+      total_cost_usd?: unknown;
+    }): void => {
+      if (ev.type === "assistant" && ev.message?.content) {
+        for (const c of ev.message.content) {
+          if (c.type === "text" && typeof c.text === "string" && c.text.trim()) {
+            emitStep(`Claude: ${c.text.trim()}`);
+          } else if (c.type === "tool_use") {
+            const inp = (c.input as Record<string, unknown>) || {};
+            const detail = inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? JSON.stringify(inp).slice(0, 200);
+            emitStep(`▷ ${String(c.name)}: ${String(detail).replace(/\s+/g, " ").trim()}`);
+          }
+        }
+      } else if (ev.type === "result" && typeof ev.total_cost_usd === "number") {
+        costUsd = ev.total_cost_usd;
+      }
+    };
+
+    const child = spawn(
+      claudeCli(),
+      buildPassArgs({
+        prompt: job.taskPrompt,
+        model: job.model,
+        systemPromptFile: systemFile,
+        workDir,
+        budgetUsd: job.maxBudgetUsd,
+      }),
+      { cwd: workDir, env: claudeEnv, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
+    );
+    claudeChild = child;
+    activeChild = child;
+    child.stdout?.on("data", (d) => {
+      buf += String(d);
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try { handleEvent(JSON.parse(line)); } catch { /* ignore non-JSON noise */ }
+      }
+    });
+    child.stderr?.on("data", (d) => { cerr += String(d); });
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on("close", (c) => resolve(c ?? 0));
+      child.on("error", (e) => { cerr += `\nclaude spawn error: ${(e as Error).message}`; resolve(-1); });
+    });
+
+    // 3) The sidecar is the only thing the server reads — the Markdown plan is an
+    //    audit artifact and stays on this machine with the temp workdir. Post its
+    //    RAW TEXT: parsing/normalisation is the server's contract (it caps
+    //    scenarios, accepts key aliases, and decides what counts as usable), and
+    //    duplicating that here would let the two drift across agent releases.
+    const sidecar = path.join(workDir, job.sidecarFilename || "plan.json");
+    let planJson = "";
+    try {
+      if (fs.existsSync(sidecar)) planJson = fs.readFileSync(sidecar, "utf-8");
+    } catch (err) {
+      console.error("Could not read the plan sidecar:", err);
+    }
+    const ok = planJson.trim() !== "";
+    const summary = ok
+      ? `Planned live on ${cfg.deviceName} (${planJson.length} bytes of plan)`
+      : aborted
+        ? "Planning aborted — the server was no longer waiting for this session."
+        : `The planner wrote no ${job.sidecarFilename || "plan.json"} (claude exit ${exitCode}). ${cerr.trim().slice(0, 400)}`.trim();
+
+    let refreshedCredentials = "";
+    if (claudeConfigDir) {
+      try {
+        const credFile = path.join(claudeConfigDir, ".credentials.json");
+        if (fs.existsSync(credFile)) refreshedCredentials = fs.readFileSync(credFile, "utf-8");
+      } catch { /* best-effort — a missing/unreadable file just skips rotation */ }
+    }
+    await finalize(planJson, summary, ok, costUsd, refreshedCredentials);
+  } catch (err) {
+    await finalize("", `Local Agent crashed while planning: ${(err as Error).message}`, false);
+  } finally {
+    try { claudeChild?.kill(); } catch {}
+    try { launcher?.stdin?.end(); } catch {}
+    try { launcher?.kill(); } catch {}
+    if (activeChild === launcher || activeChild === claudeChild) activeChild = null;
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 export async function runAgentLoop(cfg: AgentConfig, signal: { aborted: boolean }): Promise<void> {
   if (!(await ensureChromium())) {
     console.error("Chromium is required to run tests — aborting.");
@@ -1926,7 +2180,29 @@ export async function runAgentLoop(cfg: AgentConfig, signal: { aborted: boolean 
         }
         continue;
       }
-      // No exploration either — check for a queued live-authoring session (#403):
+      // No exploration either — check for a queued live-PLANNING session (#900).
+      // Checked before authoring because a planning session has a WAITING server
+      // thread on the other end (the plan feeds the next generation prompt), so
+      // every idle poll spent elsewhere is spent against its deadline.
+      let planning: api.PlanningJob | null = null;
+      try {
+        planning = await api.claimNextPlanning(cfg);
+      } catch (err) {
+        console.error("Planning claim failed:", (err as Error).message);
+      }
+      if (planning) {
+        console.log(`Claimed planning ${planning.sessionId} (${planning.ticket}, ${planning.baseUrl})`);
+        emit("planning-claimed", { sessionId: planning.sessionId, ticket: planning.ticket });
+        try {
+          await processPlanningJob(cfg, planning);
+          console.log(`Planning ${planning.sessionId} complete`);
+        } catch (err) {
+          console.error(`Planning ${planning.sessionId} crashed:`, err);
+          emit("error", { message: `Planning ${planning.sessionId} crashed: ${(err as Error).message}` });
+        }
+        continue;
+      }
+      // No planning either — check for a queued live-authoring session (#403):
       // drive `claude` + browser-harness locally to author a spec from the real app.
       let authoring: api.AuthoringJob | null = null;
       try {

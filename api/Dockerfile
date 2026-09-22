@@ -38,11 +38,16 @@ RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install browser-harness
 
 # Playwright's own scriptable `cli` subcommand (#875) — the alternative
 # `browserDriver` to browser-harness: Claude drives real locators/refs directly
-# instead of raw CDP coordinate clicks. `playwright` (>= 1.63, which ships the
-# `cli` subcommand) is installed globally alongside the Node runtime above, into
-# the SAME global node_modules Claude Code just landed in — `playwright_cli_js`
-# (app/config.py) resolves `<QAGENT_PLAYWRIGHT_NODE_MODULES>/playwright/cli.js`
-# from it, so live_authoring_service can `node` it directly with no PATH shim.
+# instead of raw CDP coordinate clicks. `playwright` is pinned >= 1.63 for the
+# `cli find` COMMAND specifically, not for `cli` itself (#899): `cli` exists as
+# far back as 1.61.1 — with snapshot/eval/resize/generate-locator/state-load all
+# present — and only `find` arrived later. `find` is the first-choice
+# element-discovery step in every ported agent, so an older Playwright dies
+# mid-session on `Unknown command: find`. Installed globally alongside the Node
+# runtime above, into the SAME global node_modules Claude Code just landed in —
+# `playwright_cli_js` (app/config.py) resolves
+# `<QAGENT_PLAYWRIGHT_NODE_MODULES>/playwright/cli.js` from it, so
+# live_authoring_service can `node` it directly with no PATH shim.
 RUN npm install -g playwright@^1.63.0 \
  && npm cache clean --force
 

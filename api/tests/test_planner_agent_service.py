@@ -153,8 +153,19 @@ def planner_run(monkeypatch, tmp_path):
     Records what the agentic call was given, so a test can pin the BRANCH that
     ran (the real ``playwright-test-planner`` agent, against the shared browser
     session's env) and not merely that something returned a plan.
+
+    ``executionTarget`` is pinned to ``server`` here (via the sanctioned
+    ``settings_override``, not a bare ``save_settings``) because this file tests
+    the IN-PROCESS path. Without it these tests read ``settings_store.DEFAULTS``
+    — which ships ``executionTarget="local-agent"`` deliberately (#161) — since
+    the temp workspace holds no ``settings.json``, and every one of them would
+    silently take the #900 device-dispatch branch instead. That is exactly the
+    #573 failure mode: green-looking tests that never enter the code they claim
+    to cover.
     """
     from app.config import settings
+
+    from tests.conftest import settings_override
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
     monkeypatch.setattr(planner_agent_service.claude_cli, "playwright_cli_available", lambda: True)
@@ -187,7 +198,8 @@ def planner_run(monkeypatch, tmp_path):
 
     _fake_agentic.payload = json.dumps(_plan_payload())
     monkeypatch.setattr(planner_agent_service.claude_cli, "run_agentic", _fake_agentic)
-    return SimpleNamespace(launched=launched, calls=calls, agentic=_fake_agentic)
+    with settings_override(executionTarget="server"):
+        yield SimpleNamespace(launched=launched, calls=calls, agentic=_fake_agentic)
 
 
 _RUN = SimpleNamespace(code="RUN-1")
