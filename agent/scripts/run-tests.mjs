@@ -19,7 +19,7 @@
  *     worst possible failure mode for a gate.
  *
  * So: enumerate the files here, pass them to `node --test` as explicit paths
- * (understood by every Node this package supports, `engines.node >= 18`), and
+ * (understood by every Node this package supports, `engines.node >= 20`), and
  * hard-fail when the enumeration comes up empty rather than exiting 0 on a
  * suite that never ran. Recursive, so a test file added in a nested directory
  * is picked up instead of being quietly skipped by a single-level glob.

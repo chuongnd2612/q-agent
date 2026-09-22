@@ -41,11 +41,16 @@ import re
 from pathlib import Path
 from typing import Any
 
+from uuid import uuid4
+
 from app.config import settings
 from app.logging import logger
 from app.services import (
+    agent_capture_service,
+    agent_planning_service,
     agentic_browser,
     agents,
+    audit_service,
     claude_cli,
     project_config_service,
     settings_store,
@@ -333,6 +338,14 @@ def plan_ticket(run, ticket, context: dict, *, owner_id: int | None, target: dic
     and return ``None`` — which the caller treats as "no live grounding", falling
     back to today's text-only generation. Nothing here may fail a run.
 
+    **Where it runs (#900).** With ``executionTarget="local-agent"`` the planning
+    is dispatched to the paired device instead (:func:`_plan_on_device`), because
+    the API container usually cannot reach the app under test and — worse — the
+    manual login was captured into the *device's* browser profile, so planning
+    here would explore whatever an anonymous visitor sees and write test cases
+    describing the login screen. Every device failure still degrades to ``None``,
+    so a dispatch problem costs a run its grounding, never the run.
+
     Args:
         run: The run this ticket belongs to (workspace + label attribution).
         ticket: The work item being planned for.
@@ -346,6 +359,10 @@ def plan_ticket(run, ticket, context: dict, *, owner_id: int | None, target: dic
     base_url = (context.get("baseUrl") or "").strip()
     if not base_url:
         return None
+    if settings_store.load_settings().get("executionTarget", "server") == "local-agent":
+        return _plan_on_device(
+            run, ticket, context, owner_id=owner_id, target=target, base_url=base_url
+        )
     if not claude_cli.playwright_cli_available():
         logger.warning(
             "Planner agent skipped for {}: playwright-cli not available on the API host",
@@ -395,6 +412,155 @@ def plan_ticket(run, ticket, context: dict, *, owner_id: int | None, target: dic
     return read_plan_sidecar(sidecar_path)
 
 
+def system_prompt() -> str:
+    """The planner agent definition's body, as raw text, for the device path.
+
+    The paired device runs its own CLI, which has no ``--agent`` support and no
+    ``agents/`` directory, so the methodology travels as a *system prompt string*
+    instead (the wire shape live authoring already uses — see
+    :func:`live_authoring_service.system_prompt_for`, #894/#901). An agent
+    definition is just a prompt, so sending its body delivers the same
+    methodology. Returns ``""`` when the definition cannot be loaded, which the
+    caller treats as "cannot plan on the device".
+    """
+    definition = agents.load_agent(agents.PLAYWRIGHT_TEST_PLANNER)
+    return definition["prompt"] if definition else ""
+
+
+def _plan_on_device(
+    run, ticket, context: dict, *, owner_id: int | None, target: dict[str, str], base_url: str
+) -> dict | None:
+    """Plan on the paired Local Agent and wait, bounded, for the result (#900).
+
+    Mirrors the three existing device dispatches (capture, exploration, live
+    authoring) in wire shape — enqueue a session, the device claims it over
+    ``/agent/planning/next`` and posts back to ``/finalize`` — with one
+    deliberate difference: the planner's output is consumed *inline* by the very
+    next generation prompt, so this blocks on the session row instead of
+    returning and letting something poll later. That is safe because the caller
+    is already a background worker thread, and because every failure below
+    returns ``None``, i.e. "generate from text", exactly as a missing sidecar
+    already did.
+
+    Args:
+        run, ticket, context, owner_id, target: as :func:`plan_ticket`.
+        base_url: The already-validated, non-empty app URL.
+
+    Returns:
+        A normalized plan, or ``None`` when no device is paired, nothing claimed
+        the session, the device overran the deadline, or what it posted back
+        carried no usable scenario. Each of those logs a warning AND records an
+        audit row, because the symptom of a silent failure here is not an error
+        but a run that quietly planned blind.
+    """
+    if not agent_planning_service.has_paired_device(owner_id):
+        return _device_planning_unavailable(
+            run,
+            ticket,
+            "No Local Agent paired — planned from ticket text instead",
+            "Execution target is Local Agent but no device is paired",
+        )
+    methodology = system_prompt()
+    if not methodology:
+        return _device_planning_unavailable(
+            run,
+            ticket,
+            "Planner agent definition missing — planned from ticket text instead",
+            "agents/playwright-test-planner.md could not be loaded",
+        )
+
+    session_id = uuid4().hex
+    stored = settings_store.load_settings()
+    agent_planning_service.request_planning(
+        session_id,
+        owner_id=owner_id,
+        run_id=getattr(run, "id", None),
+        project_key=context.get("projectKey") or "",
+        repo=context.get("repo", "") or "",
+        base_url=base_url,
+        origin=agent_capture_service.origin_of(base_url),
+        run_code=run.code,
+        ticket=ticket.external_id,
+        sidecar_filename=SIDECAR_NAME,
+        system_prompt=methodology,
+        task_prompt=build_planner_prompt(target, base_url, context),
+        model=stored.get("claudeModel") or settings.claude_model,
+        max_budget_usd=settings_store.authoring_cost_budget_usd(),
+        log_verbosity=stored.get("authoringLogVerbosity", "concise"),
+    )
+    logger.info(
+        "Dispatched live planning for {} to the paired device (session={})",
+        ticket.external_id,
+        session_id,
+    )
+
+    result = agent_planning_service.await_result(session_id)
+    if result is None:
+        return _device_planning_unavailable(
+            run,
+            ticket,
+            "Local Agent did not return a plan in time — planned from ticket text instead",
+            f"planning session {session_id} hit its deadline",
+        )
+    if result.get("status") != "done":
+        return _device_planning_unavailable(
+            run,
+            ticket,
+            "Local Agent could not plan live — planned from ticket text instead",
+            (result.get("summary") or "the device reported a failure")[:400],
+        )
+    return parse_plan_text(result.get("plan_json") or "")
+
+
+def _device_planning_unavailable(run, ticket, action: str, why: str) -> None:
+    """Log + audit a device-planning fallback, then return ``None``.
+
+    One helper for every giving-up path so the run timeline always says which
+    one happened. Without this the fallback is invisible: generation simply
+    continues from ticket text and looks like a normal text-mode run.
+    """
+    logger.warning("Live planning on the device unavailable for {}: {}", ticket.external_id, why)
+    audit_service.record(
+        category="automation",
+        actor_type="ai",
+        action=action,
+        target=ticket.external_id,
+        status="warning",
+        meta=why,
+        run_code=getattr(run, "code", None),
+    )
+    return None
+
+
+def parse_plan_text(raw: str) -> dict | None:
+    """Parse + normalize a plan sidecar's raw TEXT, or ``None`` if unusable.
+
+    The one place sidecar text becomes a plan, whether it was written to disk by
+    a server-side run or posted back by a device. Keeping it here is what lets
+    the device ship raw text over the wire: the caps, the key aliases and the
+    "no usable scenario" rule cannot fork onto a device that releases on its own
+    cadence.
+
+    Args:
+        raw: The sidecar's contents.
+
+    Returns:
+        A normalized plan, or ``None`` when the text is empty, not JSON, or
+        carries no usable scenario.
+    """
+    if not (raw or "").strip():
+        logger.warning("Planner produced an empty plan sidecar — falling back to text-only")
+        return None
+    try:
+        plan = normalize_plan(json.loads(raw))
+    except Exception as exc:  # noqa: BLE001 - a bad sidecar must not fail generation
+        logger.warning("Planner sidecar could not be parsed: {}", exc)
+        return None
+    if plan is None:
+        logger.warning("Planner sidecar carried no usable scenario — falling back to text-only")
+    return plan
+
+
 def read_plan_sidecar(path: Path) -> dict | None:
     """Read + normalize the planner's JSON sidecar, or ``None`` if unusable.
 
@@ -409,10 +575,8 @@ def read_plan_sidecar(path: Path) -> dict | None:
         logger.warning("Planner agent wrote no {} — falling back to text-only", path.name)
         return None
     try:
-        plan = normalize_plan(json.loads(path.read_text(encoding="utf-8")))
-    except Exception as exc:  # noqa: BLE001 - a bad sidecar must not fail generation
-        logger.warning("Planner sidecar could not be parsed: {}", exc)
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Planner sidecar could not be read: {}", exc)
         return None
-    if plan is None:
-        logger.warning("Planner sidecar carried no usable scenario — falling back to text-only")
-    return plan
+    return parse_plan_text(raw)

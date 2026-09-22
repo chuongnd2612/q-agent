@@ -21,6 +21,7 @@ from app.models.agent_device import AgentDevice
 from app.models.automation_project import AutomationFile, AutomationProject
 from app.models.agent_authoring import AgentAuthoringSession
 from app.models.agent_capture import AgentCaptureRequest
+from app.models.agent_planning import AgentPlanningSession
 from app.models.business import BusinessFact, BusinessSource
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "AgentDevice",
     "AgentAuthoringSession",
     "AgentCaptureRequest",
+    "AgentPlanningSession",
     "AutomationProject",
     "AutomationFile",
     "BusinessFact",

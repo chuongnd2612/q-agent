@@ -786,3 +786,105 @@ export async function postAuthoringFinalize(
   );
   await throwIfNotOk(res);
 }
+
+/** A claimed live-PLANNING session (#900): run the `playwright-test-planner`
+ * methodology against the real app on THIS machine and hand the plan sidecar
+ * back, so `testCaseMode="live-planner"` reaches the paired device instead of
+ * planning from the API container (which has neither the device's captured
+ * login nor its network).
+ *
+ * Unlike authoring there is no `browserDriver` field: the planner agent is
+ * playwright-cli-native and the server hardcodes that driver for planning, so
+ * offering a choice here would only let the two drift. */
+export interface PlanningJob {
+  sessionId: string;
+  baseUrl: string;
+  origin: string;
+  projectKey: string;
+  repo: string;
+  /** Run code + ticket id, for log/trail lines only — the device writes no rows. */
+  runCode: string;
+  ticket: string;
+  /** Name of the JSON sidecar the plan must be written to (the server's `plan.json`). */
+  sidecarFilename: string;
+  /** The planner agent definition's body. Shipped as a system prompt STRING
+   * because the device's CLI has no `--agent` support and no `agents/` dir
+   * (#894/#901) — the same wire shape authoring already uses. */
+  systemPrompt: string;
+  taskPrompt: string;
+  model: string;
+  maxBudgetUsd: number;
+  logVerbosity?: string;
+  claudeCredentials?: string;
+}
+
+/** Claim the next queued planning session for this device's owner. `null` on 204. */
+export async function claimNextPlanning(cfg: AgentConfig): Promise<PlanningJob | null> {
+  const res = await fetch(`${cfg.serverUrl}/agent/planning/next`, {
+    method: "POST",
+    headers: authHeaders(cfg.deviceToken),
+  });
+  if (res.status === 204) return null;
+  await throwIfNotOk(res);
+  return (await res.json()) as PlanningJob;
+}
+
+/**
+ * Push one planning progress event; the server relays it to the run WS.
+ *
+ * The reply's `alive` rides this channel (as authoring's `control` does) rather
+ * than needing a second poller: it goes false once the server stopped waiting —
+ * the run was stopped, or its deadline passed — which is the signal to abort
+ * instead of spending budget on a plan nobody will read. A transport failure
+ * reports `alive: true`, because a flaky post is not evidence the session died.
+ */
+export async function postPlanningEvent(
+  cfg: AgentConfig,
+  sessionId: string,
+  event: string,
+  payload: Record<string, unknown>
+): Promise<{ ok: boolean; alive: boolean }> {
+  const res = await fetch(`${cfg.serverUrl}/agent/planning/${sessionId}/events`, {
+    method: "POST",
+    headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
+    body: JSON.stringify({ event, payload }),
+  });
+  // A 404 means the session is gone server-side (purged with a stopped run), so
+  // it is the same signal as `alive: false` — not an error worth throwing.
+  if (res.status === 404) return { ok: false, alive: false };
+  await throwIfNotOk(res);
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; alive?: boolean };
+  return { ok: body.ok !== false, alive: body.alive !== false };
+}
+
+/**
+ * Finalize a planning session.
+ *
+ * `planJson` is the sidecar's RAW TEXT, not a parsed object: the server already
+ * owns `normalize_plan`/`read_plan_sidecar` (the caps, the key aliases, the "no
+ * usable scenario ⇒ text-only" rule), and parsing here would fork that contract
+ * onto a device that ships on its own release cadence. An empty string means
+ * "no usable sidecar was written" and the server falls back to text-only.
+ */
+export async function postPlanningFinalize(
+  cfg: AgentConfig,
+  sessionId: string,
+  body: {
+    planJson: string;
+    summary: string;
+    ok: boolean;
+    costUsd?: number;
+    refreshedCredentials?: string;
+  }
+): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${cfg.serverUrl}/agent/planning/${sessionId}/finalize`,
+    {
+      method: "POST",
+      headers: { ...authHeaders(cfg.deviceToken), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    HEAL_FIX_REQUEST_TIMEOUT_MS
+  );
+  await throwIfNotOk(res);
+}

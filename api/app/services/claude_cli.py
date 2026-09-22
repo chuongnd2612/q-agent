@@ -733,12 +733,20 @@ def browser_harness_available() -> bool:
 def playwright_cli_available() -> bool:
     """Best-effort preflight: is Playwright's own ``cli`` subcommand usable? (#875)
 
-    Live-authoring/live-self-heal with ``browserDriver == "playwright-cli"``
-    requires Node plus an installed ``playwright`` package (``@playwright/test >=
-    1.63`` ships the `cli` subcommand this project scripts against) at
+    Live-authoring/live-self-heal/live-planning with ``browserDriver ==
+    "playwright-cli"`` requires Node plus an installed ``playwright`` package at
     :attr:`settings.playwright_cli_js` — the analogue of
     :func:`browser_harness_available` for the new driver. Returns True only when
     both ``node`` resolves and the CLI entry file exists; never raises.
+
+    The image pins ``playwright >= 1.63`` for the ``cli find`` **command**, not
+    for ``cli`` as a whole (#899): ``cli`` exists in 1.61.1 already, and only
+    ``find`` — the first-choice element-discovery step in the ported agents —
+    arrived later. Note this check is still path-based, so it cannot tell a
+    too-old install from a good one; the API image controls its own Playwright
+    version, while on the Local Agent (where the version is whatever that build
+    bundled) the capability IS probed — see
+    ``agent/src/playwrightCliCapability.ts``.
     """
     from shutil import which
 

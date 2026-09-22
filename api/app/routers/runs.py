@@ -603,10 +603,16 @@ def _stop_run_work(db: Session, run: Run) -> None:
     db.commit()
 
     # 4) Purge in-memory queues/registries so no worker picks the run up again.
-    from app.services import agent_authoring_service, agent_explore_service, playwright_runner
+    from app.services import (
+        agent_authoring_service,
+        agent_explore_service,
+        agent_planning_service,
+        playwright_runner,
+    )
 
     agent_authoring_service.purge_run(run_id)
     agent_explore_service.purge_run(run_id)
+    agent_planning_service.purge_run(run_id)
     playwright_runner.purge_run(run_id)
     link_service.forget_run(run_id)
     automation_router.forget_generating(run_id)
