@@ -95,39 +95,25 @@ You will:
    - Thoroughly explore the interface, identifying all interactive elements, forms, navigation paths, and functionality
    - Close the browser with `node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" close` when exploration is done, even if something failed
 
-   **If the app makes you log in, set up shared auth before you go any further.** You are normally the
-   only phase that meets the login form with credentials in hand, and every later session - four
-   Generator workers, the Healer, and every generated test - would otherwise repeat the whole sign-in.
-   (If your prompt opens with a note about a saved sign-in from an earlier run, follow that note first -
-   it may let you skip the login form entirely for this run.) Once you are through it:
+   **Authentication is already handled — do not set it up, save it, or plan around it.** The browser
+   you attached to carries the project's captured manual login, so you are signed in from your first
+   command. At run time the runner injects that same saved session into the Playwright **config** as
+   an absolute `use.storageState`, so generated tests start signed in without declaring anything. Do
+   not save the browser state to a file, do not write an auth setup spec, and do not add a
+   `storageState` line anywhere: any of those would override the path the run actually depends on.
 
-   1. Save the authenticated state:
-      ```bash
-      node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" state-save .auth/state.json
-      ```
-   2. Write `tests_generated/auth.setup.ts` with the `Write` tool - the same sign-in you just did,
-      ending by saving the state. A `setup` project in `playwright.config.js` runs this before any
-      test, so the state is refreshed rather than going stale between runs:
-      ```ts
-      import { test as setup, expect } from '@playwright/test';
-
-      setup('authenticate', async ({ page }) => {
-        await page.goto('<app url>');
-        await page.getByRole('textbox', { name: '<username field>' }).fill('<username>');
-        await page.getByRole('textbox', { name: '<password field>' }).fill('<password>');
-        await page.getByRole('button', { name: '<submit>' }).click();
-        await expect(page).toHaveURL(<the post-login url>);   // proves the sign-in worked
-        await page.context().storageState({ path: '.auth/state.json' });
-      });
-      ```
-   3. **Do not write logging in as a step in any scenario.** Note it once at the top of the plan
-      instead: `**Auth:** storage state (`tests_generated/auth.setup.ts`)`. Scenarios start already
-      signed in, so their first step is the first thing the scenario is actually about.
+   So **do not write logging in as a step in any scenario.** Note it once at the top of the plan —
+   `**Auth:** captured session (handled by the runner)` — and let each scenario's first step be the
+   first thing the scenario is actually about.
 
    The exception is a scenario **about authentication itself** - signing in with good or bad
    credentials, being redirected when signed out. Those still spell out the sign-in steps, and must
    say so in the plan (`**Auth:** none - this scenario tests signing in`), because they need to start
    from a signed-out browser.
+
+   If you unexpectedly hit a login wall, the captured session has expired: say so plainly and stop,
+   rather than signing in with guessed credentials — the fix is to re-capture the login, not to plan
+   around it.
 
 2. **Analyze User Flows**
    - Map out the primary user journeys and identify critical paths through the application
@@ -164,11 +150,9 @@ You will:
 
    ### 1. <Group Name>
 
-   **Seed:** `tests_generated/seed.spec.ts`
-
    #### 1.1. <kebab-case-scenario-name>
 
-   **File:** `tests_generated/<group>/<kebab-case-scenario-name>.spec.ts`
+   **File:** <the spec path your prompt gives you for this case - do not invent one>
 
    **Steps:**
      1. <Concrete user step>

@@ -165,3 +165,41 @@ def test_the_cli_really_applies_an_inline_agent(tmp_path):
 
     assert proc.returncode == 0, proc.stderr[:300]
     assert "PROBE-AGENT-7" in json.loads(proc.stdout).get("result", "")
+
+
+# ------------------------------------------------- the ported prose matches THIS codebase
+
+#: Conventions that exist only in the reference spike. Each one, left in an agent's
+#: prompt, makes it instruct Claude to do something this pipeline does not support.
+_SPIKE_ONLY = {
+    ".auth/state.json": "Q-Agent has no .auth/ dir; the runner injects storageState into the CONFIG",
+    "auth.setup.ts": "there is no setup project here",
+    "tests_generated/": "spec paths come from spec_service.spec_filename, via the prompt",
+    "state-save": "the captured manual login is managed outside the agent",
+}
+
+
+@pytest.mark.parametrize("name", sorted(agents.AGENTS))
+def test_agents_carry_no_spike_only_conventions(name):
+    """#901: the ported agents told Claude to declare `storageState: '.auth/state.json'`.
+
+    Q-Agent's saved manual login is resolved at run time and injected into the
+    generated Playwright *config* as an ABSOLUTE path (`playwright_runner`, and see
+    `capture_storage_state`). A spec that declares its own relative `storageState`
+    overrides that with a file this codebase never writes, so the run loses the
+    sign-in it depends on. Every gate was green for this, because nothing else
+    asserts what the prompts actually say.
+    """
+    prompt = agents.load_agent(name)["prompt"]
+
+    for needle, why in _SPIKE_ONLY.items():
+        assert needle not in prompt, f"{name} still references {needle!r} — {why}"
+
+
+@pytest.mark.parametrize("name", sorted(agents.AGENTS))
+def test_agents_state_that_auth_is_handled_outside_the_spec(name):
+    """The positive half: removing the bad instruction is not enough if the agent is
+    left silent and improvises a sign-in instead."""
+    prompt = agents.load_agent(name)["prompt"]
+
+    assert "captured" in prompt.lower(), f"{name} should say the browser is already signed in"
