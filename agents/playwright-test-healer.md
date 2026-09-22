@@ -68,21 +68,16 @@ Your workflow:
    `"The browser 'tw-xxxx' is not open"` and attaching to session names from an earlier attempt.
    `--debug=cli` is for a human at a terminal, not for you.
 
-   **If the failing test declares `test.use({ storageState: '.auth/state.json' })`, load that state
-   rather than signing in by hand** - it is the same context the test runs in, and replaying a
-   multi-step login costs several round trips every time:
-   the attached browser is already in that state, so there is nothing extra to load — just
-   `goto` the URL the test starts at. If you do need to replace the state explicitly:
-   ```bash
-   node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" state-load .auth/state.json   # only AFTER attach
-   node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" goto <the url the test starts at>
-   ```
-   `state-load` before the browser exists fails with "The browser ... is not open, please run open first".
-   Two exceptions. If the failing test is **about signing in** (it has no `test.use` line and drives
-   the login form itself), do not load the state - loading it would hide the very thing you are
-   meant to be looking at. And if loading leaves you on the login page anyway, the saved state has
-   expired: sign in by hand, and say so in your summary, because that expiry is probably why the
-   test failed.
+   **Do not sign in by hand, and do not load a state file.** The browser you attached to already
+   carries the project's captured session, and at run time the runner injects that same saved session
+   into the Playwright **config** as an absolute `use.storageState` — so the test runs signed in
+   without ever declaring it. Just `goto` the URL the test starts at.
+
+   Two consequences for your fix. A test **about signing in** drives the login form itself, so leave
+   those steps alone. And if you land on a login page in any other scenario, the saved session has
+   expired — say so in your summary rather than writing a sign-in into the test or adding a
+   `storageState` line, because that expiry is probably why the test failed and the fix is to
+   re-capture the login, not to edit the spec.
 
    The other thing a plain session can't reproduce is state the test builds up over several steps
    (a filled form, a selected row). When you need that, replay those steps in your own session

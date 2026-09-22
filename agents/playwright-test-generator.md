@@ -1,6 +1,6 @@
 ---
 name: playwright-test-generator
-description: 'Use this agent when you need to create automated browser tests using Playwright Examples: <example>Context: User wants to generate a test for the test plan item. <test-suite><!-- Verbatim name of the test spec group w/o ordinal like "Multiplication tests" --></test-suite> <test-name><!-- Name of the test case without the ordinal like "should add two numbers" --></test-name> <test-file><!-- Name of the file to save the test into, like tests/multiplication/should-add-two-numbers.spec.ts --></test-file> <seed-file><!-- Seed file path from test plan --></seed-file> <body><!-- Test case content including steps and expectations --></body></example>'
+description: 'Use this agent when you need to create automated browser tests using Playwright Examples: <example>Context: User wants to generate a test for the test plan item. <test-suite><!-- Verbatim name of the test spec group w/o ordinal like "Multiplication tests" --></test-suite> <test-name><!-- Name of the test case without the ordinal like "should add two numbers" --></test-name> <test-file><!-- Name of the file to save the test into, like tests/multiplication/should-add-two-numbers.spec.ts --></test-file> <body><!-- Test case content including steps and expectations --></body></example>'
 tools: Glob, Grep, Read, LS, Write, Edit, Bash
 model: sonnet
 color: blue
@@ -88,8 +88,6 @@ If an element still seems missing after that, the viewport is not the reason - r
 
 # For each test you generate
 - Obtain the test plan with all the steps and verification specification
-- Read the seed file named in the plan and reproduce whatever setup it does (navigation, login) as the first steps of
-  the session, so the scenario starts from the same state the seed establishes
 - **Attach to the browser Q-Agent already launched for you — never `open` your own:**
   ```bash
   node "$PLAYWRIGHT_CLI_JS" cli -s="$PW_CLI_SESSION" attach --cdp "$PW_CLI_CDP_URL"
@@ -99,14 +97,15 @@ If an element still seems missing after that, the viewport is not the reason - r
   That Chrome already has the project's captured session restored, so **you start signed in and
   write no sign-in steps**. `open` would launch a fresh, unauthenticated browser instead (and on the
   server it fails outright, defaulting to a `chrome` channel that is not installed).
-  Because the session is restored outside the test, put this line in the generated test, just inside
-  the describe, so the test starts signed in the same way you did:
-  ```ts
-  test.use({ storageState: '.auth/state.json' });
-  ```
-  For a scenario that is *about* signing in, do the opposite: skip `test.use` and execute the
-  sign-in for real like any other step. If you unexpectedly land on a login page, say so in your
-  summary rather than inventing credentials.
+- **Do NOT declare `storageState` (or any auth fixture) in the spec.** Q-Agent's saved manual login
+  lives outside the spec: at run time the runner resolves the project's captured session and injects
+  it into the generated Playwright **config** as an absolute `use.storageState`. A `test.use({
+  storageState: ... })` line in the spec would override that correct absolute path with one of your
+  own and break the sign-in the run depends on. Write the scenario's own steps and nothing about
+  authentication.
+- For a scenario that is *about* signing in, execute the sign-in for real like any other step. If you
+  unexpectedly land on a login page in any other scenario, say so in your summary rather than
+  inventing credentials.
 - For each step and verification in the scenario, do the following:
   - **If the step has a `locator:` line, pass that expression straight to the command as the target** -
     the Planner already verified it against the live page, so re-discovering the element with `find`
@@ -149,9 +148,8 @@ failing command and its error instead.
    <example-generation>
    For following plan:
 
-   ```markdown file=specs/plan.md
+   ```markdown file=the plan
    ### 1. Adding New Todos
-   **Seed:** `tests_generated/seed.spec.ts`
 
    #### 1.1 Add Valid Todo
    **Steps:**
@@ -163,9 +161,7 @@ failing command and its error instead.
 
    Following file is generated:
 
-   ```ts file=add-valid-todo.spec.ts
-   // spec: specs/plan.md
-   // seed: tests_generated/seed.spec.ts
+   ```ts file=<the spec path from your prompt>
    import { test, expect } from '@playwright/test';
 
    test.describe('Adding New Todos', () => {
